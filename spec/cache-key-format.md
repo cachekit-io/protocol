@@ -5,7 +5,12 @@
 
 ## Overview
 
-Cache keys are deterministic strings generated from function identity and arguments. The same function call with the same arguments MUST produce the same cache key in every SDK.
+Cache keys are deterministic strings generated from function identity and arguments.
+
+> [!IMPORTANT]
+> **Cross-SDK limitation**: The default key format includes a language-specific `func:` segment (Python module path, Rust crate path, Go package path). This means **auto-generated keys are NOT compatible across different language SDKs**. For cross-SDK cache sharing, use [Interop Mode](interop-mode.md) which uses explicit, language-neutral operation names.
+>
+> Within a single SDK, the same function call with the same arguments will always produce the same key.
 
 ## Key Format
 
