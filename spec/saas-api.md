@@ -95,14 +95,30 @@ PUT /v1/cache/{key} HTTP/1.1
 Host: api.cachekit.io
 Authorization: Bearer ck_live_xxx
 Content-Type: application/octet-stream
-X-TTL: 3600
+X-CacheKit-TTL: 3600
 
 <raw bytes>
 ```
 
 | Header | Required | Description |
 | :--- | :---: | :--- |
-| `X-TTL` | No | Time-to-live in seconds. Omit to use server default. |
+| `X-CacheKit-TTL` | No | Time-to-live in seconds. Positive integer, minimum 1, maximum 2,592,000 (30 days). Omit to use server default. |
+
+> [!IMPORTANT]
+> **TTL Validation Rules** — These rules are normative for both SDKs and the SaaS backend.
+>
+> | Condition | SDK Behavior | Server Behavior |
+> | :--- | :--- | :--- |
+> | TTL omitted | Use client default TTL. If no client default, omit `X-CacheKit-TTL` header. | Apply tenant default TTL. |
+> | TTL = 0 | **Reject** — return error to caller. Zero is not a valid TTL. | **Reject** — return `400 Bad Request`. |
+> | TTL < 1 second | **Round up to 1.** Sub-second durations MUST be ceiled, never truncated to 0. | N/A (header is integer seconds). |
+> | TTL > 2,592,000 | **Reject** — return error to caller. | **Reject** — return `400 Bad Request`. |
+> | TTL negative | **Reject** — return error to caller. | **Reject** — return `400 Bad Request`. |
+> | TTL non-integer | N/A (SDK converts duration to integer seconds). | **Reject** — return `400 Bad Request`. |
+>
+> **Rationale:** TTL=0 is ambiguous across cache systems (Redis rejects it, Memcached treats it as "never expire", HTTP treats it as "immediately stale"). CacheKit defines TTL=0 as an error to prevent silent data loss or unbounded storage. Sub-second durations are ceiled to 1 rather than truncated to 0 to avoid the same ambiguity. The 30-day maximum prevents unbounded storage accumulation; longer-lived entries should use explicit renewal patterns via `PATCH /v1/cache/{key}/ttl`.
+>
+> **Migration:** The `X-TTL` header is deprecated. The server MUST accept both `X-CacheKit-TTL` and `X-TTL` during the transition period, preferring `X-CacheKit-TTL` when both are present. SDKs MUST send `X-CacheKit-TTL` only. The `X-TTL` header will be removed in protocol version 2.0 (targeted at SDK 1.0 milestone).
 
 | Status | Meaning |
 | :---: | :--- |
@@ -210,9 +226,12 @@ Content-Type: application/json
 {"ttl": 7200}
 ```
 
+The `ttl` field follows the same validation rules as `X-CacheKit-TTL`: positive integer, minimum 1, maximum 2,592,000.
+
 | Status | Meaning |
 | :---: | :--- |
 | `200 OK` | TTL updated |
+| `400 Bad Request` | Invalid TTL (zero, negative, exceeds maximum) |
 
 ---
 
