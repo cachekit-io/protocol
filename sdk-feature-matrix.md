@@ -6,7 +6,7 @@
 
 **Feature parity and compliance status across all CacheKit SDK implementations.**
 
-*Last updated: 2026-03-26*
+*Last updated: 2026-04-06*
 
 </div>
 
@@ -31,7 +31,7 @@
 | :--- | :--- | :---: | :--- | :---: |
 | cachekit-py | `cachekit` (PyPI) | 0.5.0 | Python 3.10+ | ✅ Production |
 | cachekit-rs | `cachekit-core` (crates.io) | 0.1.1 | Rust 1.82+ | ✅ Production (core lib) |
-| cachekit-ts | — | — | TypeScript | 🔜 Development |
+| cachekit-ts | `@cachekit-io/cachekit` (npm) | 0.1.0 | TypeScript | ✅ Production |
 | cachekit-php | — | — | PHP 8.1+ | 🔜 Development |
 
 ---
@@ -43,8 +43,8 @@
 | StandardSerializer (MessagePack) | ✅ | ✅ via rmp-serde | ✅ | 🔜 Planned |
 | AutoSerializer (Python-specific) | ✅ | N/A | N/A | N/A |
 | ArrowSerializer (columnar) | ✅ | N/A | 🔜 Planned | ❌ |
-| ByteStorage (LZ4 + xxHash3-64) | ✅ via Rust FFI | ✅ canonical | 🔜 Planned | 🔜 Planned |
-| Blake2b-256 key generation | ✅ | N/A | 🔜 Planned | 🔜 Planned |
+| ByteStorage (LZ4 + xxHash3-64) | ✅ via Rust FFI | ✅ canonical | ✅ via NAPI (Rust) | 🔜 Planned |
+| Blake2b-256 key generation | ✅ | N/A | ✅ via @noble/hashes | 🔜 Planned |
 
 ---
 
@@ -52,16 +52,16 @@
 
 | Feature | Python | Rust (core) | TypeScript | PHP |
 | :--- | :---: | :---: | :---: | :---: |
-| AES-256-GCM | ✅ via Rust FFI | ✅ ring | 🔜 Planned | 🔜 Planned |
-| HKDF-SHA256 key derivation | ✅ via Rust FFI | ✅ | 🔜 Planned | 🔜 Planned |
-| Per-tenant key isolation | ✅ | ✅ | 🔜 Planned | 🔜 Planned |
-| AAD v0x03 (cache_key binding) | ✅ | ✅ | ❌ | ❌ |
+| AES-256-GCM | ✅ via Rust FFI | ✅ ring | ✅ via NAPI (Rust) | 🔜 Planned |
+| HKDF-SHA256 key derivation | ✅ via Rust FFI | ✅ | ✅ via NAPI (Rust) | 🔜 Planned |
+| Per-tenant key isolation | ✅ | ✅ | ✅ via TenantKeys NAPI | 🔜 Planned |
+| AAD v0x03 (cache_key binding) | ✅ | ✅ | ✅ | ❌ |
 | Key rotation | ✅ | ✅ | ❌ | ❌ |
 | Hardware acceleration detection | ✅ | ✅ | N/A | N/A |
-| Counter-based nonces | ✅ via Rust | ✅ | ❌ use random | ❌ use random |
+| Counter-based nonces | ✅ via Rust | ✅ | ✅ via NAPI (Rust) | ❌ use random |
 
 > [!IMPORTANT]
-> AAD v0x03 is required for protocol compliance. SDKs without it cannot safely interoperate with encrypted payloads from compliant SDKs — the auth tag will fail verification. See [spec/encryption.md](spec/encryption.md#additional-authenticated-data-aad).
+> AAD v0x03 is required for protocol compliance. SDKs without it cannot safely interoperate with encrypted payloads from compliant SDKs — the auth tag will fail verification. See [spec/encryption.md](spec/encryption.md#additional-authenticated-data-aad). Python, Rust, and TypeScript SDKs are compliant as of 2026-04-06.
 
 ---
 
@@ -71,7 +71,6 @@
 | :--- | :---: | :---: | :---: | :---: |
 | Redis (direct) | ✅ | ✅ | ✅ | ❌ |
 | CacheKit SaaS (HTTP) | ✅ | ❌ | ✅ | 🔜 Planned |
-| In-memory (L1) | ✅ | ❌ | ❌ | ❌ |
 | DynamoDB | ✅ | ❌ | ❌ | ❌ |
 
 ---
@@ -80,11 +79,11 @@
 
 | Feature | Python | Rust | TypeScript | PHP |
 | :--- | :---: | :---: | :---: | :---: |
-| Circuit breaker | ✅ | ❌ | ❌ | ❌ |
-| Backpressure | ✅ | ❌ | ❌ | ❌ |
-| Distributed locking | ✅ | ❌ | ❌ | ❌ |
-| L1/L2 dual-layer cache | ✅ | ❌ | ❌ | ❌ |
-| Cache stampede prevention | ✅ | ❌ | ❌ | ❌ |
+| Circuit breaker | ✅ | ❌ | ✅ | ❌ |
+| Backpressure | ✅ | ❌ | ⚠️ Concurrent refresh limits | ❌ |
+| Distributed locking | ✅ | ❌ | ✅ SaaS backend only | ❌ |
+| L1/L2 dual-layer cache | ✅ | ❌ | ✅ | ❌ |
+| Cache stampede prevention | ✅ | ❌ | ✅ Version tokens + SWR | ❌ |
 | TTL management | ✅ | N/A | ✅ | ❌ |
 
 ---
@@ -93,7 +92,7 @@
 
 | Feature | Python | Rust | TypeScript | PHP |
 | :--- | :---: | :---: | :---: | :---: |
-| Decorator API (`@cache`) | ✅ | ✅ proc-macro | ❌ | ❌ attributes |
+| Decorator API (`@cache`) | ✅ | ✅ proc-macro | N/A (functional `wrap()` API) | ❌ attributes |
 | Async support | ✅ | ✅ | ✅ | ❌ |
 | Sync support | ✅ | ✅ | ❌ | ✅ |
 | pydantic-settings config | ✅ | N/A | N/A | N/A |
@@ -114,12 +113,12 @@ For cross-SDK interoperability, all SDKs MUST implement:
 
 | Requirement | Python | Rust | TypeScript | PHP |
 | :--- | :---: | :---: | :---: | :---: |
-| Key generation (Blake2b) | ✅ Compliant | N/A | ⚠️ Untested | ⚠️ Untested |
-| Wire format (ByteStorage) | ✅ Compliant | ✅ Canonical | ⚠️ Untested | ⚠️ Untested |
-| Encryption (AES-256-GCM) | ✅ Compliant | ✅ Canonical | ⚠️ Untested | ⚠️ Untested |
-| AAD v0x03 | ✅ Compliant | ✅ Compliant | ❌ Not implemented | ❌ Not implemented |
-| SaaS API | ✅ Compliant | N/A | ⚠️ Partial | ❌ Not implemented |
-| Test vectors | ⚠️ Pending | ⚠️ Pending | ⚠️ Pending | ⚠️ Pending |
+| Key generation (Blake2b) | ✅ Compliant | N/A | ✅ Compliant | ⚠️ Untested |
+| Wire format (ByteStorage) | ✅ Compliant | ✅ Canonical | ✅ Compliant | ⚠️ Untested |
+| Encryption (AES-256-GCM) | ✅ Compliant | ✅ Canonical | ✅ Compliant | ⚠️ Untested |
+| AAD v0x03 | ✅ Compliant | ✅ Compliant | ✅ Compliant | ❌ Not implemented |
+| SaaS API | ✅ Compliant | N/A | ✅ Compliant | ❌ Not implemented |
+| Test vectors | ⚠️ Pending | ⚠️ Pending | ✅ Python cross-SDK vectors | ⚠️ Pending |
 
 > [!NOTE]
 > "N/A" for Rust key generation means the `cachekit-core` crate is a protocol primitive library, not a full SDK. Key generation is the responsibility of the higher-level `cachekit-rs` crate.
@@ -151,9 +150,15 @@ For cross-SDK interoperability, all SDKs MUST implement:
 <details>
 <summary><strong>TypeScript SDK (cachekit-ts)</strong></summary>
 
-- Redis backend via ioredis
-- CacheKit SaaS backend via fetch API
-- Encryption via Web Crypto API (AES-256-GCM)
+- Monorepo: `@cachekit-io/cachekit` (SDK) + `@cachekit-io/cachekit-core-ts` (Rust NAPI bindings)
+- Redis backend via ioredis, CacheKit SaaS backend via fetch API
+- Encryption via Rust NAPI (AES-256-GCM, HKDF-SHA256, counter-based nonces)
+- AAD v0x03 compliant with Python cross-SDK test vectors
+- L1 LRU cache with SWR, version tokens, namespace invalidation
+- Circuit breaker (rolling window), retry (exponential backoff + jitter), graceful degradation
+- Distributed locking via CacheKit SaaS backend
+- 442 tests, 93.75% statement coverage
+- Dual output: ESM + CJS, Node 20+
 
 </details>
 
