@@ -1,0 +1,44 @@
+{
+  "version": "1.0.0",
+  "generator": "extracted from cachekit-rs v0.5.1 + cachekit-ts v0.1.0 (Python ground truth)",
+  "algorithm": "AES-256-GCM",
+  "key_derivation": "HKDF-SHA256 with cachekit_v1_ salt prefix",
+  "nonce_size": 12,
+  "tag_size": 16,
+  "aad_version": "0x03",
+  "aad_format": "[version_byte(1)] [len(4BE)][tenant_id] [len(4BE)][cache_key] [len(4BE)][format] [len(4BE)][compressed_flag]",
+  "ciphertext_format": "[nonce(12)] || [ciphertext] || [auth_tag(16)]",
+  "master_key_hex": "6161616161616161616161616161616161616161616161616161616161616161",
+  "master_key_note": "32 bytes of 0x61 (ASCII 'a' repeated 32 times)",
+  "tenant_id": "cross-sdk-test",
+  "derived_key_fingerprint_hex": "96179a9bc881aa7ca83f04b78a66afd3",
+  "vectors": [
+    {
+      "name": "basic_bytes",
+      "plaintext_hex": "0102030405060708",
+      "cache_key": "test:vector:1",
+      "format": "msgpack",
+      "compressed": false,
+      "aad_hex": "030000000e63726f73732d73646b2d746573740000000d746573743a766563746f723a31000000076d73677061636b0000000546616c7365",
+      "ciphertext_hex": "f8f69c70000000000000000087d9ec09f2c2347a4b37d5330ccf50e3c31e69642801bef5"
+    },
+    {
+      "name": "special_cache_key",
+      "plaintext_hex": "deadbeef",
+      "cache_key": "user@example.com:profile",
+      "format": "msgpack",
+      "compressed": false,
+      "aad_hex": "030000000e63726f73732d73646b2d746573740000001875736572406578616d706c652e636f6d3a70726f66696c65000000076d73677061636b0000000546616c7365",
+      "ciphertext_hex": "f8f69c7000000000000000012bf77e0cfc353ab04d0b941b22aa2ce39167ee63"
+    },
+    {
+      "name": "compressed_basic",
+      "plaintext_hex": "deadbeefcafe",
+      "cache_key": "test:compressed:vector",
+      "format": "msgpack",
+      "compressed": true,
+      "aad_hex": "030000000e63726f73732d73646b2d7465737400000016746573743a636f6d707265737365643a766563746f72000000076d73677061636b0000000454727565",
+      "ciphertext_hex": "44cc06e600000000000000000eb8450c4aac2337265323f7f1b03fc3966deaa515f7"
+    }
+  ]
+}
