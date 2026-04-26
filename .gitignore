@@ -1,0 +1,9 @@
+# AI agent configs (local tooling, not shipped in OSS)
+CLAUDE.md
+AGENTS.md
+CALIBER_LEARNINGS.md
+.caliber/
+.claude/
+.cursor/
+.cursorrules
+.github/copilot-instructions.md
