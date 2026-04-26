@@ -6,7 +6,7 @@
 
 **Feature parity and compliance status across all CacheKit SDK implementations.**
 
-*Last updated: 2026-04-06*
+*Last updated: 2026-04-26*
 
 </div>
 
@@ -93,6 +93,7 @@
 | Feature | Python | Rust | TypeScript | PHP |
 | :--- | :---: | :---: | :---: | :---: |
 | Decorator API (`@cache`) | ✅ | ✅ proc-macro | N/A (functional `wrap()` API) | ❌ attributes |
+| Intent-based presets | ✅ `.minimal` `.production` `.secure` `.io` | ❌ | ✅ `createCache.minimal()` etc. | ❌ |
 | Async support | ✅ | ✅ | ✅ | ❌ |
 | Sync support | ✅ | ✅ | ❌ | ✅ |
 | pydantic-settings config | ✅ | N/A | N/A | N/A |
@@ -157,7 +158,8 @@ For cross-SDK interoperability, all SDKs MUST implement:
 - L1 LRU cache with SWR, version tokens, namespace invalidation
 - Circuit breaker (rolling window), retry (exponential backoff + jitter), graceful degradation
 - Distributed locking via CacheKit SaaS backend
-- 442 tests, 93.75% statement coverage
+- Intent-based API: `createCache.minimal()`, `.production()`, `.secure()`, `.io()`
+- 457 tests, 93.75% statement coverage
 - Dual output: ESM + CJS, Node 20+
 
 </details>
