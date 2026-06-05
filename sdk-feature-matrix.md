@@ -6,7 +6,7 @@
 
 **Feature parity and compliance status across all CacheKit SDK implementations.**
 
-*Last updated: 2026-04-26*
+*Last updated: 2026-06-06 — version sync across fleet (py 0.7.0, rs 0.3.0, ts 0.1.2)*
 
 </div>
 
@@ -29,30 +29,31 @@
 
 | SDK | Package | Version | Language | Status |
 | :--- | :--- | :---: | :--- | :---: |
-| cachekit-py | `cachekit` (PyPI) | 0.5.0 | Python 3.10+ | ✅ Production |
-| cachekit-rs | `cachekit-core` (crates.io) | 0.1.1 | Rust 1.82+ | ✅ Production (core lib) |
-| cachekit-ts | `@cachekit-io/cachekit` (npm) | 0.1.0 | TypeScript | ✅ Production |
+| cachekit-py | `cachekit` (PyPI) | 0.7.0 | Python 3.10+ | ✅ Production |
+| cachekit-rs | `cachekit-rs` (crates.io) | 0.3.0 | Rust 1.82+ | ✅ Production |
+| cachekit-core | `cachekit-core` (crates.io) | 0.2.0 | Rust (shared core) | ✅ Production |
+| cachekit-ts | `@cachekit-io/cachekit` (npm) | 0.1.2 | TypeScript | ✅ Production |
 | cachekit-php | — | — | PHP 8.1+ | 🔜 Development |
 
 ---
 
 ## Core Features
 
-| Feature | Python | Rust (core) | TypeScript | PHP |
+| Feature | Python | Rust | TypeScript | PHP |
 | :--- | :---: | :---: | :---: | :---: |
 | StandardSerializer (MessagePack) | ✅ | ✅ via rmp-serde | ✅ | 🔜 Planned |
 | AutoSerializer (Python-specific) | ✅ | N/A | N/A | N/A |
 | ArrowSerializer (columnar) | ✅ | N/A | 🔜 Planned | ❌ |
-| ByteStorage (LZ4 + xxHash3-64) | ✅ via Rust FFI | ✅ canonical | ✅ via NAPI (Rust) | 🔜 Planned |
+| ByteStorage (LZ4 + xxHash3-64) | ✅ via Rust FFI | ✅ canonical (cachekit-core) | ✅ via NAPI (Rust) | 🔜 Planned |
 | Blake2b-256 key generation | ✅ | N/A | ✅ via @noble/hashes | 🔜 Planned |
 
 ---
 
 ## Encryption
 
-| Feature | Python | Rust (core) | TypeScript | PHP |
+| Feature | Python | Rust | TypeScript | PHP |
 | :--- | :---: | :---: | :---: | :---: |
-| AES-256-GCM | ✅ via Rust FFI | ✅ ring | ✅ via NAPI (Rust) | 🔜 Planned |
+| AES-256-GCM | ✅ via Rust FFI | ✅ ring (native) / aes-gcm (wasm32) | ✅ via NAPI (Rust) | 🔜 Planned |
 | HKDF-SHA256 key derivation | ✅ via Rust FFI | ✅ | ✅ via NAPI (Rust) | 🔜 Planned |
 | Per-tenant key isolation | ✅ | ✅ | ✅ via TenantKeys NAPI | 🔜 Planned |
 | AAD v0x03 (cache_key binding) | ✅ | ✅ | ✅ | ❌ |
@@ -69,8 +70,11 @@
 
 | Backend | Python | Rust | TypeScript | PHP |
 | :--- | :---: | :---: | :---: | :---: |
-| Redis (direct) | ✅ | ✅ | ✅ | ❌ |
-| CacheKit SaaS (HTTP) | ✅ | ❌ | ✅ | 🔜 Planned |
+| Redis (direct) | ✅ | ✅ via fred | ✅ | ❌ |
+| Memcached | ✅ (env auto-detect) | ❌ | ❌ | ❌ |
+| File (local) | ✅ (env auto-detect) | ❌ | ❌ | ❌ |
+| CacheKit SaaS (HTTP) | ✅ | ✅ reqwest (native) + fetch (Workers) | ✅ | 🔜 Planned |
+| Cloudflare Workers | N/A | ✅ `workers` feature | N/A | N/A |
 | DynamoDB | ✅ | ❌ | ❌ | ❌ |
 
 ---
@@ -81,10 +85,10 @@
 | :--- | :---: | :---: | :---: | :---: |
 | Circuit breaker | ✅ | ❌ | ✅ | ❌ |
 | Backpressure | ✅ | ❌ | ⚠️ Concurrent refresh limits | ❌ |
-| Distributed locking | ✅ | ❌ | ✅ SaaS backend only | ❌ |
-| L1/L2 dual-layer cache | ✅ | ❌ | ✅ | ❌ |
+| Distributed locking | ✅ | ✅ SaaS backend (`LockableBackend`) | ✅ SaaS backend only | ❌ |
+| L1/L2 dual-layer cache | ✅ | ✅ moka (native) / `l1` feature | ✅ | ❌ |
 | Cache stampede prevention | ✅ | ❌ | ✅ Version tokens + SWR | ❌ |
-| TTL management | ✅ | N/A | ✅ | ❌ |
+| TTL management | ✅ | ✅ `TtlInspectable` trait | ✅ | ❌ |
 
 ---
 
@@ -92,10 +96,12 @@
 
 | Feature | Python | Rust | TypeScript | PHP |
 | :--- | :---: | :---: | :---: | :---: |
-| Decorator API (`@cache`) | ✅ | ✅ proc-macro | N/A (functional `wrap()` API) | ❌ attributes |
-| Intent-based presets | ✅ `.minimal` `.production` `.secure` `.io` | ❌ | ✅ `createCache.minimal()` etc. | ❌ |
+| Decorator API (`@cache`) | ✅ | ✅ `#[cachekit]` proc-macro | N/A (functional `wrap()` API) | ❌ attributes |
+| Intent-based presets | ✅ `.minimal` `.production` `.secure` `.io` | ✅ `CacheKit::minimal` `::production` `::secure` `::io` | ✅ `createCache.minimal()` etc. | ❌ |
+| Builder API | ✅ | ✅ `CacheKit::builder()` / `from_env()` | ✅ | ❌ |
 | Async support | ✅ | ✅ | ✅ | ❌ |
 | Sync support | ✅ | ✅ | ❌ | ✅ |
+| WASM / CF Workers | N/A | ✅ `workers` feature (`?Send`, `Rc`) | N/A | N/A |
 | pydantic-settings config | ✅ | N/A | N/A | N/A |
 | Type hints / strict types | ✅ | ✅ | ✅ | ✅ PHP 8.1+ |
 
@@ -114,15 +120,15 @@ For cross-SDK interoperability, all SDKs MUST implement:
 
 | Requirement | Python | Rust | TypeScript | PHP |
 | :--- | :---: | :---: | :---: | :---: |
-| Key generation (Blake2b) | ✅ Compliant | N/A | ✅ Compliant | ⚠️ Untested |
-| Wire format (ByteStorage) | ✅ Compliant | ✅ Canonical | ✅ Compliant | ⚠️ Untested |
-| Encryption (AES-256-GCM) | ✅ Compliant | ✅ Canonical | ✅ Compliant | ⚠️ Untested |
+| Key generation (Blake2b) | ✅ Compliant | N/A (SDK-level, not in core) | ✅ Compliant | ⚠️ Untested |
+| Wire format (ByteStorage) | ✅ Compliant | ✅ Canonical (cachekit-core) | ✅ Compliant | ⚠️ Untested |
+| Encryption (AES-256-GCM) | ✅ Compliant | ✅ Canonical (cachekit-core) | ✅ Compliant | ⚠️ Untested |
 | AAD v0x03 | ✅ Compliant | ✅ Compliant | ✅ Compliant | ❌ Not implemented |
-| SaaS API | ✅ Compliant | N/A | ✅ Compliant | ❌ Not implemented |
+| SaaS API | ✅ Compliant | ✅ Compliant (CachekitIO backend) | ✅ Compliant | ❌ Not implemented |
 | Test vectors | ⚠️ Pending | ⚠️ Pending | ✅ Python cross-SDK vectors | ⚠️ Pending |
 
 > [!NOTE]
-> "N/A" for Rust key generation means the `cachekit-core` crate is a protocol primitive library, not a full SDK. Key generation is the responsibility of the higher-level `cachekit-rs` crate.
+> "N/A" for Rust key generation means `cachekit-core` is a protocol primitive library. Key generation (Blake2b) is an SDK-level concern — `cachekit-rs` delegates cache key construction to the caller via the `key` parameter on `get`/`set`/`#[cachekit]`.
 
 ---
 
@@ -134,17 +140,34 @@ For cross-SDK interoperability, all SDKs MUST implement:
 - Hybrid Python-Rust architecture: decorators and orchestration in Python, ByteStorage and encryption in Rust (via PyO3)
 - The `cachekit-core` Rust crate is the canonical implementation for compression, checksums, and encryption
 - 4 serializers: Standard (cross-language), Auto (Python-optimized), Orjson (JSON), Arrow (columnar)
+- Backends: Redis, Memcached, File (local), CacheKit SaaS — Memcached and File auto-detected from environment
 - Config via pydantic-settings; secrets via `SecretStr`
+
+</details>
+
+<details>
+<summary><strong>Rust SDK (cachekit-rs)</strong></summary>
+
+- Published on crates.io as `cachekit-rs` v0.3.0 + `cachekit-macros` v0.3.0
+- Feature flags: `redis`, `cachekitio`, `encryption`, `l1`, `macros`, `workers`
+- Backends: `RedisBackend` (fred), `CachekitIO` (reqwest), `WorkersCachekitIO` (CF Workers fetch)
+- L1 cache via moka (native only, `l1` feature)
+- `#[cachekit]` proc-macro for decorator-style caching
+- `SecureCache` for zero-knowledge encrypted caching
+- SSRF protection, credential redaction, `Zeroizing` key material
+- WASM/Workers support: `?Send` + `Rc` paths via `cfg(target_arch = "wasm32")`
+- Depends on `cachekit-core` v0.2 for ByteStorage and encryption primitives
 
 </details>
 
 <details>
 <summary><strong>Rust Core (cachekit-core)</strong></summary>
 
-- Published on crates.io as `cachekit-core` v0.1.1
+- Published on crates.io as `cachekit-core` v0.2.0
 - Provides: `ByteStorage`, `ZeroKnowledgeEncryptor`, `derive_domain_key`, `derive_tenant_keys`
-- Dependencies: `lz4_flex`, `xxhash-rust`, `ring`, `hkdf`, `sha2`, `rmp-serde`
+- Dependencies: `lz4_flex`, `xxhash-rust`, `ring` (native) / `aes-gcm` (wasm32), `hkdf`, `sha2`, `rmp-serde`
 - Formally verified security properties via Kani
+- Shared across Python (PyO3 FFI), Rust SDK, and TypeScript (NAPI) SDKs
 
 </details>
 
