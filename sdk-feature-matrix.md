@@ -156,7 +156,7 @@ For cross-SDK interoperability, all SDKs MUST implement:
 - `SecureCache` for zero-knowledge encrypted caching
 - SSRF protection, credential redaction, `Zeroizing` key material
 - WASM/Workers support: `?Send` + `Rc` paths via `cfg(target_arch = "wasm32")`
-- Depends on `cachekit-core` v0.2 for ByteStorage and encryption primitives
+- Depends on `cachekit-core` v0.2.0 for ByteStorage and encryption primitives
 
 </details>
 
