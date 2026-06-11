@@ -90,6 +90,8 @@
 | Cache stampede prevention | ✅ | ❌ | ✅ Version tokens + SWR | ❌ |
 | TTL management | ✅ | ✅ `TtlInspectable` trait | ✅ | ❌ |
 
+> **Lock id transport (CWE-532):** the unlock call carries the lock capability token in the `X-CacheKit-Lock-Id` request header, never the `?lock_id=` query string (which leaks via access/proxy logs and OTel `http.url` spans). SaaS dual-reads both during the rollout; SDKs migrate to header-only — Python (#131), TypeScript (#63), Rust (#24). See [spec/saas-api.md](spec/saas-api.md#delete-v1cachekeylock).
+
 ---
 
 ## Developer Experience
