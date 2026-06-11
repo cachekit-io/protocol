@@ -184,19 +184,30 @@ Content-Type: application/json
 
 ---
 
-### DELETE /v1/cache/{key}/lock?lock_id={lock_id}
+### DELETE /v1/cache/{key}/lock
 
-Release a distributed lock.
+Release a distributed lock. The lock id (the capability token returned by `POST
+/v1/cache/{key}/lock`) is sent in the `X-CacheKit-Lock-Id` request header.
 
 ```http
-DELETE /v1/cache/{key}/lock?lock_id=uuid-string HTTP/1.1
+DELETE /v1/cache/{key}/lock HTTP/1.1
 Host: api.cachekit.io
 Authorization: Bearer ck_live_xxx
+X-CacheKit-Lock-Id: uuid-string
 ```
+
+| Header | Required | Description |
+| :--- | :---: | :--- |
+| `X-CacheKit-Lock-Id` | Yes | Lock capability token from the acquire response. An empty/whitespace value is treated as absent. |
 
 | Status | Meaning |
 | :---: | :--- |
 | `200 OK` | Lock released |
+| `400 Bad Request` | Lock id absent from both the header and the legacy `?lock_id=` query param |
+
+> **Security (CWE-532):** the lock id is a short-lived capability token — anyone holding it can release the lock within its TTL. It MUST travel in the `X-CacheKit-Lock-Id` header, **not** the query string: query strings are routinely captured by access logs, proxy/CDN logs, and OpenTelemetry `http.url` spans, which would let anyone with log access replay the token.
+>
+> **Migration:** the legacy `?lock_id={lock_id}` query parameter is deprecated. The server MUST accept both the `X-CacheKit-Lock-Id` header and the `?lock_id=` query param during the transition period, preferring the header when both are present. SDKs MUST send the header only. The query parameter will be removed in protocol version 2.0 (targeted at the SDK 1.0 milestone).
 
 ---
 
