@@ -120,9 +120,13 @@ X-CacheKit-TTL: 3600
 >
 > **Migration:** The `X-TTL` header is deprecated. The server MUST accept both `X-CacheKit-TTL` and `X-TTL` during the transition period, preferring `X-CacheKit-TTL` when both are present. SDKs MUST send `X-CacheKit-TTL` only. The `X-TTL` header will be removed in protocol version 2.0 (targeted at SDK 1.0 milestone).
 
+> [!IMPORTANT]
+> **Maximum value size:** A single cache value may be at most **25 MB**. Larger values are rejected with `413 Payload Too Large` — a **permanent** error: SDKs MUST NOT retry and SHOULD surface "value too large" to the caller. The backend stores values transparently across internal chunks, so this is a server-side ceiling (not the underlying storage cell limit) and MAY change; SDKs MUST treat any `413` as "value too large" regardless of the exact byte count. This is unrelated to the SDK serializer's 512 MB in-memory safety bound (see `wire-format.md`) — that bound governs what the SDK will serialize, not what the SaaS will store.
+
 | Status | Meaning |
 | :---: | :--- |
 | `200 OK` | Value stored |
+| `413 Payload Too Large` | Value exceeds the maximum stored value size (25 MB). Permanent — do not retry. |
 
 ---
 
@@ -305,6 +309,7 @@ SDKs SHOULD send cache metrics headers for rate limiting and observability:
 | `403` | Forbidden | API key lacks permission for this operation/namespace |
 | `404` | Not Found | Cache miss (GET/HEAD) or key not found (DELETE) |
 | `409` | Conflict | Lock already held |
+| `413` | Payload Too Large | Value exceeds max stored value size (25 MB). Permanent — do not retry; surface "value too large" |
 | `429` | Too Many Requests | Rate limited |
 | `500` | Internal Server Error | Backend failure |
 | `502` | Bad Gateway | Upstream failure |
@@ -317,7 +322,7 @@ SDKs should classify errors for circuit breaker integration:
 | Class | Status Codes | SDK Action |
 | :--- | :--- | :--- |
 | **Transient** | `429`, `500`, `502`, `503`, network timeouts | Retry with backoff |
-| **Permanent** | `400`, `401`, `403` | Do not retry, surface to caller |
+| **Permanent** | `400`, `401`, `403`, `413` | Do not retry, surface to caller |
 | **Cache miss** | `404` on GET/HEAD/DELETE | Not an error — return `None`/`false` |
 
 ---
