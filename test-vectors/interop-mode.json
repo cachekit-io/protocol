@@ -1,5 +1,5 @@
 {
-  "version": "1.1.0",
+  "version": "1.0.0",
   "spec": "spec/interop-mode.md",
   "generator": "tools/interop-reference.py (CPython stdlib)",
   "cross_checked_by": "tools/interop-crosscheck.mjs (independent encoder + @noble/hashes blake2b + WebCrypto HKDF/AES-GCM)",
@@ -15,7 +15,7 @@
     "$bytes": "hex-encoded byte string",
     "$datetime": "ISO 8601 with mandatory UTC offset",
     "$uuid": "UUID string (any case on input)",
-    "$float": "decimal float literal (JSON numbers are always integers in this file)",
+    "$float": "decimal float literal (JSON numbers are always integers in this file). Error vectors use 'nan' (parses to NaN in Python and JS) and '1e999' (overflows to +Infinity in Python, JS, and Rust) \u2014 never 'inf', which JS parses to NaN.",
     "$int": "decimal integer literal (for values beyond 2^53, unsafe in JS JSON.parse)"
   },
   "key_vectors": [
@@ -441,6 +441,40 @@
       "expected_key": "t:op:6e2c172b9a9e966d3febc66a2a28c05a6ffabbd3b798bf341ec1d55ed73d6e4f"
     },
     {
+      "name": "set_mixed_sign_order",
+      "description": "Set {-5, 'a', 1.5}: encoded-byte order is 'a' (0xa1..), 1.5 (0xcb..), -5 (0xfb) \u2014 NOT numeric/type-grouped order. Kills 'sort naturally, ints first' implementations.",
+      "namespace": "t",
+      "operation": "op",
+      "args": [
+        {
+          "$set": [
+            -5,
+            "a",
+            {
+              "$float": "1.5"
+            }
+          ]
+        }
+      ],
+      "canonical_args_hex": "9193a161cb3ff8000000000000fb",
+      "args_hash": "1f1a8fdd7221fac0fd57e7e5cd1ceec1c43eadd35570f6de63eb59ffc014a1e9",
+      "expected_key": "t:op:1f1a8fdd7221fac0fd57e7e5cd1ceec1c43eadd35570f6de63eb59ffc014a1e9"
+    },
+    {
+      "name": "float_collapse_lower_bound",
+      "description": "Inclusive lower collapse bound: float -2^63 MUST collapse to the int64-min encoding (0xd3...), symmetric with the exclusive upper bound vector",
+      "namespace": "t",
+      "operation": "op",
+      "args": [
+        {
+          "$float": "-9223372036854775808"
+        }
+      ],
+      "canonical_args_hex": "91d38000000000000000",
+      "args_hash": "2882730c0cc9df9bc2152c1833892075377b801a72a715434f103b694e4a5909",
+      "expected_key": "t:op:2882730c0cc9df9bc2152c1833892075377b801a72a715434f103b694e4a5909"
+    },
+    {
       "name": "set_dedupe_canonicalization",
       "description": "Set {2, 2.0}: number canonicalization makes the encodings identical; dedupe by encoded bytes leaves a single int 2",
       "namespace": "t",
@@ -617,10 +651,10 @@
       "name": "reject_infinity",
       "args": [
         {
-          "$float": "inf"
+          "$float": "1e999"
         }
       ],
-      "error": "Infinity is not allowed"
+      "error": "Infinity is not allowed (1e999 overflows to +inf in Python, JS, and Rust float parsers alike)"
     },
     {
       "name": "reject_int_overflow",

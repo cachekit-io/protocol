@@ -164,7 +164,7 @@ be rejected with an error — never silently coerced or skipped.
 | :--- | :--- | :--- |
 | Integer | msgpack int | Range MUST be within `[-2^63, 2^64-1]`. Out of range → error. |
 | Float | msgpack int **or** float64 | [Number canonicalization](#number-canonicalization) below. NaN, `+Inf`, `-Inf` → error. |
-| String | msgpack str | UTF-8 bytes of the string as given. **No Unicode normalization** (no NFC/NFD) is applied. |
+| String | msgpack str | UTF-8 bytes of the string as given. **No Unicode normalization** (no NFC/NFD) is applied. Strings MUST be **well-formed Unicode scalar sequences** — an unpaired surrogate MUST be rejected, never replacement-encoded (JS `Buffer`/`TextEncoder` silently emit U+FFFD, so the TS SDK MUST check `String.prototype.isWellFormed()` first; Rust `String` is immune by construction; Python raises on encode). Pinned by self-tests in both reference tools — portable JSON cannot express a lone surrogate, so there is no error vector for it. |
 | Boolean | msgpack bool | |
 | Null / None / nil | msgpack nil | |
 | Bytes | msgpack bin | Never the str family. |
@@ -303,12 +303,15 @@ Encryption works **unmodified**. The [AAD v0x03 format](encryption.md#additional
 binds to the cache-key string; interop keys are identical across SDKs, so the AAD —
 and therefore the auth tag — verifies cross-SDK.
 
-Two interop-specific pins:
+Three interop-specific pins:
 
 1. **The AES-GCM plaintext is the plain MessagePack value bytes** — the ByteStorage
    step (step 2 of the encryption flow in encryption.md) is skipped entirely.
 2. AAD components are always `format = "msgpack"`, `compressed = "False"` (there is
    no compression in interop mode).
+3. The optional `original_type` AAD component is **never included** in interop-mode
+   AAD — an SDK carrying auto-mode's type hint into the AAD would fail cross-SDK
+   authentication. Interop AAD is always exactly four components.
 
 Key derivation (HKDF-SHA256), nonces, the ciphertext layout
 (`nonce ‖ ciphertext ‖ tag`), and the RotationAwareHeader are all unchanged.
@@ -396,7 +399,10 @@ into the data model before the interop check — Python `Enum` → its value, `P
 POSIX string, `Decimal` → string, `tuple` → array. Anything that lands outside the
 data model after conversion is still an error. Beware `Decimal`-style string forms:
 `"1.0"` vs `"1.00"` hash differently; agree on the textual form across SDKs or avoid
-such types in interop arguments.
+such types in interop arguments. The same applies to **UUIDs passed as plain
+strings** (TypeScript has no UUID type): callers MUST use the lowercase hyphenated
+form, or `"550E8400-…"` from TS will silently miss the key a Python `uuid.UUID`
+argument produced.
 
 ---
 
@@ -413,7 +419,7 @@ not re-litigated by accident.
 | **Sort = Unicode code point order** (≡ UTF-8 byte order), stated explicitly | "Lexicographic" (unspecified) | "Lexicographic" is ambiguous: JS default sort (UTF-16 code units) disagrees with UTF-8 byte order on supplementary-plane characters; locale collation would be nondeterministic. Code-point order is total, locale-free, and equals the byte order of the encoded form. |
 | **Sets sorted by encoded bytes** | Sort "naturally" per element type | Natural ordering needs a cross-type comparison function every language must reimplement identically (int vs str vs array…). Encoded-byte order falls out of the encoder for free and is trivially total. |
 | **Datetime = floor-to-µs, one float64 division** | "UTC Unix timestamp" (unspecified arithmetic) | Naive float arithmetic differs across languages in the last bit. Integer µs + a single IEEE 754 division is bit-deterministic everywhere. |
-| **Blake2b-256 retained** | SHA-256 | Every SDK already ships Blake2b for auto mode (`hashlib`, `@noble/hashes`); introducing a second hash would grow the TS bundle and the audit surface for zero benefit. |
+| **Blake2b-256 retained** | SHA-256 | Python and TypeScript already ship Blake2b (`hashlib`, `@noble/hashes`); Rust adds one small `blake2` crate (it has no in-SDK keygen today). Introducing a second hash algorithm would grow the audit surface for zero benefit and split key generation from auto mode. |
 | **No version segment in the key** | `iv1:` prefix or a 4th segment | The issue pins the 3-segment format. Versioning-by-mode-name (interop/v1 → a new mode) is sufficient: canonicalization changes alter hashes, so old and new writers merely miss each other's entries — a cache-warm cost, not corruption. |
 | **Closed data model, errors on everything else** | Best-effort coercion | A value that hashes on one SDK and throws on another is annoying; a value that silently hashes *differently* on two SDKs is a debugging nightmare. Errors are loud and local. |
 | **Lowercase-only segments** | Free-form segment strings | Cross-language casing conventions guarantee silent key divergence (`get_user` vs `GetUser`). Rejecting uppercase makes the divergence a startup error. |
@@ -426,7 +432,7 @@ not re-litigated by accident.
 
 | Group | Count | Verifies |
 | :--- | :---: | :--- |
-| `key_vectors` | 31 | Canonical argument bytes (exact hex), args hash, full key — the `2.0`≡`2` collapse pair, supplementary-plane key sorting, heterogeneous sets, set dedupe (`{2, 2.0}` → `[2]`), datetime edge cases incl. pre-epoch, and every `*16`-tier width boundary (uint/int ladders, str/bin/array/map headers, root array16) |
+| `key_vectors` | 33 | Canonical argument bytes (exact hex), args hash, full key — the `2.0`≡`2` collapse pair, supplementary-plane key sorting, heterogeneous and mixed-sign sets (byte order ≠ natural order), set dedupe (`{2, 2.0}` → `[2]`), datetime edge cases incl. pre-epoch, both collapse-range endpoints, and every `*16`-tier width boundary (uint/int ladders, str/bin/array/map headers, root array16) |
 | `value_vectors` | 4 | Plain-MessagePack value bytes (exact hex), float64 preservation in the value profile, temporal sentinel maps |
 | `aad_vectors` | 1 | AAD v0x03 bytes over an interop key (`format=msgpack`, `compressed=False`) |
 | `encryption_vectors` | 1 | Full HKDF-SHA256 → AES-256-GCM round-trip over plain-msgpack plaintext with the interop AAD (fixed nonce; decrypt-verified) |
@@ -446,11 +452,13 @@ npm install @noble/hashes && node tools/interop-crosscheck.mjs   # independent J
 
 The vectors were produced by the stdlib-only Python reference implementation and
 byte-verified by an independently written JavaScript encoder hashing with
-`@noble/hashes` (the same Blake2b dependency `cachekit-ts` ships), then decode-checked
-against `msgpack-python`. The encryption vector is decrypt-verified (HKDF derivation +
-AES-256-GCM tag check) by the JS cross-check via Node's built-in WebCrypto on every
-run, and additionally by the Python reference when the optional `cryptography`
-package is present. Both checks run in CI (`.github/workflows/verify.yml`).
+`@noble/hashes` (the same Blake2b dependency `cachekit-ts` ships). When the optional
+`msgpack` package is present, `verify` additionally decodes every canonical payload
+with `msgpack-python` and re-encodes it byte-identically (third-encoder conformance).
+The encryption vector is decrypt-verified (HKDF derivation + AES-256-GCM tag check)
+by the JS cross-check via Node's built-in WebCrypto on every run, and additionally by
+the Python reference when the optional `cryptography` package is present. All of the
+above run in CI (`.github/workflows/verify.yml`).
 SDK implementations (cachekit-py, cachekit-rs, cachekit-ts) MUST additionally verify
 against these vectors in their own test suites before claiming interop support.
 

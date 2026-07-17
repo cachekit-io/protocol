@@ -13,10 +13,13 @@ Usage:
     python3 tools/interop-reference.py generate   # rewrite test-vectors/interop-mode.json
     python3 tools/interop-reference.py verify     # re-derive and compare against the JSON
 
-The AES-256-GCM seal of the encryption vector is additionally re-verified when
-the optional `cryptography` package is importable (stdlib has no AES-GCM);
-tools/interop-crosscheck.mjs ALWAYS verifies it via Node's built-in WebCrypto,
-so the seal is cryptographically checked in CI regardless.
+Two optional-dependency checks deepen `verify` when the packages are importable
+(both run in CI, see .github/workflows/verify.yml):
+  - `cryptography`: re-verifies the AES-256-GCM seal of the encryption vector
+    (stdlib has no AES-GCM; tools/interop-crosscheck.mjs ALWAYS verifies it via
+    Node's built-in WebCrypto regardless).
+  - `msgpack`: decodes every canonical payload and re-encodes it byte-identically
+    (third-encoder conformance with the de-facto shortest-form behavior).
 
 Cross-check with an independent implementation: tools/interop-crosscheck.mjs
 """
@@ -192,13 +195,9 @@ def encode_canonical(value: object, *, collapse_floats: bool = True) -> bytes:
 
 def normalize_arg(v: object) -> object:
     """Map a source value into the interop data model. Recursive."""
-    if v is None or isinstance(v, (bool, int, str, bytes, bytearray)):
-        if isinstance(v, int) and not isinstance(v, bool) and not INT64_MIN <= v <= UINT64_MAX:
-            raise InteropError(f"integer out of interop range: {v}")
-        return v
-    if isinstance(v, float):
-        if math.isnan(v) or math.isinf(v):
-            raise InteropError("NaN and Infinity are not allowed in interop arguments")
+    if v is None or isinstance(v, (bool, int, float, str, bytes, bytearray)):
+        # Range/NaN/Infinity enforcement lives in ONE place: the encoder
+        # (_encode_int / the float branch of _encode), which every path hits.
         return v
     if isinstance(v, datetime):
         if v.tzinfo is None or v.tzinfo.utcoffset(v) is None:
@@ -517,6 +516,20 @@ KEY_VECTORS: list[dict] = [
         "args": [{"$set": ["b", 10, "a"]}],
     },
     {
+        "name": "set_mixed_sign_order",
+        "description": "Set {-5, 'a', 1.5}: encoded-byte order is 'a' (0xa1..), 1.5 (0xcb..), -5 (0xfb) — NOT numeric/type-grouped order. Kills 'sort naturally, ints first' implementations.",
+        "namespace": "t",
+        "operation": "op",
+        "args": [{"$set": [-5, "a", {"$float": "1.5"}]}],
+    },
+    {
+        "name": "float_collapse_lower_bound",
+        "description": "Inclusive lower collapse bound: float -2^63 MUST collapse to the int64-min encoding (0xd3...), symmetric with the exclusive upper bound vector",
+        "namespace": "t",
+        "operation": "op",
+        "args": [{"$float": "-9223372036854775808"}],
+    },
+    {
         "name": "set_dedupe_canonicalization",
         "description": "Set {2, 2.0}: number canonicalization makes the encodings identical; dedupe by encoded bytes leaves a single int 2",
         "namespace": "t",
@@ -599,7 +612,11 @@ VALUE_VECTORS: list[dict] = [
 
 ERROR_VECTORS: list[dict] = [
     {"name": "reject_nan", "args": [{"$float": "nan"}], "error": "NaN is not allowed"},
-    {"name": "reject_infinity", "args": [{"$float": "inf"}], "error": "Infinity is not allowed"},
+    {
+        "name": "reject_infinity",
+        "args": [{"$float": "1e999"}],
+        "error": "Infinity is not allowed (1e999 overflows to +inf in Python, JS, and Rust float parsers alike)",
+    },
     {
         "name": "reject_int_overflow",
         "args": [{"$int": "18446744073709551616"}],
@@ -678,7 +695,7 @@ def _build() -> dict:
     aad = aad_v3(ENC_TENANT_ID, single_int["expected_key"])
 
     return {
-        "version": "1.1.0",
+        "version": "1.0.0",
         "spec": "spec/interop-mode.md",
         "generator": "tools/interop-reference.py (CPython stdlib)",
         "cross_checked_by": "tools/interop-crosscheck.mjs (independent encoder + @noble/hashes blake2b + WebCrypto HKDF/AES-GCM)",
@@ -703,7 +720,11 @@ def _build() -> dict:
             "$bytes": "hex-encoded byte string",
             "$datetime": "ISO 8601 with mandatory UTC offset",
             "$uuid": "UUID string (any case on input)",
-            "$float": "decimal float literal (JSON numbers are always integers in this file)",
+            "$float": (
+                "decimal float literal (JSON numbers are always integers in this file). "
+                "Error vectors use 'nan' (parses to NaN in Python and JS) and '1e999' "
+                "(overflows to +Infinity in Python, JS, and Rust) — never 'inf', which JS parses to NaN."
+            ),
             "$int": "decimal integer literal (for values beyond 2^53, unsafe in JS JSON.parse)",
         },
         "key_vectors": key_vectors,
@@ -763,6 +784,23 @@ def _self_check(built: dict) -> None:
     )
     pre_epoch = normalize_arg(datetime.fromisoformat("1969-12-31T23:59:59.123456+00:00"))
     assert pre_epoch == -0.876544, f"pre-epoch micros floor broken: {pre_epoch}"
+    assert by_name["set_mixed_sign_order"]["canonical_args_hex"] == "9193a161cb3ff8000000000000fb", (
+        "set byte-order broken: {-5, 'a', 1.5} must encode as ['a', 1.5, -5]"
+    )
+    assert by_name["float_collapse_lower_bound"]["canonical_args_hex"] == "91d38000000000000000", (
+        "inclusive lower collapse bound broken: float -2^63 must collapse to int64-min"
+    )
+
+    # Strings must be well-formed Unicode scalar sequences. A lone surrogate
+    # cannot be expressed in portable JSON (serde_json rejects it — Rust String
+    # is immune by construction), so this lives here and in the .mjs self-test
+    # instead of an error vector.
+    try:
+        canonical_args_bytes(["\ud800"])
+    except (InteropError, ValueError, UnicodeEncodeError):
+        pass
+    else:
+        raise AssertionError("lone surrogate must be rejected, not encoded")
 
     for ev in ERROR_VECTORS:
         try:
@@ -773,6 +811,31 @@ def _self_check(built: dict) -> None:
         except (InteropError, ValueError, OverflowError):
             continue
         raise AssertionError(f"error vector {ev['name']} did not raise")
+
+    # Third-encoder conformance: when msgpack-python is importable, every
+    # canonical payload must decode as well-formed MessagePack AND re-encode
+    # (with sorted keys) to the identical bytes — pinning "canonical ==
+    # shortest form as emitted by the de-facto encoders". Runs in CI.
+    try:
+        import msgpack  # noqa: PLC0415
+    except ImportError:
+        print("note: `msgpack` not installed — third-encoder conformance check skipped")
+    else:
+        def _resort(x: object) -> object:
+            if isinstance(x, dict):
+                return {k: _resort(x[k]) for k in sorted(x)}
+            if isinstance(x, list):
+                return [_resort(e) for e in x]
+            return x
+
+        for kv in built["key_vectors"]:
+            b = bytes.fromhex(kv["canonical_args_hex"])
+            decoded = msgpack.unpackb(b, raw=False, strict_map_key=True)
+            assert msgpack.packb(_resort(decoded), use_bin_type=True) == b, (
+                f"msgpack-python re-encode mismatch on {kv['name']}"
+            )
+        for vv in built["value_vectors"]:
+            msgpack.unpackb(bytes.fromhex(vv["canonical_msgpack_hex"]), raw=False, strict_map_key=True)
 
     # Encryption chain: the derived key must match the fingerprint already
     # published in test-vectors/encryption.json (ground-truth continuity).
@@ -797,6 +860,9 @@ def _self_check(built: dict) -> None:
 def main() -> int:
     vectors_path = Path(__file__).resolve().parent.parent / "test-vectors" / "interop-mode.json"
     cmd = sys.argv[1] if len(sys.argv) > 1 else "verify"
+    if cmd not in ("generate", "verify"):
+        print(f"unknown command {cmd!r} — use 'generate' or 'verify'")
+        return 2
     built = _build()
     _self_check(built)
 

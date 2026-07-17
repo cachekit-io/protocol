@@ -133,6 +133,10 @@ function encodeInt(n /* BigInt */, chunks) {
 }
 
 function encodeStr(s, chunks) {
+  // Strings must be well-formed Unicode scalar sequences. Buffer.from would
+  // silently map a lone surrogate to U+FFFD — a silent key collision — while
+  // Python raises. The spec requires an error on both sides.
+  if (!s.isWellFormed()) throw new Error("lone surrogate: strings must be well-formed Unicode");
   const b = Buffer.from(s, "utf8");
   if (b.length <= 31) chunks.push(Buffer.from([0xa0 | b.length]));
   else if (b.length <= 0xff) chunks.push(Buffer.from([0xd9, b.length]));
@@ -151,7 +155,8 @@ function encodeStr(s, chunks) {
 }
 
 function encodeFloat64(f, chunks) {
-  if (Number.isNaN(f) || !Number.isFinite(f)) throw new Error("NaN/Infinity rejected");
+  // NaN/Infinity are rejected by the sole caller (the Float branch) before
+  // this point — no duplicate guard here.
   const b = Buffer.alloc(9);
   b[0] = 0xcb;
   b.writeDoubleBE(f, 1);
@@ -362,6 +367,17 @@ for (const v of doc.error_vectors) {
   } catch {
     /* expected */
   }
+}
+
+// Self-test: a lone surrogate cannot be expressed in portable JSON (serde_json
+// rejects it; Rust String is immune by construction), so this rejection is
+// pinned here and in the Python reference's self-check instead of a vector.
+try {
+  encodeToBuffer(String.fromCharCode(0xd800), { collapseFloats: true });
+  failures++;
+  console.error("FAIL lone_surrogate_selftest: expected rejection, encoding succeeded");
+} catch {
+  /* expected */
 }
 
 if (failures > 0) {
