@@ -1,15 +1,22 @@
 #!/usr/bin/env python3
 """Reference implementation of CacheKit interop mode (spec/interop-mode.md).
 
-Stdlib-only. This file is the executable companion to the spec:
+Stdlib-only (one optional extra, see below). This file is the executable
+companion to the spec:
   - canonical MessagePack encoder (shortest-form, sorted maps)
   - interop argument normalization (number canonicalization, sets, datetimes, UUIDs)
   - interop key generation ({namespace}:{operation}:{args_hash})
+  - HKDF-SHA256 key derivation per spec/encryption.md (stdlib hmac/hashlib)
   - test-vector generator + self-verifier for ../test-vectors/interop-mode.json
 
 Usage:
     python3 tools/interop-reference.py generate   # rewrite test-vectors/interop-mode.json
     python3 tools/interop-reference.py verify     # re-derive and compare against the JSON
+
+The AES-256-GCM seal of the encryption vector is additionally re-verified when
+the optional `cryptography` package is importable (stdlib has no AES-GCM);
+tools/interop-crosscheck.mjs ALWAYS verifies it via Node's built-in WebCrypto,
+so the seal is cryptographically checked in CI regardless.
 
 Cross-check with an independent implementation: tools/interop-crosscheck.mjs
 """
@@ -17,6 +24,7 @@ Cross-check with an independent implementation: tools/interop-crosscheck.mjs
 from __future__ import annotations
 
 import hashlib
+import hmac
 import json
 import math
 import re
@@ -26,6 +34,8 @@ import uuid as uuid_mod
 from datetime import datetime, timezone
 from pathlib import Path
 
+# Implementations MUST full-string match (Python re.match would accept a
+# trailing newline because $ matches before it — use fullmatch, never match).
 SEGMENT_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{0,63}$")
 
 UINT64_MAX = 2**64 - 1
@@ -40,8 +50,24 @@ class InteropError(ValueError):
     """Raised for values outside the interop data model."""
 
 
+class _PreEncoded:
+    """A set normalized to its sorted, deduplicated, already-encoded elements."""
+
+    def __init__(self, encoded_elements: list[bytes]) -> None:
+        self.encoded_elements = encoded_elements
+
+
+class _TaggedSet:
+    """Ordered stand-in for a set (avoids Python hashability limits in vectors)."""
+
+    def __init__(self, elements: list) -> None:
+        self.elements = elements
+
+
 # ---------------------------------------------------------------------------
-# Canonical MessagePack encoder (args profile)
+# Canonical MessagePack encoder — ONE encoder for both profiles.
+# collapse_floats=True is the ARGS profile (number canonicalization);
+# collapse_floats=False is the VALUE profile (floats always float64).
 # ---------------------------------------------------------------------------
 
 def _encode_int(n: int, out: bytearray) -> None:
@@ -60,15 +86,14 @@ def _encode_int(n: int, out: bytearray) -> None:
             out += b"\xce" + n.to_bytes(4, "big")
         else:
             out += b"\xcf" + n.to_bytes(8, "big")
+    elif n >= -(2**7):
+        out += b"\xd0" + n.to_bytes(1, "big", signed=True)
+    elif n >= -(2**15):
+        out += b"\xd1" + n.to_bytes(2, "big", signed=True)
+    elif n >= -(2**31):
+        out += b"\xd2" + n.to_bytes(4, "big", signed=True)
     else:
-        if n >= -(2**7):
-            out += b"\xd0" + n.to_bytes(1, "big", signed=True)
-        elif n >= -(2**15):
-            out += b"\xd1" + n.to_bytes(2, "big", signed=True)
-        elif n >= -(2**31):
-            out += b"\xd2" + n.to_bytes(4, "big", signed=True)
-        else:
-            out += b"\xd3" + n.to_bytes(8, "big", signed=True)
+        out += b"\xd3" + n.to_bytes(8, "big", signed=True)
 
 
 def _encode_str(s: str, out: bytearray) -> None:
@@ -114,26 +139,7 @@ def _encode_map_header(n: int, out: bytearray) -> None:
         out += b"\xdf" + n.to_bytes(4, "big")
 
 
-def _encode_float_canonical(f: float, out: bytearray) -> None:
-    """Number canonicalization: integral f64 in [-2^63, 2^64-1] encodes as int."""
-    if math.isnan(f) or math.isinf(f):
-        raise InteropError("NaN and Infinity are not allowed in interop arguments")
-    if f.is_integer() and F64_LOWER_INCL <= f < F64_UPPER_EXCL:
-        _encode_int(int(f), out)  # subsumes -0.0 -> int 0
-    else:
-        out += b"\xcb" + struct.pack(">d", f)
-
-
-def encode_canonical(value: object, out: bytearray | None = None, *, collapse_floats: bool = True) -> bytes:
-    """Canonically encode an interop-model value.
-
-    collapse_floats=True is the ARGS profile (number canonicalization).
-    collapse_floats=False is the VALUE profile (floats always float64).
-    """
-    root = out is None
-    if out is None:
-        out = bytearray()
-    v = value
+def _encode(v: object, out: bytearray, *, collapse_floats: bool) -> None:
     if v is None:
         out.append(0xC0)
     elif isinstance(v, bool):
@@ -141,20 +147,24 @@ def encode_canonical(value: object, out: bytearray | None = None, *, collapse_fl
     elif isinstance(v, int):
         _encode_int(v, out)
     elif isinstance(v, float):
-        if collapse_floats:
-            _encode_float_canonical(v, out)
+        if math.isnan(v) or math.isinf(v):
+            raise InteropError("NaN and Infinity are not allowed in interop mode")
+        if collapse_floats and v.is_integer() and F64_LOWER_INCL <= v < F64_UPPER_EXCL:
+            _encode_int(int(v), out)  # subsumes -0.0 -> int 0
         else:
-            if math.isnan(v) or math.isinf(v):
-                raise InteropError("NaN and Infinity are not allowed in interop values")
             out += b"\xcb" + struct.pack(">d", v)
     elif isinstance(v, str):
         _encode_str(v, out)
     elif isinstance(v, (bytes, bytearray)):
         _encode_bin(bytes(v), out)
+    elif isinstance(v, _PreEncoded):
+        _encode_array_header(len(v.encoded_elements), out)
+        for eb in v.encoded_elements:
+            out += eb
     elif isinstance(v, (list, tuple)):
         _encode_array_header(len(v), out)
         for item in v:
-            encode_canonical(item, out, collapse_floats=collapse_floats)
+            _encode(item, out, collapse_floats=collapse_floats)
     elif isinstance(v, dict):
         keys = list(v.keys())
         for k in keys:
@@ -164,35 +174,21 @@ def encode_canonical(value: object, out: bytearray | None = None, *, collapse_fl
         _encode_map_header(len(keys), out)
         for k in sorted(keys):
             _encode_str(k, out)
-            encode_canonical(v[k], out, collapse_floats=collapse_floats)
+            _encode(v[k], out, collapse_floats=collapse_floats)
     else:
         raise InteropError(f"type {type(v).__name__} is not in the interop data model")
-    return bytes(out) if root else b""
 
 
-# ---------------------------------------------------------------------------
-# Argument normalization (spec: Canonical Argument Normalization)
-# ---------------------------------------------------------------------------
-
-class _PreEncoded:
-    """A set normalized to its sorted, already-encoded elements."""
-
-    def __init__(self, encoded_elements: list[bytes]):
-        self.encoded_elements = encoded_elements
-
-
-class _TaggedSet:
-    """Ordered stand-in for a set (avoids Python hashability limits in vectors)."""
-
-    def __init__(self, elements: list):
-        self.elements = elements
-
-
-def _encode_normalized_element(v: object) -> bytes:
+def encode_canonical(value: object, *, collapse_floats: bool = True) -> bytes:
+    """Canonically encode an interop-model (or normalized) value."""
     out = bytearray()
-    _encode_normalized(v, out)
+    _encode(value, out, collapse_floats=collapse_floats)
     return bytes(out)
 
+
+# ---------------------------------------------------------------------------
+# Argument normalization (spec: The Interop Data Model)
+# ---------------------------------------------------------------------------
 
 def normalize_arg(v: object) -> object:
     """Map a source value into the interop data model. Recursive."""
@@ -207,9 +203,10 @@ def normalize_arg(v: object) -> object:
     if isinstance(v, datetime):
         if v.tzinfo is None or v.tzinfo.utcoffset(v) is None:
             raise InteropError("naive datetimes are not allowed in interop arguments")
-        # Integer microseconds since epoch, then ONE float64 division by 10^6.
+        # Integer microseconds since epoch (floored toward negative infinity —
+        # exact for pre-epoch values too), then ONE float64 division by 10^6.
         # IEEE 754 division is exactly specified, so this is bit-identical
-        # across languages (see spec: DateTime normalization).
+        # across languages (see spec: DateTime determinism).
         epoch = datetime(1970, 1, 1, tzinfo=timezone.utc)
         delta = v - epoch
         micros = (delta.days * 86400 + delta.seconds) * 10**6 + delta.microseconds
@@ -218,8 +215,9 @@ def normalize_arg(v: object) -> object:
         return str(v)  # lowercase hyphenated
     if isinstance(v, (frozenset, set, _TaggedSet)):
         elements = v.elements if isinstance(v, _TaggedSet) else v
-        # Sort by encoded bytes (total, language-neutral order); dedupe post-normalization.
-        encoded = sorted({_encode_normalized_element(normalize_arg(e)) for e in elements})
+        # Sort by encoded bytes (total, language-neutral order); dedupe
+        # post-normalization (e.g. {2, 2.0} collapses to a single int 2).
+        encoded = sorted({encode_canonical(normalize_arg(e)) for e in elements})
         return _PreEncoded(encoded)
     if isinstance(v, (list, tuple)):
         return [normalize_arg(e) for e in v]
@@ -233,30 +231,9 @@ def normalize_arg(v: object) -> object:
     raise InteropError(f"type {type(v).__name__} is not in the interop data model")
 
 
-def _encode_normalized(v: object, out: bytearray) -> None:
-    if isinstance(v, _PreEncoded):
-        _encode_array_header(len(v.encoded_elements), out)
-        for eb in v.encoded_elements:
-            out += eb
-    elif isinstance(v, list):
-        _encode_array_header(len(v), out)
-        for item in v:
-            _encode_normalized(item, out)
-    elif isinstance(v, dict):
-        _encode_map_header(len(v), out)
-        for k in sorted(v.keys()):
-            _encode_str(k, out)
-            _encode_normalized(v[k], out)
-    else:
-        encode_canonical(v, out)
-
-
 def canonical_args_bytes(args: list | tuple) -> bytes:
     """Encode the flat canonical argument array to canonical MessagePack."""
-    out = bytearray()
-    normalized = [normalize_arg(a) for a in args]
-    _encode_normalized(list(normalized), out)
-    return bytes(out)
+    return encode_canonical([normalize_arg(a) for a in args])
 
 
 def args_hash(args: list | tuple) -> str:
@@ -265,23 +242,67 @@ def args_hash(args: list | tuple) -> str:
 
 def interop_key(namespace: str, operation: str, args: list | tuple) -> str:
     for name, seg in (("namespace", namespace), ("operation", operation)):
-        if not SEGMENT_RE.match(seg):
+        if not SEGMENT_RE.fullmatch(seg):
             raise InteropError(
-                f"invalid interop {name} {seg!r}: must match ^[a-z0-9][a-z0-9._-]{{0,63}}$"
+                f"invalid interop {name} {seg!r}: must full-string match ^[a-z0-9][a-z0-9._-]{{0,63}}$"
             )
     return f"{namespace}:{operation}:{args_hash(args)}"
 
 
 # ---------------------------------------------------------------------------
-# AAD v0x03 (unchanged from spec/encryption.md; interop pins compressed="False")
+# Encryption chain (spec/encryption.md) — HKDF-SHA256 is pure stdlib
 # ---------------------------------------------------------------------------
 
-def aad_v3(tenant_id: str, cache_key: str, fmt: str = "msgpack", compressed: bool = False) -> bytes:
+def hkdf_sha256(ikm: bytes, salt: bytes, info: bytes, length: int = 32) -> bytes:
+    """RFC 5869 HKDF-Extract + Expand with SHA-256."""
+    prk = hmac.new(salt, ikm, hashlib.sha256).digest()
+    okm, t, i = b"", b"", 1
+    while len(okm) < length:
+        t = hmac.new(prk, t + info + bytes([i]), hashlib.sha256).digest()
+        okm += t
+        i += 1
+    return okm[:length]
+
+
+def construct_salt(domain: str, tenant_salt: str) -> bytes:
+    d, t = domain.encode("utf-8"), tenant_salt.encode("utf-8")
+    return b"cachekit_v1_" + bytes([len(d)]) + d + len(t).to_bytes(2, "big") + t
+
+
+def derive_encryption_key(master_key: bytes, tenant_id: str) -> bytes:
+    return hkdf_sha256(master_key, construct_salt("encryption", tenant_id), b"encryption")
+
+
+def key_fingerprint(key: bytes) -> str:
+    return hashlib.sha256(b"key_fingerprint_v1" + key).digest()[:16].hex()
+
+
+def aad_v3(tenant_id: str, cache_key: str, *, fmt: str = "msgpack", compressed: bool = False) -> bytes:
+    """AAD v0x03 per spec/encryption.md; interop mode pins compressed=False."""
     aad = bytearray([0x03])
     for comp in (tenant_id, cache_key, fmt, "True" if compressed else "False"):
         b = comp.encode("utf-8")
         aad += len(b).to_bytes(4, "big") + b
     return bytes(aad)
+
+
+# Encryption vector constants. The master key and tenant match
+# test-vectors/encryption.json, so the derived key (and its fingerprint,
+# 96179a9bc881aa7ca83f04b78a66afd3) is the SAME key already pinned there —
+# this file's HKDF chain is validated against that published ground truth by
+# the fingerprint self-check below. The ciphertext was produced with
+# AES-256-GCM (cryptography/OpenSSL) over the plain-MessagePack plaintext of
+# the issue_example_object value vector, with the interop_key_aad AAD and the
+# fixed nonce below; it is cryptographically re-verified by the optional
+# `cryptography` check here and ALWAYS by WebCrypto in interop-crosscheck.mjs.
+ENC_MASTER_KEY_HEX = "61" * 32
+ENC_TENANT_ID = "cross-sdk-test"
+ENC_KEY_FINGERPRINT_HEX = "96179a9bc881aa7ca83f04b78a66afd3"
+ENC_NONCE_HEX = "000102030405060708090a0b"
+ENC_CIPHERTEXT_HEX = (
+    "000102030405060708090a0b"
+    "033caf732820ce189e1506f842aebf8cdb6a242eb08c55b6f5a91eb9007b3bd657"
+)
 
 
 # ---------------------------------------------------------------------------
@@ -357,11 +378,63 @@ KEY_VECTORS: list[dict] = [
         "args": [{"$int": "-9223372036854775808"}],
     },
     {
+        "name": "uint_width_ladder",
+        "description": "Every unsigned width boundary: 127/128 (fixint/uint8), 255/256 (uint8/uint16), 65535/65536 (uint16/uint32), 4294967295/4294967296 (uint32/uint64)",
+        "namespace": "t",
+        "operation": "op",
+        "args": [127, 128, 255, 256, 65535, 65536, 4294967295, 4294967296],
+    },
+    {
+        "name": "int_width_ladder",
+        "description": "Every signed width boundary: -32/-33 (fixint/int8), -128/-129 (int8/int16), -32768/-32769 (int16/int32), -2147483648/-2147483649 (int32/int64)",
+        "namespace": "t",
+        "operation": "op",
+        "args": [-32, -33, -128, -129, -32768, -32769, -2147483648, -2147483649],
+    },
+    {
         "name": "unicode_string",
         "description": "UTF-8 string, no Unicode normalization applied",
         "namespace": "t",
         "operation": "op",
         "args": ["héllo wörld ✓"],
+    },
+    {
+        "name": "str_width_ladder",
+        "description": "String header boundaries by UTF-8 byte length: 31 (fixstr) / 32 (str8) / 255 (str8) / 256 (str16)",
+        "namespace": "t",
+        "operation": "op",
+        "args": ["a" * 31, "b" * 32, "c" * 255, "d" * 256],
+    },
+    {
+        "name": "bin_width_ladder",
+        "description": "Binary header boundaries: 255 bytes (bin8) / 256 bytes (bin16)",
+        "namespace": "t",
+        "operation": "op",
+        "args": [{"$bytes": "ab" * 255}, {"$bytes": "cd" * 256}],
+    },
+    {
+        "name": "array_width_boundary",
+        "description": "Array header boundary: 15 elements (fixarray) / 16 elements (array16)",
+        "namespace": "t",
+        "operation": "op",
+        "args": [list(range(15)), list(range(16))],
+    },
+    {
+        "name": "map_width_boundary",
+        "description": "Map header boundary: 15 keys (fixmap) / 16 keys (map16); zero-padded keys keep the sort order obvious",
+        "namespace": "t",
+        "operation": "op",
+        "args": [
+            {f"k{i:02d}": i for i in range(15)},
+            {f"k{i:02d}": i for i in range(16)},
+        ],
+    },
+    {
+        "name": "root_array16",
+        "description": "16 arguments: the ROOT canonical argument array itself uses array16",
+        "namespace": "t",
+        "operation": "op",
+        "args": list(range(16)),
     },
     {
         "name": "bool_null",
@@ -444,6 +517,13 @@ KEY_VECTORS: list[dict] = [
         "args": [{"$set": ["b", 10, "a"]}],
     },
     {
+        "name": "set_dedupe_canonicalization",
+        "description": "Set {2, 2.0}: number canonicalization makes the encodings identical; dedupe by encoded bytes leaves a single int 2",
+        "namespace": "t",
+        "operation": "op",
+        "args": [{"$set": [2, {"$float": "2.0"}]}],
+    },
+    {
         "name": "datetime_fractional",
         "description": "tz-aware datetime -> floor to micros -> one float64 division by 10^6",
         "namespace": "events",
@@ -459,10 +539,17 @@ KEY_VECTORS: list[dict] = [
     },
     {
         "name": "datetime_non_utc_offset",
-        "description": "Non-UTC offset converts to the same instant (+05:30)",
+        "description": "Non-UTC offset converts to the same instant (+05:30); key must equal datetime_fractional",
         "namespace": "events",
         "operation": "get_by_time",
         "args": [{"$datetime": "2024-01-01T18:00:45.123456+05:30"}],
+    },
+    {
+        "name": "datetime_pre_epoch",
+        "description": "Pre-epoch datetime: negative timestamp (-0.876544), microseconds floored toward negative infinity",
+        "namespace": "events",
+        "operation": "get_by_time",
+        "args": [{"$datetime": "1969-12-31T23:59:59.123456+00:00"}],
     },
     {
         "name": "uuid_lowercased",
@@ -533,14 +620,21 @@ ERROR_VECTORS: list[dict] = [
         "namespace": "Users",
         "operation": "get_user",
         "args": [],
-        "error": "namespace must match ^[a-z0-9][a-z0-9._-]{0,63}$",
+        "error": "namespace must match the segment pattern",
     },
     {
         "name": "reject_colon_in_operation",
         "namespace": "users",
         "operation": "get:user",
         "args": [],
-        "error": "operation must match ^[a-z0-9][a-z0-9._-]{0,63}$",
+        "error": "operation must match the segment pattern",
+    },
+    {
+        "name": "reject_trailing_newline",
+        "namespace": "users\n",
+        "operation": "get_user",
+        "args": [],
+        "error": "segment validation must be a FULL-string match (Python re.match + $ accepts a trailing newline; use fullmatch)",
     },
 ]
 
@@ -577,18 +671,32 @@ def _build() -> dict:
             }
         )
 
-    # AAD vector binds to the single_int key so the two vectors compose.
+    # AAD and encryption vectors bind to the single_int key and the
+    # issue_example_object value so the vectors compose end-to-end.
     single_int = next(kv for kv in key_vectors if kv["name"] == "single_int")
-    aad = aad_v3("cross-sdk-test", single_int["expected_key"])
+    example_value = next(vv for vv in value_vectors if vv["name"] == "issue_example_object")
+    aad = aad_v3(ENC_TENANT_ID, single_int["expected_key"])
 
     return {
-        "version": "1.0.0",
+        "version": "1.1.0",
         "spec": "spec/interop-mode.md",
         "generator": "tools/interop-reference.py (CPython stdlib)",
-        "cross_checked_by": "tools/interop-crosscheck.mjs (independent encoder + @noble/hashes blake2b)",
+        "cross_checked_by": "tools/interop-crosscheck.mjs (independent encoder + @noble/hashes blake2b + WebCrypto HKDF/AES-GCM)",
         "hash_algorithm": "blake2b-256 (digest_size=32, unkeyed) over canonical MessagePack of the flat argument array",
         "key_format": "{namespace}:{operation}:{args_hash}",
         "segment_pattern": "^[a-z0-9][a-z0-9._-]{0,63}$",
+        "segment_pattern_note": "Full-string match REQUIRED (Python: re.fullmatch, not re.match — $ matches before a trailing newline).",
+        "width_coverage_note": (
+            "All *16 header boundaries (uint/int widths, str8->str16, bin8->bin16, fixarray->array16, "
+            "fixmap->map16, including the root argument array) are pinned by vectors. The *32 tier "
+            "(str32/bin32/array32/map32, >=64 KiB or >=65536 elements) is normative and implemented by "
+            "both tools but untested-by-design: fixture blobs that size would bloat the file without "
+            "exercising different logic (same length-prefix code path, wider field)."
+        ),
+        "error_vectors_note": (
+            "The 'error' field is a human-readable reason for maintainers. Conformance means the input "
+            "MUST be rejected with an error; the message text is not normative."
+        ),
         "tagged_json": {
             "note": "Single-key objects with a $-prefixed key are typed input tags; all other JSON maps directly.",
             "$set": "set of tagged values (unordered)",
@@ -605,26 +713,57 @@ def _build() -> dict:
             {
                 "name": "interop_key_aad",
                 "description": "AAD v0x03 over an interop key; format=msgpack, compressed=False (always, in interop mode)",
-                "tenant_id": "cross-sdk-test",
+                "tenant_id": ENC_TENANT_ID,
                 "cache_key": single_int["expected_key"],
                 "format": "msgpack",
                 "compressed": False,
                 "aad_hex": aad.hex(),
             }
         ],
+        "encryption_vectors": [
+            {
+                "name": "interop_encryption_roundtrip",
+                "description": (
+                    "Full interop encryption round-trip: HKDF-SHA256 per spec/encryption.md "
+                    "(same master key + tenant as test-vectors/encryption.json, hence the same "
+                    "derived key), AES-256-GCM over the PLAIN MessagePack value bytes (no "
+                    "ByteStorage step) with the interop_key_aad AAD and a fixed nonce."
+                ),
+                "master_key_hex": ENC_MASTER_KEY_HEX,
+                "tenant_id": ENC_TENANT_ID,
+                "derived_key_fingerprint_hex": ENC_KEY_FINGERPRINT_HEX,
+                "cache_key": single_int["expected_key"],
+                "format": "msgpack",
+                "compressed": False,
+                "aad_hex": aad.hex(),
+                "plaintext_hex": example_value["canonical_msgpack_hex"],
+                "nonce_hex": ENC_NONCE_HEX,
+                "ciphertext_hex": ENC_CIPHERTEXT_HEX,
+                "ciphertext_layout": "nonce(12) || ciphertext || auth_tag(16)",
+            }
+        ],
     }
 
 
-def main() -> int:
-    vectors_path = Path(__file__).resolve().parent.parent / "test-vectors" / "interop-mode.json"
-    cmd = sys.argv[1] if len(sys.argv) > 1 else "verify"
-    built = _build()
-
-    # Self-checks: the two intentionally-equal vectors must agree, errors must raise.
+def _self_check(built: dict) -> None:
+    """Assertions that pin the spec's intentional equalities and edge cases."""
     by_name = {v["name"]: v for v in built["key_vectors"]}
+
     assert by_name["float_integral_collapse"]["args_hash"] == by_name["single_int_two"]["args_hash"], (
         "number canonicalization broken: 2.0 and 2 must hash identically"
     )
+    assert by_name["datetime_fractional"]["expected_key"] == by_name["datetime_non_utc_offset"]["expected_key"], (
+        "offset normalization broken: same instant must produce the same key"
+    )
+    assert by_name["set_dedupe_canonicalization"]["canonical_args_hex"] == "919102", (
+        "set dedupe broken: {2, 2.0} must encode as a single-element array [2]"
+    )
+    assert by_name["root_array16"]["canonical_args_hex"].startswith("dc0010"), (
+        "root argument array of 16 must use array16"
+    )
+    pre_epoch = normalize_arg(datetime.fromisoformat("1969-12-31T23:59:59.123456+00:00"))
+    assert pre_epoch == -0.876544, f"pre-epoch micros floor broken: {pre_epoch}"
+
     for ev in ERROR_VECTORS:
         try:
             if "namespace" in ev:
@@ -635,18 +774,50 @@ def main() -> int:
             continue
         raise AssertionError(f"error vector {ev['name']} did not raise")
 
+    # Encryption chain: the derived key must match the fingerprint already
+    # published in test-vectors/encryption.json (ground-truth continuity).
+    key = derive_encryption_key(bytes.fromhex(ENC_MASTER_KEY_HEX), ENC_TENANT_ID)
+    assert key_fingerprint(key) == ENC_KEY_FINGERPRINT_HEX, (
+        "HKDF chain no longer matches the ground truth pinned in encryption.json"
+    )
+    ev = built["encryption_vectors"][0]
+    assert ev["aad_hex"] == built["aad_vectors"][0]["aad_hex"]
+    try:
+        from cryptography.hazmat.primitives.ciphers.aead import AESGCM  # noqa: PLC0415
+    except ImportError:
+        print("note: `cryptography` not installed — AES-GCM seal verified only by interop-crosscheck.mjs (WebCrypto)")
+    else:
+        ct = bytes.fromhex(ev["ciphertext_hex"])
+        pt = AESGCM(key).decrypt(ct[:12], ct[12:], bytes.fromhex(ev["aad_hex"]))
+        assert pt.hex() == ev["plaintext_hex"], "encryption vector does not decrypt to the pinned plaintext"
+        resealed = ct[:12] + AESGCM(key).encrypt(ct[:12], pt, bytes.fromhex(ev["aad_hex"]))
+        assert resealed.hex() == ev["ciphertext_hex"], "encryption vector seal mismatch"
+
+
+def main() -> int:
+    vectors_path = Path(__file__).resolve().parent.parent / "test-vectors" / "interop-mode.json"
+    cmd = sys.argv[1] if len(sys.argv) > 1 else "verify"
+    built = _build()
+    _self_check(built)
+
     if cmd == "generate":
         vectors_path.write_text(json.dumps(built, indent=2, ensure_ascii=True) + "\n", encoding="utf-8")
-        print(f"wrote {vectors_path} ({len(built['key_vectors'])} key, "
-              f"{len(built['value_vectors'])} value, {len(ERROR_VECTORS)} error vectors)")
+        print(
+            f"wrote {vectors_path} ({len(built['key_vectors'])} key, {len(built['value_vectors'])} value, "
+            f"{len(built['error_vectors'])} error, {len(built['aad_vectors'])} AAD, "
+            f"{len(built['encryption_vectors'])} encryption vectors)"
+        )
         return 0
 
     on_disk = json.loads(vectors_path.read_text(encoding="utf-8"))
     if on_disk != built:
         print("MISMATCH: test-vectors/interop-mode.json does not match the reference implementation")
         return 1
-    print(f"OK: {len(built['key_vectors'])} key vectors, {len(built['value_vectors'])} value vectors, "
-          f"{len(ERROR_VECTORS)} error vectors, 1 AAD vector all verified")
+    print(
+        f"OK: {len(built['key_vectors'])} key, {len(built['value_vectors'])} value, "
+        f"{len(built['error_vectors'])} error, {len(built['aad_vectors'])} AAD, "
+        f"{len(built['encryption_vectors'])} encryption vectors all verified"
+    )
     return 0
 
 

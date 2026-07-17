@@ -4,7 +4,9 @@
 // This is a from-scratch canonical-MessagePack + normalization implementation in
 // JavaScript — sharing no code with tools/interop-reference.py — so an encoding
 // bug in either implementation shows up as a byte mismatch here. Hashing uses
-// @noble/hashes, the same blake2b dependency cachekit-ts ships with.
+// @noble/hashes, the same blake2b dependency cachekit-ts ships with. The
+// encryption vector is verified cryptographically (HKDF-SHA256 derivation +
+// AES-256-GCM decrypt with AAD) via Node's built-in WebCrypto.
 //
 // Run:
 //   npm install @noble/hashes          # the only dependency
@@ -13,6 +15,7 @@
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
+import { webcrypto } from "node:crypto";
 
 let blake2b;
 try {
@@ -160,7 +163,9 @@ function encodeCanonical(v, chunks, { collapseFloats }) {
   else if (typeof v === "boolean") chunks.push(Buffer.from([v ? 0xc3 : 0xc2]));
   else if (typeof v === "bigint") encodeInt(v, chunks);
   else if (typeof v === "number") {
-    if (!Number.isInteger(v)) throw new Error("bare non-integer Number — use $float");
+    // isSafeInteger, not isInteger: a bare Number beyond 2^53 has already
+    // lost precision — the spec requires an error, never silent rounding.
+    if (!Number.isSafeInteger(v)) throw new Error("bare Number must be a safe integer — use $float / $int");
     encodeInt(BigInt(v), chunks);
   } else if (v instanceof Float) {
     const f = v.v;
@@ -175,7 +180,17 @@ function encodeCanonical(v, chunks, { collapseFloats }) {
   } else if (typeof v === "string") encodeStr(v, chunks);
   else if (Buffer.isBuffer(v)) {
     if (v.length <= 0xff) chunks.push(Buffer.from([0xc4, v.length]));
-    else throw new Error("bin16/32 not needed by vectors");
+    else if (v.length <= 0xffff) {
+      const h = Buffer.alloc(3);
+      h[0] = 0xc5;
+      h.writeUInt16BE(v.length, 1);
+      chunks.push(h);
+    } else {
+      const h = Buffer.alloc(5);
+      h[0] = 0xc6;
+      h.writeUInt32BE(v.length, 1);
+      chunks.push(h);
+    }
     chunks.push(v);
   } else if (v instanceof TaggedSet) {
     const encoded = v.elements.map((e) => encodeToBuffer(e, { collapseFloats }));
@@ -194,7 +209,17 @@ function encodeCanonical(v, chunks, { collapseFloats }) {
       Buffer.compare(Buffer.from(a, "utf8"), Buffer.from(b, "utf8")),
     );
     if (keys.length <= 15) chunks.push(Buffer.from([0x80 | keys.length]));
-    else throw new Error("map16/32 not needed by vectors");
+    else if (keys.length <= 0xffff) {
+      const h = Buffer.alloc(3);
+      h[0] = 0xde;
+      h.writeUInt16BE(keys.length, 1);
+      chunks.push(h);
+    } else {
+      const h = Buffer.alloc(5);
+      h[0] = 0xdf;
+      h.writeUInt32BE(keys.length, 1);
+      chunks.push(h);
+    }
     for (const k of keys) {
       encodeStr(k, chunks);
       encodeCanonical(v[k], chunks, { collapseFloats });
@@ -204,7 +229,17 @@ function encodeCanonical(v, chunks, { collapseFloats }) {
 
 function pushArrayHeader(n, chunks) {
   if (n <= 15) chunks.push(Buffer.from([0x90 | n]));
-  else throw new Error("array16/32 not needed by vectors");
+  else if (n <= 0xffff) {
+    const h = Buffer.alloc(3);
+    h[0] = 0xdc;
+    h.writeUInt16BE(n, 1);
+    chunks.push(h);
+  } else {
+    const h = Buffer.alloc(5);
+    h[0] = 0xdd;
+    h.writeUInt32BE(n, 1);
+    chunks.push(h);
+  }
 }
 
 function encodeToBuffer(v, opts) {
@@ -257,6 +292,64 @@ for (const v of doc.aad_vectors) {
   check(v.name, "aad_hex", v.aad_hex, aad.toString("hex"));
 }
 
+// Encryption vectors: independently derive the key with WebCrypto HKDF-SHA256
+// (salt construction per spec/encryption.md), check the fingerprint pinned in
+// test-vectors/encryption.json, then AES-256-GCM decrypt with the AAD and
+// compare the recovered plaintext against the pinned plain-msgpack bytes.
+function constructSalt(domain, tenantSalt) {
+  const d = Buffer.from(domain, "utf8");
+  const t = Buffer.from(tenantSalt, "utf8");
+  const tLen = Buffer.alloc(2);
+  tLen.writeUInt16BE(t.length);
+  return Buffer.concat([Buffer.from("cachekit_v1_", "utf8"), Buffer.from([d.length]), d, tLen, t]);
+}
+
+for (const v of doc.encryption_vectors ?? []) {
+  try {
+    const masterKey = await webcrypto.subtle.importKey(
+      "raw",
+      Buffer.from(v.master_key_hex, "hex"),
+      "HKDF",
+      false,
+      ["deriveBits"],
+    );
+    const derivedBits = await webcrypto.subtle.deriveBits(
+      {
+        name: "HKDF",
+        hash: "SHA-256",
+        salt: constructSalt("encryption", v.tenant_id),
+        info: Buffer.from("encryption", "utf8"),
+      },
+      masterKey,
+      256,
+    );
+    const derived = Buffer.from(derivedBits);
+    const fpInput = Buffer.concat([Buffer.from("key_fingerprint_v1", "utf8"), derived]);
+    const fp = Buffer.from(await webcrypto.subtle.digest("SHA-256", fpInput)).subarray(0, 16);
+    check(v.name, "derived_key_fingerprint_hex", v.derived_key_fingerprint_hex, fp.toString("hex"));
+
+    const gcmKey = await webcrypto.subtle.importKey("raw", derived, "AES-GCM", false, ["decrypt"]);
+    const ct = Buffer.from(v.ciphertext_hex, "hex");
+    const plaintext = Buffer.from(
+      await webcrypto.subtle.decrypt(
+        {
+          name: "AES-GCM",
+          iv: ct.subarray(0, 12),
+          additionalData: Buffer.from(v.aad_hex, "hex"),
+          tagLength: 128,
+        },
+        gcmKey,
+        ct.subarray(12),
+      ),
+    );
+    check(v.name, "plaintext_hex (AES-GCM decrypt)", v.plaintext_hex, plaintext.toString("hex"));
+    check(v.name, "nonce_hex", v.nonce_hex, ct.subarray(0, 12).toString("hex"));
+  } catch (err) {
+    failures++;
+    console.error(`FAIL ${v.name} (encryption): ${err.message ?? err}`);
+  }
+}
+
 for (const v of doc.error_vectors) {
   try {
     if (v.namespace !== undefined) {
@@ -277,5 +370,6 @@ if (failures > 0) {
 }
 console.log(
   `OK: ${doc.key_vectors.length} key, ${doc.value_vectors.length} value, ` +
-    `${doc.aad_vectors.length} AAD, ${doc.error_vectors.length} error vectors verified independently`,
+    `${doc.aad_vectors.length} AAD, ${(doc.encryption_vectors ?? []).length} encryption, ` +
+    `${doc.error_vectors.length} error vectors verified independently`,
 );

@@ -69,7 +69,7 @@ non-opted-in callers remain byte-for-byte identical.
 
 ## Interop Key Format
 
-```
+```text
 {namespace}:{operation}:{args_hash}
 ```
 
@@ -81,9 +81,9 @@ non-opted-in callers remain byte-for-byte identical.
 
 ### Segment grammar
 
-`namespace` and `operation` MUST each match:
+`namespace` and `operation` MUST each match, as a **full-string** match:
 
-```
+```text
 ^[a-z0-9][a-z0-9._-]{0,63}$
 ```
 
@@ -91,15 +91,22 @@ Lowercase ASCII letters, digits, `.`, `_`, `-`; 1–64 characters; must start wi
 letter or digit. SDKs MUST reject non-conforming segments with an error at decoration
 / registration time — never silently normalize.
 
+> [!WARNING]
+> **Full-string means full-string.** In Python, `re.match` with a `$` anchor still
+> accepts a trailing newline (`"users\n"` passes) — use `re.fullmatch`. A segment
+> constant read from an env var or config file with a stray `\n` must fail loudly,
+> not flow into the key (and the encryption AAD) on one SDK while another rejects
+> it. The `reject_trailing_newline` error vector pins this.
+
+The maximum possible interop key length is 64 + 1 + 64 + 1 + 64 = **194 characters**,
+below the 250-character limit in [cache-key-format.md](cache-key-format.md) — the
+truncation rule there **never applies** to interop keys.
+
 > [!NOTE]
 > **Why lowercase-only**: naming conventions differ per language (`get_user` vs
 > `GetUser`). If mixed case were legal, a Python team and a Go team would each use
 > their native casing and silently miss each other's entries. Forcing lowercase makes
 > the failure loud and immediate instead.
-
-The maximum possible interop key length is 64 + 1 + 64 + 1 + 64 = **194 characters**,
-below the 250-character limit in [cache-key-format.md](cache-key-format.md) — the
-truncation rule there **never applies** to interop keys.
 
 There is no `func:` segment, no metadata suffix, and no version segment. The
 canonicalization profile below is frozen as **interop/v1**; any future change to it
@@ -117,7 +124,7 @@ gets a new mode name, not a silent revision (see [Design Decisions](#design-deci
 The `args_hash` input is the canonical MessagePack encoding of **one flat array**
 containing the argument values in declaration order:
 
-```
+```text
 args_hash = blake2b_256( canonical_msgpack( [arg0, arg1, …] ) )
 ```
 
@@ -176,6 +183,9 @@ be rejected with an error — never silently coerced or skipped.
 > with `Array.prototype.sort()`'s default comparator. The
 > `map_key_sort_supplementary` test vector exists specifically to catch this.
 
+Sets deserve a note of their own — they are the one place the encoding order is
+deliberately non-obvious:
+
 > [!NOTE]
 > **Set ordering is not numeric order.** Sorting by encoded bytes is a total,
 > language-neutral order that every SDK can compute without a cross-type comparison
@@ -191,7 +201,7 @@ rule that encodes them differently is unimplementable in the TS SDK. Interop mod
 therefore adopts one uniform rule (same philosophy as [RFC 8785 / JCS](https://www.rfc-editor.org/rfc/rfc8785)
 adapted to MessagePack):
 
-```
+```text
 encode_number(f: float64):
     if f is NaN or ±Infinity:        error
     if f is integral and -9223372036854775808.0 <= f < 18446744073709551616.0:
@@ -221,8 +231,11 @@ because IEEE 754 division is exactly specified — every language computing
 `float64(1704112245123456) / float64(10^6)` gets bit-identical results. Computing the
 timestamp in floating point any other way (e.g. summing seconds and fractional parts)
 is NOT guaranteed to match. Sub-microsecond precision (Rust nanoseconds, etc.) is
-floored to microseconds first. JavaScript `Date` carries milliseconds; multiply by
-1000 exactly.
+floored to microseconds first — **floor toward negative infinity**, not truncation
+toward zero; the two differ for pre-epoch instants. Pre-epoch datetimes are
+supported and yield negative timestamps (the `datetime_pre_epoch` vector pins
+`1969-12-31T23:59:59.123456Z` → `-0.876544`). JavaScript `Date` carries
+milliseconds; multiply by 1000 exactly.
 
 ---
 
@@ -247,6 +260,15 @@ int16, …). For hashing, exactly one is legal: the **shortest form**.
 This matches the default behavior of `msgpack-python` (`packb`), `rmp` /
 `rmp-serde`, and `@msgpack/msgpack` — but it is normative here, not an
 implementation accident: an SDK whose encoder pads widths produces wrong hashes.
+
+> [!NOTE]
+> **Vector coverage of the width ladder**: every `*16`-tier boundary is pinned by
+> test vectors (all uint/int width transitions, fixstr→str8→str16, bin8→bin16,
+> fixarray→array16, fixmap→map16 — including a 16-argument call whose *root* array
+> is array16). The `*32` tier (str32/bin32/array32/map32, ≥ 64 KiB payloads or
+> ≥ 65 536 elements) is normative and implemented by both reference tools, but
+> untested-by-design: fixture blobs that size would bloat the file without
+> exercising different logic (same length-prefix path, wider field).
 
 ---
 
@@ -289,8 +311,19 @@ Two interop-specific pins:
    no compression in interop mode).
 
 Key derivation (HKDF-SHA256), nonces, the ciphertext layout
-(`nonce ‖ ciphertext ‖ tag`), and the RotationAwareHeader are all unchanged. The
-`interop_key_aad` test vector pins the exact AAD bytes for an interop key.
+(`nonce ‖ ciphertext ‖ tag`), and the RotationAwareHeader are all unchanged.
+
+Two vectors substantiate this end-to-end, not just by construction:
+
+- `interop_key_aad` pins the exact AAD bytes for an interop key.
+- `interop_encryption_roundtrip` pins a **full ciphertext**: HKDF-SHA256 per
+  [encryption.md](encryption.md) (same master key and tenant as
+  [`test-vectors/encryption.json`](../test-vectors/encryption.json), so the derived
+  key fingerprint `96179a9b…` is the one already published there), AES-256-GCM over
+  the plain-MessagePack value bytes with the interop AAD and a fixed nonce.
+  `tools/interop-crosscheck.mjs` independently re-derives the key and **decrypts**
+  this vector via WebCrypto — a reader that can verify the tag on these bytes has
+  demonstrated cross-SDK decryption of an interop entry.
 
 > [!NOTE]
 > Zero-knowledge still holds: with encryption enabled, backends (including L1 for
@@ -355,7 +388,8 @@ An SDK implementation of interop mode MUST:
 5. Serialize values as plain MessagePack — never the ByteStorage envelope.
 6. Leave auto mode byte-for-byte unchanged.
 7. Pass every vector in [`test-vectors/interop-mode.json`](../test-vectors/interop-mode.json),
-   including the `error_vectors` (which MUST raise).
+   including the `error_vectors` (which MUST raise) and — when the SDK supports
+   encryption — the `interop_encryption_roundtrip` decrypt.
 
 Convenience pre-conversions (non-normative): SDKs MAY map language-specific types
 into the data model before the interop check — Python `Enum` → its value, `Path` →
@@ -392,10 +426,11 @@ not re-litigated by accident.
 
 | Group | Count | Verifies |
 | :--- | :---: | :--- |
-| `key_vectors` | 22 | Canonical argument bytes (exact hex), args hash, full key — including the `2.0`≡`2` collapse pair, supplementary-plane key sorting, heterogeneous sets, datetime edge cases |
+| `key_vectors` | 31 | Canonical argument bytes (exact hex), args hash, full key — the `2.0`≡`2` collapse pair, supplementary-plane key sorting, heterogeneous sets, set dedupe (`{2, 2.0}` → `[2]`), datetime edge cases incl. pre-epoch, and every `*16`-tier width boundary (uint/int ladders, str/bin/array/map headers, root array16) |
 | `value_vectors` | 4 | Plain-MessagePack value bytes (exact hex), float64 preservation in the value profile, temporal sentinel maps |
 | `aad_vectors` | 1 | AAD v0x03 bytes over an interop key (`format=msgpack`, `compressed=False`) |
-| `error_vectors` | 7 | Inputs that MUST be rejected (NaN, ±Inf, int overflow/underflow, naive datetime, bad segments) |
+| `encryption_vectors` | 1 | Full HKDF-SHA256 → AES-256-GCM round-trip over plain-msgpack plaintext with the interop AAD (fixed nonce; decrypt-verified) |
+| `error_vectors` | 8 | Inputs that MUST be rejected (NaN, ±Inf, int overflow/underflow, naive datetime, bad segments incl. trailing newline). The `error` text is a maintainer note, not a normative message |
 
 Inputs use a tagged-JSON convention (`{"$set": …}`, `{"$float": "2.0"}`,
 `{"$int": "…"}`, `{"$datetime": "…"}`, `{"$uuid": "…"}`, `{"$bytes": "<hex>"}`)
@@ -412,9 +447,12 @@ npm install @noble/hashes && node tools/interop-crosscheck.mjs   # independent J
 The vectors were produced by the stdlib-only Python reference implementation and
 byte-verified by an independently written JavaScript encoder hashing with
 `@noble/hashes` (the same Blake2b dependency `cachekit-ts` ships), then decode-checked
-against `msgpack-python`. SDK implementations (cachekit-py, cachekit-rs, cachekit-ts)
-MUST additionally verify against these vectors in their own test suites before
-claiming interop support.
+against `msgpack-python`. The encryption vector is decrypt-verified (HKDF derivation +
+AES-256-GCM tag check) by the JS cross-check via Node's built-in WebCrypto on every
+run, and additionally by the Python reference when the optional `cryptography`
+package is present. Both checks run in CI (`.github/workflows/verify.yml`).
+SDK implementations (cachekit-py, cachekit-rs, cachekit-ts) MUST additionally verify
+against these vectors in their own test suites before claiming interop support.
 
 ---
 

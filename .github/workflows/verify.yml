@@ -1,0 +1,35 @@
+name: verify
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test-vectors:
+    name: Test vectors match reference implementations
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Python reference verify (stdlib)
+        run: python3 tools/interop-reference.py verify
+
+      - name: Python reference verify (AES-GCM seal, cryptography)
+        run: |
+          pip install cryptography
+          python3 tools/interop-reference.py verify
+
+      - name: JS cross-check (independent encoder + @noble/hashes + WebCrypto)
+        run: |
+          npm init -y >/dev/null
+          npm install --no-audit --no-fund @noble/hashes
+          node tools/interop-crosscheck.mjs
