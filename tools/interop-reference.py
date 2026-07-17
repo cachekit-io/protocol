@@ -618,6 +618,11 @@ ERROR_VECTORS: list[dict] = [
         "error": "Infinity is not allowed (1e999 overflows to +inf in Python, JS, and Rust float parsers alike)",
     },
     {
+        "name": "reject_negative_infinity",
+        "args": [{"$float": "-1e999"}],
+        "error": "-Infinity is not allowed (independent vector: +Inf rejection does not imply -Inf rejection)",
+    },
+    {
         "name": "reject_int_overflow",
         "args": [{"$int": "18446744073709551616"}],
         "error": "integer above 2^64-1",

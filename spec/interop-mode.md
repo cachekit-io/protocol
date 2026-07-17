@@ -436,7 +436,7 @@ not re-litigated by accident.
 | `value_vectors` | 4 | Plain-MessagePack value bytes (exact hex), float64 preservation in the value profile, temporal sentinel maps |
 | `aad_vectors` | 1 | AAD v0x03 bytes over an interop key (`format=msgpack`, `compressed=False`) |
 | `encryption_vectors` | 1 | Full HKDF-SHA256 → AES-256-GCM round-trip over plain-msgpack plaintext with the interop AAD (fixed nonce; decrypt-verified) |
-| `error_vectors` | 8 | Inputs that MUST be rejected (NaN, ±Inf, int overflow/underflow, naive datetime, bad segments incl. trailing newline). The `error` text is a maintainer note, not a normative message |
+| `error_vectors` | 9 | Inputs that MUST be rejected (NaN, +Inf and −Inf as independent vectors, int overflow/underflow, naive datetime, bad segments incl. trailing newline). The `error` text is a maintainer note, not a normative message |
 
 Inputs use a tagged-JSON convention (`{"$set": …}`, `{"$float": "2.0"}`,
 `{"$int": "…"}`, `{"$datetime": "…"}`, `{"$uuid": "…"}`, `{"$bytes": "<hex>"}`)
