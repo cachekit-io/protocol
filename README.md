@@ -104,7 +104,7 @@ User data restored
 | [spec/wire-format.md](spec/wire-format.md) | ByteStorage envelope — LZ4 block compression, xxHash3-64 integrity, decompression bomb protection |
 | [spec/encryption.md](spec/encryption.md) | AES-256-GCM encryption, HKDF-SHA256 key derivation, AAD v0x03, counter-based nonces, key rotation |
 | [spec/saas-api.md](spec/saas-api.md) | REST API endpoints, binary wire protocol, error codes, metrics headers |
-| [spec/interop-mode.md](spec/interop-mode.md) | Cross-SDK cache sharing — language-neutral key format, canonical argument normalization *(draft)* |
+| [spec/interop-mode.md](spec/interop-mode.md) | Cross-SDK cache sharing — language-neutral key format, canonical argument normalization *(specified, not yet implemented in any SDK)* |
 | [sdk-feature-matrix.md](sdk-feature-matrix.md) | Feature parity tracking across Python, Rust, TypeScript, and PHP SDKs |
 
 ---
@@ -160,7 +160,7 @@ An SDK is protocol-compliant when:
 3. Encrypted payloads can be decrypted by any SDK with the same master key and tenant ID
 4. SaaS API integration follows the documented endpoint contracts
 
-Test vectors are published in [`test-vectors/`](test-vectors/) as YAML files.
+Test vectors are published in [`test-vectors/`](test-vectors/) as JSON files.
 
 > [!CAUTION]
 > Self-referential tests (SDK encrypts and decrypts its own output) are not sufficient for compliance certification. Use the canonical cross-SDK test vectors to validate interoperability.

@@ -128,6 +128,7 @@ For cross-SDK interoperability, all SDKs MUST implement:
 | AAD v0x03 | ✅ Compliant | ✅ Compliant | ✅ Compliant | ❌ Not implemented |
 | SaaS API | ✅ Compliant | ✅ Compliant (CachekitIO backend) | ✅ Compliant | ❌ Not implemented |
 | Test vectors | ⚠️ Pending | ⚠️ Pending | ✅ Python cross-SDK vectors | ⚠️ Pending |
+| Interop mode ([spec](spec/interop-mode.md), opt-in) | ❌ Not implemented | ❌ Not implemented | ❌ Not implemented | ❌ Not implemented |
 
 > [!NOTE]
 > "N/A" for Rust key generation means `cachekit-core` is a protocol primitive library. Key generation (Blake2b) is an SDK-level concern — `cachekit-rs` delegates cache key construction to the caller via the `key` parameter on `get`/`set`/`#[cachekit]`.
