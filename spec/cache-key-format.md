@@ -15,6 +15,7 @@
 ## Table of Contents
 
 - [Key Format](#key-format)
+- [Server-Side Requirements](#server-side-requirements)
 - [Cross-SDK Key Generation Strategy](#cross-sdk-key-generation-strategy)
 - [Argument Hashing Algorithm](#argument-hashing-algorithm)
 - [Character Normalization](#character-normalization)
@@ -30,6 +31,13 @@
 > Within a single SDK, the same function call with the same arguments will always produce the same key.
 
 ### Full Key Structure
+
+> [!NOTE]
+> This 7-segment structure is the **Python SDK's internal convention**, not a
+> server requirement. The CachekitIO backend validates keys security-only (see
+> [Server-Side Requirements](#server-side-requirements)) and otherwise treats
+> them as opaque strings — TypeScript/Rust `{ns}:{hash}` keys and
+> [Interop Mode](interop-mode.md) keys are equally valid on the wire.
 
 ```
 ns:{namespace}:func:{module}.{qualname}:args:{blake2b_hash}:{ic_flag}{serializer_code}
@@ -74,6 +82,26 @@ ns:cache:func:app.views.index:args:0000...0000:0s
 
 > [!WARNING]
 > **Discrepancy with RFC** — The original protocol RFC (Section 3.1.5) specifies a simpler key format: `{namespace}:{hash}`. The actual implementation includes function identity (`func:` prefix) and metadata suffix (`:{ic_flag}{serializer_code}`). **The implementation is authoritative.** For cross-SDK interoperability, SDK implementors must use explicit namespaces (the `func:` segment is language-specific and will differ).
+
+---
+
+## Server-Side Requirements
+
+The CachekitIO SaaS stores keys as opaque strings; the ONLY structure it
+enforces is security-relevant (per `saas` issue #91 / SRP refactor):
+
+| Check | Rule |
+| :--- | :--- |
+| Transport | Key is percent-encoded into the URL path; the server decodes it once. |
+| Length | Decoded key ≤ 400 characters. |
+| Charset | `[a-zA-Z0-9_.:-]` only — no `/` (sub-resource routing), no `%`, no control chars. |
+| Traversal | `..` is rejected anywhere in the key. |
+| Namespace | Keys starting `ns:{namespace}:` or `nsapi:{namespace}:` must have a namespace of 1–64 chars of `[a-zA-Z0-9_-]`. Keys without either prefix scope to the `default` namespace. |
+| Write spaces | `ns:` keys are mutable only by SDK (`ck_sdk_`) API keys; `nsapi:` keys only by direct (`ck_api_`) API keys. Reads are open to both. Legacy `ck_live_` keys are exempt. |
+
+Everything else in this document — segment count, `func:`/`args:` literals,
+hash length, metadata flags — is SDK convention for deterministic key
+generation, invisible to the server.
 
 ---
 

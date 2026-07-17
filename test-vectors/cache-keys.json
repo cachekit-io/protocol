@@ -1,8 +1,8 @@
 {
   "version": "1.0.0",
   "generator": "cachekit-py v0.5.0",
-  "note": "Keys include __main__ module because vectors were generated at top level. Cross-SDK implementations should substitute their own module path \u2014 only the args hash portion must match.",
-  "key_format": "ns:{namespace}:func:{module}.{qualname}:args:{blake2b_256_hex}:{ic_flag}{serializer_code}",
+  "note": "Keys include __main__ module because vectors were generated at top level. Cross-SDK implementations should substitute their own module path — only the args hash portion must match. The 7-segment shape is SDK-internal convention: the CachekitIO server accepts any key passing its security-only checks (length, charset, namespace prefix shape), including TS/Rust {ns}:{hash} and interop-mode keys.",
+  "key_format": "ns:{namespace}:func:{module}.{qualname}:args:{blake2b_256_hex}:{ic_flag}{serializer_code} (Python SDK convention — server validates security-only, see spec/cache-key-format.md#server-side-requirements)",
   "hash_algorithm": "blake2b-256 of msgpack([normalized_args, sorted_kwargs])",
   "vectors": [
     {

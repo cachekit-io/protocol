@@ -6,8 +6,10 @@
 
 **Language-neutral key format for sharing cache entries across SDK implementations.**
 
-> **Status**: DRAFT — See [Issue #1](https://github.com/cachekit-io/protocol/issues/1) for discussion.
-> This mode is NOT yet implemented in any SDK.
+> **Status**: SERVER-SUPPORTED — the CachekitIO validator accepts interop-format
+> keys (`{namespace}:{operation}:{args_hash}` scopes to the `default` namespace;
+> see [cache-key-format.md → Server-Side Requirements](cache-key-format.md#server-side-requirements)).
+> SDK-side generation is not yet implemented — see [Issue #1](https://github.com/cachekit-io/protocol/issues/1).
 
 </div>
 
