@@ -7,3 +7,10 @@ CALIBER_LEARNINGS.md
 .cursor/
 .cursorrules
 .github/copilot-instructions.md
+
+# Ephemeral artifacts from tools/interop-crosscheck.mjs setup (CI runs npm install
+# at repo root) — anchored so a future intentional manifest elsewhere stays committable
+/node_modules/
+/package.json
+/package-lock.json
+__pycache__/
