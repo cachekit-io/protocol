@@ -199,10 +199,14 @@ Where `aes_gcm_seal` returns `ciphertext || auth_tag` (auth tag is the last 16 b
 <summary>Expand AAD byte layout</summary>
 
 ```
-┌──────┬────────┬───────────┬────────┬───────────┬────────┬────────┬────────┬───────────┐
-│ 0x03 │  len1  │ tenant_id │  len2  │ cache_key │  len3  │ format │  len4  │compressed │
-└──────┴────────┴───────────┴────────┴───────────┴────────┴────────┴────────┴───────────┘
-  1 B    4 B BE   variable    4 B BE   variable    4 B BE   var      4 B BE   var
+┌──────┬────────┬───────────┬────────┬───────────┬────────┬────────┬────────┬───────────┬╌╌╌╌╌╌╌╌┬╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┐
+│ 0x03 │  len1  │ tenant_id │  len2  │ cache_key │  len3  │ format │  len4  │compressed ╎  len5  ╎ original_type ╎
+└──────┴────────┴───────────┴────────┴───────────┴────────┴────────┴────────┴───────────┴╌╌╌╌╌╌╌╌┴╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┘
+  1 B    4 B BE   variable    4 B BE   variable    4 B BE   var      4 B BE   var         4 B BE   var
+
+Dashed fields are present only when the writer emits the optional original_type
+component (all current cachekit-py serializer paths do; cachekit-ts, cachekit-rs,
+and interop mode never do — see below).
 ```
 
 </details>
@@ -212,11 +216,97 @@ Where `aes_gcm_seal` returns `ciphertext || auth_tag` (auth tag is the last 16 b
 | Version byte | `0x03` | AAD format version |
 | `tenant_id` | Length-prefixed UTF-8 | Tenant identifier |
 | `cache_key` | Length-prefixed UTF-8 | Full cache key (prevents ciphertext swapping between keys) |
-| `format` | Length-prefixed UTF-8 | Serialization format (e.g., `"msgpack"`) |
-| `compressed` | Length-prefixed UTF-8 | String `"True"` or `"False"` |
-| `original_type` | Length-prefixed UTF-8 | *(Optional)* Original type hint |
+| `format` | Length-prefixed UTF-8 | Serialization-format token — see [`format` tokens](#format-tokens) |
+| `compressed` | Length-prefixed UTF-8 | Boolean token — exactly `True` or `False`, see [`compressed` tokens](#compressed-tokens) |
+| `original_type` | Length-prefixed UTF-8 | *(Optional)* Original-type hint — see [`original_type`](#original_type-optional-fifth-component) |
 
 Each component is prefixed with a 4-byte big-endian length.
+
+`format` and `compressed` describe the AES-GCM **plaintext** (the serialized/enveloped
+bytes fed to the cipher). They are stored as cleartext metadata alongside the
+ciphertext so the reader can rebuild the AAD; they are integrity-protected — not
+confidential — because any tampering changes the reconstructed AAD and fails
+authentication. That failure is the intended behavior: readers MUST NOT retry
+decryption with any alternative AAD input — a different `format` or `compressed`
+value, or presence/absence of `original_type`. A reader that probes AAD variants
+converts an authentication failure into a metadata-tamper oracle. Likewise, the
+post-decryption unenvelope step MUST be selected by the reader's configured
+serializer/mode — never by sniffing the decrypted bytes or falling back between
+containers — and MUST hard-fail on a parse mismatch.
+
+### `format` tokens
+
+The `format` component is a lowercase-ASCII token naming the serialization format of
+the AES-GCM plaintext. Registry of tokens produced by current SDKs:
+
+| Token | AES-GCM plaintext content | Produced by |
+| :--- | :--- | :--- |
+| `msgpack` | MessagePack-family bytes; the container varies by SDK/mode (ByteStorage envelope or plain MessagePack) — see [wire-format.md](wire-format.md) / [interop mode](interop-mode.md#encryption-in-interop-mode) | cachekit-py (`StandardSerializer`, `AutoSerializer` msgpack paths), cachekit-ts, cachekit-rs |
+| `orjson` | orjson JSON bytes, prefixed with an 8-byte xxHash3-64 checksum when integrity checking is enabled (the default): `[checksum(8)][JSON]`; plain JSON bytes otherwise | cachekit-py (`OrjsonSerializer`) |
+| `arrow` | Arrow IPC **file**-format envelope (`ARROW1` magic, not the IPC streaming format): `[8-byte xxHash3-64 checksum][Arrow IPC file]` | cachekit-py (`ArrowSerializer`) |
+
+The token names the serialization-format family; the exact container/envelope for
+each SDK and mode is specified in [wire-format.md](wire-format.md) and
+[interop-mode.md](interop-mode.md). The `compressed` component (below) — not the
+`format` token — authenticates whether that container applied compression.
+
+New serializers MUST register their token here before shipping. Tokens are
+case-sensitive, and the registry is a **writer-side contract**: readers rebuild the
+AAD verbatim from stored metadata, so nothing structurally rejects an off-registry
+token within the SDK that wrote it — the registry exists so independent
+implementations of the same entry agree on the bytes. Writers MUST emit only
+registry tokens; readers SHOULD reject tokens outside the registry before attempting
+decryption.
+
+### `compressed` tokens
+
+Exactly two legal values — **frozen ASCII byte strings**:
+
+| Value | Bytes on the wire |
+| :--- | :--- |
+| `True` | `54 72 75 65` |
+| `False` | `46 61 6c 73 65` |
+
+> [!IMPORTANT]
+> These tokens are **protocol constants**, not a rendering of any language's boolean
+> type. They historically coincide with Python's `str(bool)` output; that coincidence
+> is now frozen. Implementations in every language MUST emit exactly these byte
+> sequences — `true`, `false`, `TRUE`, `1`, `0`, or a raw byte are all non-conformant
+> and fail AES-GCM authentication against conformant peers.
+
+### `original_type` (optional fifth component)
+
+Only cachekit-py emits `original_type`; cachekit-ts and cachekit-rs always produce
+four-component AADs. When present it is appended as a fifth length-prefixed
+component. **All of cachekit-py's current serializers set it, so every cachekit-py
+encrypted entry today carries a five-component AAD.** Values currently emitted:
+`msgpack`, `orjson`, `arrow`, `numpy`, `dataframe`, `series`.
+
+This arity asymmetry never crosses an SDK boundary in practice: auto-mode entries are
+SDK-internal ([protocol#11](https://github.com/cachekit-io/protocol/issues/11)), and
+[interop mode](interop-mode.md#encryption-in-interop-mode) — the only cross-SDK
+encrypted surface — NEVER includes it: interop AAD is always exactly four components,
+and an SDK that carried a type hint into interop AAD would fail cross-SDK
+authentication.
+
+### Version policy — resolved: these rules stay within v0x03
+
+Decision ([protocol#12](https://github.com/cachekit-io/protocol/issues/12),
+2026-07-19): pinning the token bytes above and enumerating the `format` registry is a
+**specification correction, not a wire change** — no AAD version bump.
+
+- The AAD bytes produced by every deployed SDK (cachekit-py, cachekit-ts,
+  cachekit-rs) are unchanged; every existing v0x03 ciphertext remains decryptable.
+- [Interop/v1](interop-mode.md) test vectors already pin `compressed = "False"` as
+  normative published bytes; a re-encoding would fork that surface.
+- A hypothetical v0x04 with a single-byte boolean (`0x00`/`0x01`) would invalidate
+  all deployed ciphertexts or force a dual-AAD migration window, for zero security
+  gain — a frozen ASCII token authenticates exactly as strongly as a byte.
+
+**Backward compatibility**: none required — no wire bytes changed. The spec
+previously *defined* the `compressed` encoding by reference to Python semantics
+(`str(bool)`) and gave `format` only as an example; both are now explicit byte-level
+registries.
 
 ### AAD Construction Pseudocode
 
@@ -225,8 +315,8 @@ function create_aad(tenant_id, cache_key, format, compressed, original_type=null
     components = [
         tenant_id.encode("utf-8"),
         cache_key.encode("utf-8"),
-        format.encode("utf-8"),           // e.g., "msgpack"
-        str(compressed).encode("utf-8"),  // "True" or "False"
+        format.encode("utf-8"),                            // registry token: "msgpack" | "orjson" | "arrow"
+        (compressed ? "True" : "False").encode("utf-8"),   // frozen ASCII tokens — see above
     ]
     if original_type is not null:
         components.append(original_type.encode("utf-8"))
@@ -237,6 +327,12 @@ function create_aad(tenant_id, cache_key, format, compressed, original_type=null
 
     return aad
 ```
+
+Reference AAD vectors — covering `compressed=False`, the `arrow` and `orjson`
+tokens, four-component AADs (the cachekit-ts / cachekit-rs shape) and five-component
+`original_type` AADs (the cachekit-py shape) — are published in
+[`test-vectors/encryption.json`](../test-vectors/encryption.json) and verified in CI
+by `tools/encryption-verify.py`.
 
 ---
 
@@ -279,36 +375,57 @@ When key rotation is in use, a 32-byte header is prepended to identify which key
 ```
 Input: user_data, master_key, tenant_id, cache_key
 
-1. Serialize:  msgpack_bytes   = msgpack_encode(user_data)
-2. Compress:   envelope_bytes  = byte_storage.store(msgpack_bytes)  // See wire-format.md
-3. Derive:     tenant_keys     = derive_tenant_keys(master_key, tenant_id)
-4. Build AAD:  aad             = create_aad(tenant_id, cache_key, "msgpack", true)
-5. Encrypt:    ciphertext      = aes_256_gcm_encrypt(
-                                     plaintext = envelope_bytes,
-                                     key       = tenant_keys.encryption_key,
-                                     aad       = aad
-                                 )
+1. Serialize:  serialized_bytes = serialize(user_data)              // msgpack / orjson / arrow
+2. Envelope:   plaintext_bytes  = envelope(serialized_bytes)        // See wire-format.md
+3. Derive:     tenant_keys      = derive_tenant_keys(master_key, tenant_id)
+4. Build AAD:  aad              = create_aad(tenant_id, cache_key, format, compressed)
+5. Encrypt:    ciphertext       = aes_256_gcm_encrypt(
+                                      plaintext = plaintext_bytes,
+                                      key       = tenant_keys.encryption_key,
+                                      aad       = aad
+                                  )
                // Returns: nonce(12) || encrypted_data || auth_tag(16)
-6. Store:      backend.set(cache_key, ciphertext)
+6. Store:      backend.set(cache_key, ciphertext)   // format + compressed stored as cleartext metadata
 ```
+
+The AAD inputs in step 4 MUST reflect what steps 1–2 actually produced — e.g.
+cachekit-py's default `StandardSerializer` path is
+`("msgpack", true, original_type="msgpack")`; cachekit-ts's default is
+`("msgpack", true)` with no fifth component; interop mode is always
+`("msgpack", false)` with the envelope step skipped
+([interop-mode.md](interop-mode.md#encryption-in-interop-mode)); cachekit-py's
+`ArrowSerializer` with compression disabled is
+`("arrow", false, original_type="arrow")`. Authenticating a flag that does not match
+the real envelope is a conformance bug: the entry round-trips within the writing
+process but fails authentication for any correct second reader (see
+[cachekit-py#166](https://github.com/cachekit-io/cachekit-py/issues/166)).
 
 ---
 
 ## Decryption Flow
 
 ```
-Input: ciphertext, master_key, tenant_id, cache_key
+Input: ciphertext, stored metadata (format, compressed, optional original_type),
+       master_key, tenant_id, cache_key
 
-1. Derive:      tenant_keys   = derive_tenant_keys(master_key, tenant_id)
-2. Build AAD:   aad           = create_aad(tenant_id, cache_key, "msgpack", true)
-3. Decrypt:     envelope_bytes = aes_256_gcm_decrypt(
-                                     ciphertext = ciphertext,  // nonce(12) || encrypted || tag(16)
-                                     key        = tenant_keys.encryption_key,
-                                     aad        = aad
-                                 )
-4. Extract:     (msgpack_bytes, format) = byte_storage.retrieve(envelope_bytes)
-5. Deserialize: user_data = msgpack_decode(msgpack_bytes)
+1. Derive:      tenant_keys    = derive_tenant_keys(master_key, tenant_id)
+2. Build AAD:   aad            = create_aad(tenant_id, cache_key,
+                                            stored.format, stored.compressed, stored.original_type)
+3. Decrypt:     plaintext_bytes = aes_256_gcm_decrypt(
+                                      ciphertext = ciphertext,  // nonce(12) || encrypted || tag(16)
+                                      key        = tenant_keys.encryption_key,
+                                      aad        = aad
+                                  )
+4. Unenvelope:  serialized_bytes = unenvelope(plaintext_bytes)   // per the reader's configured
+                                                                 // serializer/mode — see wire-format.md
+5. Deserialize: user_data = deserialize(serialized_bytes)
 ```
+
+The AAD in step 2 is rebuilt from the **stored cleartext metadata**; tampering makes
+step 3 fail authentication, which is a hard error — the no-retry and no-sniffing
+rules in [AAD v0x03 Format](#additional-authenticated-data-aad) apply. How each SDK
+stores this metadata (e.g. cachekit-py's CK frame header) is SDK-internal; the only
+cross-SDK-normative AAD inputs are interop mode's pinned four components.
 
 ---
 
