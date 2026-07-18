@@ -6,7 +6,7 @@
 
 **Feature parity and compliance status across all CacheKit SDK implementations.**
 
-*Last updated: 2026-06-06 — version sync across fleet (py 0.7.0, rs 0.3.0, ts 0.1.2)*
+*Last updated: 2026-07-18 — protocol#11 container documentation + version sync (py 0.11.1, rs 0.3.0, ts 0.1.2, core 0.3.0)*
 
 </div>
 
@@ -29,9 +29,9 @@
 
 | SDK | Package | Version | Language | Status |
 | :--- | :--- | :---: | :--- | :---: |
-| cachekit-py | `cachekit` (PyPI) | 0.7.0 | Python 3.10+ | ✅ Production |
+| cachekit-py | `cachekit` (PyPI) | 0.11.1 | Python 3.10+ | ✅ Production |
 | cachekit-rs | `cachekit-rs` (crates.io) | 0.3.0 | Rust 1.82+ | ✅ Production |
-| cachekit-core | `cachekit-core` (crates.io) | 0.2.0 | Rust (shared core) | ✅ Production |
+| cachekit-core | `cachekit-core` (crates.io) | 0.3.0 | Rust (shared core) | ✅ Production |
 | cachekit-ts | `@cachekit-io/cachekit` (npm) | 0.1.2 | TypeScript | ✅ Production |
 | cachekit-php | — | — | PHP 8.1+ | 🔜 Development |
 
@@ -111,7 +111,11 @@
 
 ## Protocol Compliance
 
-The protocol surface an SDK implements for its **own** caching (auto mode):
+The protocol layers, each normative **where the SDK uses that layer** for its own
+caching (auto mode). No storage layer is required of every SDK — the only contract
+required of every SDK is [interop mode](spec/interop-mode.md) (plus AAD v0x03 if the
+SDK ships encryption). "✅ Compliant" below means the SDK uses the layer and matches
+its spec:
 
 1. **Key Generation** — Blake2b-256 with MessagePack argument serialization ([spec/cache-key-format.md](spec/cache-key-format.md))
 2. **Wire Format** — ByteStorage envelope with LZ4 block + xxHash3-64 ([spec/wire-format.md](spec/wire-format.md))
@@ -125,8 +129,8 @@ The protocol surface an SDK implements for its **own** caching (auto mode):
 | Requirement | Python | Rust | TypeScript | PHP |
 | :--- | :---: | :---: | :---: | :---: |
 | Key generation (Blake2b) | ✅ Compliant | N/A (SDK-level, not in core) | ✅ Compliant | ⚠️ Untested |
-| Wire format (ByteStorage) | ✅ Compliant¹ | ⚠️ SDK stores plain MessagePack — no envelope¹ | ✅ Compliant | ⚠️ Untested |
-| Storage container (auto mode)¹ | CK v3 frame (Python-internal) | Plain MessagePack (`rmp` named) | Bare ByteStorage envelope | — |
+| Wire format (ByteStorage) | ✅ Compliant¹ | ✅ Canonical (`cachekit-core`) — unused for stored values¹ | ✅ Compliant | ⚠️ Untested |
+| Storage container (auto mode)¹ | CK v3 frame (Python-internal) | Plain MessagePack (`rmp` named) — no envelope | Bare ByteStorage envelope (default) | — |
 | Encryption (AES-256-GCM) | ✅ Compliant | ✅ Canonical (cachekit-core) | ✅ Compliant | ⚠️ Untested |
 | AAD v0x03 | ✅ Compliant | ✅ Compliant | ✅ Compliant | ❌ Not implemented |
 | SaaS API | ✅ Compliant | ✅ Compliant (CachekitIO backend) | ✅ Compliant | ❌ Not implemented |
@@ -172,7 +176,7 @@ The protocol surface an SDK implements for its **own** caching (auto mode):
 <details>
 <summary><strong>Rust Core (cachekit-core)</strong></summary>
 
-- Published on crates.io as `cachekit-core` v0.2.0
+- Published on crates.io as `cachekit-core` v0.3.0 (`cachekit-rs` still depends on the 0.2 line — Renovate bump tracked separately)
 - Provides: `ByteStorage`, `ZeroKnowledgeEncryptor`, `derive_domain_key`, `derive_tenant_keys`
 - Dependencies: `lz4_flex`, `xxhash-rust`, `ring` (native) / `aes-gcm` (wasm32), `hkdf`, `sha2`, `rmp-serde`
 - Formally verified security properties via Kani

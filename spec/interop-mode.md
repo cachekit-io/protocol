@@ -44,12 +44,10 @@ The default (auto-mode) key format includes language-specific function identity:
 
 Different function paths produce different keys, so two SDKs write to different cache
 entries even for the same logical operation and arguments. Auto-mode **values** diverge
-just as hard — each SDK stores its own container
-([wire-format.md → SDK Storage Containers](wire-format.md#sdk-storage-containers-auto-mode)):
-Python wraps everything in its CK v3 frame (over a ByteStorage envelope, an Arrow
-envelope, or ciphertext), TypeScript stores a bare ByteStorage envelope, and Rust
-stores plain MessagePack with no envelope at all. No SDK can read another's auto-mode
-entries today, and none is required to.
+just as hard — each SDK stores its own SDK-internal container, documented
+authoritatively in
+[wire-format.md → SDK Storage Containers](wire-format.md#sdk-storage-containers-auto-mode).
+No SDK can read another's auto-mode entries today, and none is required to.
 
 Interop mode fixes both, opt-in, without touching auto-mode behavior.
 
@@ -69,10 +67,10 @@ Interop mode fixes both, opt-in, without touching auto-mode behavior.
 | :--- | :--- | :--- |
 | Key format | `ns:{ns}:func:{mod.qualname}:args:{hash}:{flags}` | `{namespace}:{operation}:{args_hash}` |
 | Operation identity | Derived from language function path | **Explicit, user-supplied** |
-| Value format | ByteStorage envelope (LZ4 + xxHash3-64) | **Plain MessagePack, no envelope** |
+| Value format | SDK-internal container — differs per SDK ([wire-format.md](wire-format.md#sdk-storage-containers-auto-mode)) | **Plain MessagePack, no envelope** |
 | Argument hashing | Per-SDK normalization | **Canonical, byte-identical across SDKs** |
 | Cross-SDK reads | ❌ | ✅ |
-| Requires cachekit-core | ✅ (for the envelope) | ❌ (any MessagePack library) |
+| Requires cachekit-core | Only where the SDK's container or encryption uses it | ❌ (any MessagePack library) |
 
 Nothing in this spec changes auto mode. Existing keys, wire bytes, and behavior for
 non-opted-in callers remain byte-for-byte identical.

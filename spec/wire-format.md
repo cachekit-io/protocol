@@ -104,8 +104,7 @@ Worked example — the `simple_string` vector from
 > published test vectors (generated from the implementation) have always used the
 > positional-array encoding above, and the TypeScript SDK's protocol tests verify it
 > byte-for-byte against Python. The array encoding is authoritative and canonical.
-> Writers MUST emit it; readers built on Serde (`rmp_serde::from_slice`) also accept
-> the named-map form, but nothing produces it — do not rely on that leniency.
+> Writers MUST emit it.
 
 > [!WARNING]
 > **Discrepancy with RFC** — The RFC (Section 4.3.3) states the checksum is **Blake3 (32 bytes)**. The actual `cachekit-core` implementation uses **xxHash3-64 (8 bytes)**. The crate comments explain: "xxHash3-64 checksums for corruption detection (19x faster than Blake3)". xxHash3-64 is non-cryptographic — tamper resistance is provided by the encryption layer (AES-GCM auth tag), not the checksum. **The implementation (xxHash3-64) is authoritative.**
@@ -176,7 +175,7 @@ let checksum: [u8; 8] = xxh3_64(&original_data).to_be_bytes();
 ## Security Limits
 
 > [!IMPORTANT]
-> All three limits below MUST be enforced by every SDK implementation. The decompression bomb check uses integer arithmetic — do not substitute floating-point.
+> All three limits below MUST be enforced by every implementation of the ByteStorage envelope. The decompression bomb check uses integer arithmetic — do not substitute floating-point.
 
 | Limit | Value | Purpose |
 | :--- | ---: | :--- |
@@ -380,12 +379,9 @@ detection only, never IPC bytes.
 ### Interaction with interop mode
 
 Interop values are plain MessagePack — **never** framed, enveloped, or containered.
-A CK frame begins `0x43` (a complete 1-byte MessagePack document, `fixint 67`), so
-any longer byte string starting `0x43 0x4B` is not one well-formed MessagePack
-document — it can only be misread by a reader that ignores trailing bytes. The
-normative reader requirements (consume exactly one document, reject trailing bytes,
-the explicit end-of-input check Rust readers need because `rmp_serde::from_slice`
-skips it, and the `0x43 0x4B` diagnostic) live in
+The normative reader requirements that keep a CK frame from being misread as an
+interop value (consume exactly one document, reject trailing bytes, the
+`0x43 0x4B` diagnostic) live in
 [interop-mode.md → Interop Value Format](interop-mode.md#interop-value-format).
 
 ### Test vectors
