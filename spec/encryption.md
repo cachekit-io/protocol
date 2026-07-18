@@ -378,7 +378,8 @@ Input: user_data, master_key, tenant_id, cache_key
 1. Serialize:  serialized_bytes = serialize(user_data)              // msgpack / orjson / arrow
 2. Envelope:   plaintext_bytes  = envelope(serialized_bytes)        // See wire-format.md
 3. Derive:     tenant_keys      = derive_tenant_keys(master_key, tenant_id)
-4. Build AAD:  aad              = create_aad(tenant_id, cache_key, format, compressed)
+4. Build AAD:  aad              = create_aad(tenant_id, cache_key, format, compressed,
+                                             original_type)   // only if the serializer emits it
 5. Encrypt:    ciphertext       = aes_256_gcm_encrypt(
                                       plaintext = plaintext_bytes,
                                       key       = tenant_keys.encryption_key,

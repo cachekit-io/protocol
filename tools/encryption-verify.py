@@ -36,9 +36,22 @@ VECTORS_PATH = Path(__file__).resolve().parent.parent / "test-vectors" / "encryp
 TOKEN_TRUE = b"True"
 TOKEN_FALSE = b"False"
 
-# Vectors are append-only ground truth; a count below this floor means the
-# file was truncated (bad merge, regeneration bug) and CI must go red.
-FROZEN_VECTOR_FLOOR = 7
+# Vectors are append-only ground truth: published names may never disappear.
+# Removal or rename (even with a same-count replacement) must go red in CI.
+FROZEN_VECTOR_NAMES = frozenset(
+    {
+        "basic_bytes",
+        "special_cache_key",
+        "compressed_basic",
+        "arrow_uncompressed",
+        "arrow_compressed",
+        "orjson_uncompressed",
+        "original_type_numpy",
+    }
+)
+
+# format registry per spec/encryption.md — vectors must not invent tokens.
+FORMAT_REGISTRY = frozenset({"msgpack", "orjson", "arrow"})
 
 
 def hkdf_sha256(ikm: bytes, salt: bytes, info: bytes, length: int = 32) -> bytes:
@@ -65,7 +78,7 @@ def key_fingerprint(key: bytes) -> str:
     return hashlib.sha256(b"key_fingerprint_v1" + key).digest()[:16].hex()
 
 
-def aad_v3(tenant_id: str, cache_key: str, fmt: str, compressed: bool, original_type: str | None = None) -> bytes:
+def aad_v3(tenant_id: str, cache_key: str, *, fmt: str, compressed: bool, original_type: str | None = None) -> bytes:
     """AAD v0x03 per spec/encryption.md — 4-byte BE length-prefixed components.
 
     Unlike interop-reference.py's aad_v3, this supports the optional fifth
@@ -91,8 +104,9 @@ def main() -> int:
     doc = json.loads(VECTORS_PATH.read_text())
     failures = 0
 
-    if len(doc["vectors"]) < FROZEN_VECTOR_FLOOR:
-        print(f"FAIL vector count: {len(doc['vectors'])} < frozen floor {FROZEN_VECTOR_FLOOR} — file truncated?")
+    missing = FROZEN_VECTOR_NAMES - {v["name"] for v in doc["vectors"]}
+    if missing:
+        print(f"FAIL frozen vectors missing (append-only file — never remove/rename): {sorted(missing)}")
         return 1
 
     key = derive_encryption_key(bytes.fromhex(doc["master_key_hex"]), doc["tenant_id"])
@@ -101,10 +115,13 @@ def main() -> int:
         return 1
     print(f"ok  key fingerprint {doc['derived_key_fingerprint_hex']}")
 
+    invalid_tag_exc: type[BaseException] = Exception
     try:
+        from cryptography.exceptions import InvalidTag  # noqa: PLC0415
         from cryptography.hazmat.primitives.ciphers.aead import AESGCM  # noqa: PLC0415
 
         aesgcm: AESGCM | None = AESGCM(key)
+        invalid_tag_exc = InvalidTag
     except ImportError:
         if require_seal:
             print("FAIL --require-seal set but `cryptography` is not installed")
@@ -114,7 +131,17 @@ def main() -> int:
 
     for vec in doc["vectors"]:
         name = vec["name"]
-        aad = aad_v3(doc["tenant_id"], vec["cache_key"], vec["format"], vec["compressed"], vec.get("original_type"))
+        if not isinstance(vec["compressed"], bool) or vec["format"] not in FORMAT_REGISTRY:
+            print(f"FAIL {name}: invalid metadata (compressed must be a JSON boolean, format must be in {sorted(FORMAT_REGISTRY)})")
+            failures += 1
+            continue
+        aad = aad_v3(
+            doc["tenant_id"],
+            vec["cache_key"],
+            fmt=vec["format"],
+            compressed=vec["compressed"],
+            original_type=vec.get("original_type"),
+        )
         if aad.hex() != vec["aad_hex"]:
             print(f"FAIL {name}: AAD mismatch\n  expected {vec['aad_hex']}\n  rebuilt  {aad.hex()}")
             failures += 1
@@ -125,8 +152,8 @@ def main() -> int:
             nonce, sealed = ct[:12], ct[12:]
             try:
                 plaintext = aesgcm.decrypt(nonce, sealed, aad)
-            except Exception as exc:  # cryptography raises InvalidTag
-                print(f"FAIL {name}: decrypt failed ({exc.__class__.__name__})")
+            except invalid_tag_exc:
+                print(f"FAIL {name}: decrypt failed (InvalidTag — AAD/key/ciphertext mismatch)")
                 failures += 1
                 continue
             if plaintext.hex() != vec["plaintext_hex"]:
