@@ -21,9 +21,20 @@ const vectorPath =
   join(dirname(fileURLToPath(import.meta.url)), "..", "test-vectors", "python-frame.json");
 
 const hexToBytes = (hex) => {
+  if (hex.length % 2 !== 0 || !/^[0-9a-fA-F]*$/.test(hex)) {
+    throw new Error("invalid hexadecimal byte string");
+  }
   const out = new Uint8Array(hex.length / 2);
   for (let i = 0; i < out.length; i++) out[i] = parseInt(hex.slice(i * 2, i * 2 + 2), 16);
   return out;
+};
+// Envelope byte fields are msgpack arrays of integers — reject anything a
+// Uint8Array would silently coerce (fractional, negative, >255, non-numeric).
+const intArrayToBytes = (arr, what) => {
+  if (!Array.isArray(arr) || arr.some((x) => !Number.isInteger(x) || x < 0 || x > 255)) {
+    throw new Error(`${what} is not an array of integers in 0..255`);
+  }
+  return Uint8Array.from(arr);
 };
 const bytesToHex = (b) => Array.from(b, (x) => x.toString(16).padStart(2, "0")).join("");
 
@@ -183,11 +194,12 @@ for (const vec of doc.frame_vectors) {
       const envelope = decodeDocument(parsed.payload);
       if (!Array.isArray(envelope) || envelope.length !== 4) throw new Error("envelope is not a 4-element msgpack array");
       const [compressedData, checksum, originalSize, format] = envelope;
-      if (bytesToHex(Uint8Array.from(compressedData)) !== env.compressed_data_hex) throw new Error("compressed_data mismatch");
-      if (bytesToHex(Uint8Array.from(checksum)) !== env.checksum_hex) throw new Error("checksum field mismatch");
+      const compressedBytes = intArrayToBytes(compressedData, "compressed_data");
+      if (bytesToHex(compressedBytes) !== env.compressed_data_hex) throw new Error("compressed_data mismatch");
+      if (bytesToHex(intArrayToBytes(checksum, "checksum")) !== env.checksum_hex) throw new Error("checksum field mismatch");
       if (originalSize !== env.original_size) throw new Error("original_size mismatch");
       if (format !== env.format) throw new Error("format mismatch");
-      const inner = lz4BlockDecompress(Uint8Array.from(compressedData), originalSize);
+      const inner = lz4BlockDecompress(compressedBytes, originalSize);
       if (bytesToHex(inner) !== env.inner_msgpack_hex) throw new Error("decompressed payload mismatch");
       const value = decodeDocument(inner);
       if (!deepEqual(value, vec.value_json)) throw new Error("decoded value != value_json");

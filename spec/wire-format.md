@@ -70,7 +70,7 @@ StorageEnvelope {
 `serialize_seq`, the two byte fields are encoded as **MessagePack arrays of
 integers**, not `bin`:
 
-```
+```text
 ┌───────────────────────────────────────────────────────────────────┐
 │                  MessagePack Array (4 elements)                   │
 ├───────────────────┬───────────────────────────────────────────────┤
@@ -85,7 +85,7 @@ Worked example — the `simple_string` vector from
 [`test-vectors/wire-format.json`](../test-vectors/wire-format.json), input
 `"hello, cachekit!"` (16 bytes):
 
-```
+```text
 94                                        fixarray(4)
   dc 0012                                 array16(18)          compressed_data
     cc f0                                 uint8 240              LZ4 token (15 literals + ext)
@@ -322,10 +322,11 @@ implementations ([protocol#11](https://github.com/cachekit-io/protocol/issues/11
 
 ### Python: CK v3 frame
 
-Every value `cachekit-py` stores — all backends, all serializers, encrypted or not —
-is framed:
+Every **auto-mode** value `cachekit-py` stores — all backends, all serializers,
+encrypted or not — is framed (interop-mode values are plain MessagePack, never
+framed):
 
-```
+```text
 MAGIC b"CK" (0x43 0x4B) | VERSION u8 (0x03) | HDR_LEN u32 big-endian | HEADER | PAYLOAD
 ```
 

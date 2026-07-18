@@ -190,8 +190,9 @@ def generate() -> int:
         }
     )
 
-    # 3. Arrow path (optional deps): frame wrapping [8-byte xxHash3-64][Arrow IPC file].
-    arrow_note = None
+    # 3. Arrow path: frame wrapping [8-byte xxHash3-64][Arrow IPC file].
+    # Hard requirement for generation — writing the fixture without this vector
+    # would silently shrink the committed vector set.
     try:
         import pandas as pd
         import pyarrow
@@ -225,8 +226,11 @@ def generate() -> int:
                 },
             }
         )
-    except ImportError:
-        arrow_note = "pyarrow/pandas not installed — arrow_dataframe_write vector not regenerated"
+    except ImportError as exc:
+        raise SystemExit(
+            "generate requires pandas + pyarrow (the arrow_dataframe_write vector "
+            f"cannot be regenerated without them); nothing was written: {exc}"
+        ) from exc
 
     # Error vectors, verified against the REAL implementation as we build them.
     error_vectors = [
@@ -255,8 +259,8 @@ def generate() -> int:
             raise AssertionError(f"cachekit-py accepted error vector {vec['name']}")
     try:
         msgpack.unpackb(raw_frame)
-    except Exception:
-        pass
+    except msgpack.exceptions.ExtraData:
+        pass  # exactly the trailing-bytes rejection the spec requires
     else:  # pragma: no cover - generation-time invariant
         raise AssertionError("strict msgpack reader accepted a CK frame as one document")
     error_vectors.append(
@@ -283,8 +287,6 @@ def generate() -> int:
         "frame_vectors": vectors,
         "error_vectors": error_vectors,
     }
-    if arrow_note:
-        print(f"note: {arrow_note}", file=sys.stderr)
     VECTOR_PATH.write_text(json.dumps(doc, indent=2, sort_keys=False) + "\n")
     print(f"wrote {VECTOR_PATH} ({len(vectors)} frame vectors, {len(error_vectors)} error vectors)")
     return 0
@@ -294,4 +296,7 @@ if __name__ == "__main__":
     mode = sys.argv[1] if len(sys.argv) > 1 else "verify"
     if mode == "generate":
         sys.exit(generate())
-    sys.exit(verify())
+    if mode == "verify":
+        sys.exit(verify())
+    print(f"unsupported mode: {mode!r}; expected 'verify' or 'generate'", file=sys.stderr)
+    sys.exit(2)

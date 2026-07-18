@@ -50,12 +50,13 @@ Any SDK implementation **MUST** pass the canonical test vectors to be considered
 └────────────────────────┴────────────────────────────────────┘
 ```
 
-Store/retrieve flows are container-specific — what an SDK actually writes in auto
-mode is SDK-internal and differs per SDK ([wire-format.md → SDK Storage
+Layer 3 in the diagram shows the **auto-mode default path**. Store/retrieve flows
+are container-specific — what an SDK actually writes in auto mode is SDK-internal
+and differs per SDK ([wire-format.md → SDK Storage
 Containers](spec/wire-format.md#sdk-storage-containers-auto-mode)). The envelope
 layer's own store/retrieve flows are specified in
 [wire-format.md](spec/wire-format.md); the cross-SDK value format is
-[interop mode](spec/interop-mode.md).
+[interop mode](spec/interop-mode.md) — plain MessagePack, never the envelope.
 
 ---
 
@@ -82,7 +83,7 @@ Generate deterministic cache keys from function identity + arguments. Keys must 
 
 **2. Wire Format** — [spec/wire-format.md](spec/wire-format.md)
 
-Wrap serialized data in a `StorageEnvelope`. LZ4 block compression + xxHash3-64 integrity check. Note that what existing SDKs actually store in auto mode is SDK-internal and differs per SDK (Python adds a CK v3 frame; Rust skips the envelope) — see the spec's "SDK Storage Containers" section. Cross-SDK-readable values use [interop mode](spec/interop-mode.md) instead.
+Where your SDK uses the envelope for its own auto-mode storage, wrap serialized data in a `StorageEnvelope`: LZ4 block compression + xxHash3-64 integrity check. What existing SDKs actually store in auto mode is SDK-internal and differs per SDK (Python adds a CK v3 frame; Rust skips the envelope) — see the spec's "SDK Storage Containers" section. Cross-SDK-readable values use [interop mode](spec/interop-mode.md) — plain MessagePack, **never** the envelope.
 
 **3. Encryption (optional)** — [spec/encryption.md](spec/encryption.md)
 
@@ -110,7 +111,7 @@ Protocol versions follow semver:
 | **Minor** `1.x.0` | New optional fields, new extension types | Backwards-compatible additions |
 | **Major** `x.0.0` | Wire format, key generation, or encryption changes | Breaking — all SDKs must update |
 
-Cross-SDK guarantees are scoped to [interop mode](spec/interop-mode.md): all SDKs targeting protocol v1.0 **MUST** produce identical interop keys and interoperable interop values for identical inputs (given the same encryption keys, if encrypted). Auto-mode storage is SDK-internal ([protocol#11](https://github.com/cachekit-io/protocol/issues/11)) and carries no cross-SDK read guarantee. Implementations of the ByteStorage envelope **MUST** deserialize any spec-conformant envelope.
+Cross-SDK guarantees are scoped to [interop mode](spec/interop-mode.md): all SDKs targeting protocol v1.0 **MUST** produce identical interop keys and interoperable interop values for identical inputs (given the same master key and tenant ID, if encrypted). Auto-mode storage is SDK-internal ([protocol#11](https://github.com/cachekit-io/protocol/issues/11)) and carries no cross-SDK read guarantee. Implementations of the ByteStorage envelope **MUST** deserialize any spec-conformant envelope.
 
 ---
 

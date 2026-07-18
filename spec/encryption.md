@@ -293,14 +293,16 @@ Input: user_data, master_key, tenant_id, cache_key
 ```
 
 > [!NOTE]
-> This flow and the decryption flow below show the **ByteStorage-envelope default
-> path** (steps 2 and 4 here; step 4 in decryption). The crypto steps (derive → AAD →
-> AES-256-GCM) are universal, but the pre-encryption bytes and the stored bytes are
-> whatever the SDK's container layer produces —
+> This flow and the decryption flow below show the **auto-mode ByteStorage-envelope
+> default path** (steps 2 and 4 here; step 4 in decryption). The crypto steps
+> (derive → AAD → AES-256-GCM) are universal, but the pre-encryption bytes and the
+> stored bytes are whatever the SDK's container layer produces **in auto mode** —
 > [wire-format.md → SDK Storage Containers](wire-format.md#sdk-storage-containers-auto-mode):
 > `cachekit-rs` encrypts plain MessagePack (no envelope), and `cachekit-py` wraps the
-> resulting ciphertext in its CK v3 frame before storing. Interop-mode values skip the
-> envelope entirely — see
+> resulting ciphertext in its CK v3 frame before storing. **Interop mode** skips the
+> envelope entirely: the AES-GCM plaintext is the plain MessagePack value bytes, and
+> the stored bytes are the bare ciphertext blob (`nonce ‖ ciphertext ‖ tag`, no frame
+> or container) — see
 > [interop-mode.md → Encryption in Interop Mode](interop-mode.md#encryption-in-interop-mode).
 
 ---
