@@ -227,10 +227,12 @@ def generate() -> int:
             }
         )
     except ImportError as exc:
-        raise SystemExit(
+        print(
             "generate requires pandas + pyarrow (the arrow_dataframe_write vector "
-            f"cannot be regenerated without them); nothing was written: {exc}"
-        ) from exc
+            f"cannot be regenerated without them); nothing was written: {exc}",
+            file=sys.stderr,
+        )
+        raise SystemExit(1) from exc
 
     # Error vectors, verified against the REAL implementation as we build them.
     error_vectors = [

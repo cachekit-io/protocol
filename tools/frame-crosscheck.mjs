@@ -196,7 +196,9 @@ for (const vec of doc.frame_vectors) {
       const [compressedData, checksum, originalSize, format] = envelope;
       const compressedBytes = intArrayToBytes(compressedData, "compressed_data");
       if (bytesToHex(compressedBytes) !== env.compressed_data_hex) throw new Error("compressed_data mismatch");
-      if (bytesToHex(intArrayToBytes(checksum, "checksum")) !== env.checksum_hex) throw new Error("checksum field mismatch");
+      const checksumBytes = intArrayToBytes(checksum, "checksum");
+      if (checksumBytes.length !== 8) throw new Error(`checksum is ${checksumBytes.length} bytes (envelope requires exactly 8)`);
+      if (bytesToHex(checksumBytes) !== env.checksum_hex) throw new Error("checksum field mismatch");
       if (originalSize !== env.original_size) throw new Error("original_size mismatch");
       if (format !== env.format) throw new Error("format mismatch");
       const inner = lz4BlockDecompress(compressedBytes, originalSize);
@@ -214,7 +216,9 @@ for (const vec of doc.frame_vectors) {
     const det = vec.arrow_detection;
     const magic = new TextEncoder().encode(det.ipc_magic);
     const at = parsed.payload.subarray(det.ipc_magic_offset, det.ipc_magic_offset + magic.length);
-    if (bytesToHex(parsed.payload.subarray(0, det.checksum_len)) !== det.checksum_hex) {
+    if (det.checksum_len !== 8) {
+      fail(vec.name, `arrow checksum_len is ${det.checksum_len} (envelope requires exactly 8)`);
+    } else if (bytesToHex(parsed.payload.subarray(0, det.checksum_len)) !== det.checksum_hex) {
       fail(vec.name, "checksum prefix mismatch");
     } else if (bytesToHex(at) !== bytesToHex(magic)) {
       fail(vec.name, "ARROW1 magic not at documented offset");
