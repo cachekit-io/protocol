@@ -111,19 +111,22 @@
 
 ## Protocol Compliance
 
-For cross-SDK interoperability, all SDKs MUST implement:
+The protocol surface an SDK implements for its **own** caching (auto mode):
 
 1. **Key Generation** — Blake2b-256 with MessagePack argument serialization ([spec/cache-key-format.md](spec/cache-key-format.md))
 2. **Wire Format** — ByteStorage envelope with LZ4 block + xxHash3-64 ([spec/wire-format.md](spec/wire-format.md))
 3. **Encryption** — AES-256-GCM with HKDF-SHA256 and AAD v0x03 ([spec/encryption.md](spec/encryption.md))
 4. **SaaS API** — REST endpoints per [spec/saas-api.md](spec/saas-api.md)
 
+**Cross-SDK interoperability** is a separate, narrower contract: [interop mode](spec/interop-mode.md) — language-neutral keys plus plain-MessagePack values with **no** envelope or container (protocol#11). Auto-mode storage containers are SDK-internal and are NOT required of, or readable by, other SDKs.
+
 ### Compliance Status
 
 | Requirement | Python | Rust | TypeScript | PHP |
 | :--- | :---: | :---: | :---: | :---: |
 | Key generation (Blake2b) | ✅ Compliant | N/A (SDK-level, not in core) | ✅ Compliant | ⚠️ Untested |
-| Wire format (ByteStorage) | ✅ Compliant | ✅ Canonical (cachekit-core) | ✅ Compliant | ⚠️ Untested |
+| Wire format (ByteStorage) | ✅ Compliant¹ | ⚠️ SDK stores plain MessagePack — no envelope¹ | ✅ Compliant | ⚠️ Untested |
+| Storage container (auto mode)¹ | CK v3 frame (Python-internal) | Plain MessagePack (`rmp` named) | Bare ByteStorage envelope | — |
 | Encryption (AES-256-GCM) | ✅ Compliant | ✅ Canonical (cachekit-core) | ✅ Compliant | ⚠️ Untested |
 | AAD v0x03 | ✅ Compliant | ✅ Compliant | ✅ Compliant | ❌ Not implemented |
 | SaaS API | ✅ Compliant | ✅ Compliant (CachekitIO backend) | ✅ Compliant | ❌ Not implemented |
@@ -132,6 +135,9 @@ For cross-SDK interoperability, all SDKs MUST implement:
 
 > [!NOTE]
 > "N/A" for Rust key generation means `cachekit-core` is a protocol primitive library. Key generation (Blake2b) is an SDK-level concern — `cachekit-rs` delegates cache key construction to the caller via the `key` parameter on `get`/`set`/`#[cachekit]`.
+
+> [!NOTE]
+> ¹ Auto-mode **stored bytes** are SDK-internal and differ per SDK — see [wire-format.md → SDK Storage Containers](spec/wire-format.md#sdk-storage-containers-auto-mode). Python stores the ByteStorage envelope *inside* its CK v3 frame; `cachekit-rs` does not use the envelope for values at all (it uses `cachekit-core` only for encryption). Cross-SDK value compatibility is exclusively an [interop-mode](spec/interop-mode.md) property (protocol#11).
 
 ---
 

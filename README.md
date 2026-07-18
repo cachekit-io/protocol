@@ -119,7 +119,7 @@ Generate deterministic cache keys from function identity + arguments. Keys must 
 
 **2. Wire Format** — [spec/wire-format.md](spec/wire-format.md)
 
-Wrap serialized data in a `StorageEnvelope`. LZ4 block compression + xxHash3-64 integrity check. This is the payload stored in the backend.
+Wrap serialized data in a `StorageEnvelope`. LZ4 block compression + xxHash3-64 integrity check. Note that what existing SDKs actually store in auto mode is SDK-internal and differs per SDK (Python adds a CK v3 frame; Rust skips the envelope) — see the spec's "SDK Storage Containers" section. Cross-SDK-readable values use [interop mode](spec/interop-mode.md) instead.
 
 **3. Encryption (optional)** — [spec/encryption.md](spec/encryption.md)
 

@@ -43,11 +43,23 @@ The default (auto-mode) key format includes language-specific function identity:
 ```
 
 Different function paths produce different keys, so two SDKs write to different cache
-entries even for the same logical operation and arguments. Values are wrapped in the
-[ByteStorage envelope](wire-format.md) (LZ4 + xxHash3-64), which only `cachekit-core`
-implements — an SDK without the Rust core cannot read them at all.
+entries even for the same logical operation and arguments. Auto-mode **values** diverge
+just as hard — each SDK stores its own container
+([wire-format.md → SDK Storage Containers](wire-format.md#sdk-storage-containers-auto-mode)):
+Python wraps everything in its CK v3 frame (over a ByteStorage envelope, an Arrow
+envelope, or ciphertext), TypeScript stores a bare ByteStorage envelope, and Rust
+stores plain MessagePack with no envelope at all. No SDK can read another's auto-mode
+entries today, and none is required to.
 
 Interop mode fixes both, opt-in, without touching auto-mode behavior.
+
+> [!IMPORTANT]
+> **Decision ([protocol#11](https://github.com/cachekit-io/protocol/issues/11)):**
+> interop mode is the **only** cross-SDK value format. The Python CK v3 frame and
+> Arrow envelope stay SDK-internal (now documented in wire-format.md so their bytes
+> are identifiable); they will not become cross-SDK wire formats. Any value intended
+> for another SDK to read MUST be written in interop mode — for Python that means
+> the plain-MessagePack value format below, never the CK frame.
 
 ---
 
@@ -286,7 +298,21 @@ portability; corruption/tamper protection is available by enabling
   stays float64 so it round-trips as a float. (JS writers cannot make this
   distinction; a JS-written `2` may come back to Python as `int`. Cross-language
   int/float value fidelity is inherently best-effort — do not depend on it.)
-- **Readers** MUST accept any well-formed MessagePack document, canonical or not.
+- **Readers** MUST accept any well-formed MessagePack document, canonical or not —
+  and MUST consume **exactly one** document, rejecting trailing bytes. This
+  strictness is load-bearing: a Python auto-mode CK frame
+  ([wire-format.md → SDK Storage Containers](wire-format.md#sdk-storage-containers-auto-mode))
+  begins `0x43` (`fixint 67` — a complete 1-byte document), so only the
+  trailing-bytes check keeps it from silently decoding as the integer `67`.
+  `msgpack-python` (`unpackb` raises `ExtraData`) and `@msgpack/msgpack` (`decode`
+  throws on extra bytes) enforce this by default. **`rmp_serde::from_slice` does
+  NOT** — it deserializes one value and ignores trailing bytes — so a Rust interop
+  reader MUST add an explicit end-of-input check (e.g. drive a
+  `Deserializer::from_read_ref` and verify the input is exhausted). On a
+  trailing-bytes failure, a reader SHOULD check for the `0x43 0x4B` prefix and
+  report a *"Python-SDK-internal auto-mode entry"* diagnostic — pinned by the
+  `ck_frame_fed_to_interop_reader` vector in
+  [`test-vectors/python-frame.json`](../test-vectors/python-frame.json).
 - Temporal **values** use the sentinel-map convention from
   [wire-format.md → MessagePack Payload Format](wire-format.md#messagepack-payload-format)
   (`{"__datetime__": true, "value": "<ISO-8601>"}` etc.). These are ordinary maps —
