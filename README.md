@@ -50,49 +50,13 @@ Any SDK implementation **MUST** pass the canonical test vectors to be considered
 └────────────────────────┴────────────────────────────────────┘
 ```
 
-### Data Flow (Write)
-
-```
-User data (dict, list, primitives)
-  │
-  │  MessagePack serialize
-  ▼
-MessagePack bytes
-  │
-  │  LZ4 block compress
-  ▼
-Compressed bytes + xxHash3-64 checksum of original
-  │
-  │  Wrap in StorageEnvelope, serialize with MessagePack
-  ▼
-Envelope bytes
-  │
-  │  [optional] AES-256-GCM encrypt with AAD
-  ▼
-Stored in cache backend (Redis or SaaS API)
-```
-
-### Data Flow (Read)
-
-```
-Cache bytes
-  │
-  │  [optional] AES-256-GCM decrypt, verify AAD
-  ▼
-Envelope bytes
-  │
-  │  MessagePack deserialize envelope
-  ▼
-StorageEnvelope { compressed_data, checksum, original_size, format }
-  │
-  │  LZ4 decompress, xxHash3-64 verify
-  ▼
-MessagePack bytes
-  │
-  │  MessagePack deserialize
-  ▼
-User data restored
-```
+Layer 3 in the diagram shows the **auto-mode default path**. Store/retrieve flows
+are container-specific — what an SDK actually writes in auto mode is SDK-internal
+and differs per SDK ([wire-format.md → SDK Storage
+Containers](spec/wire-format.md#sdk-storage-containers-auto-mode)). The envelope
+layer's own store/retrieve flows are specified in
+[wire-format.md](spec/wire-format.md); the cross-SDK value format is
+[interop mode](spec/interop-mode.md) — plain MessagePack, never the envelope.
 
 ---
 
@@ -119,7 +83,7 @@ Generate deterministic cache keys from function identity + arguments. Keys must 
 
 **2. Wire Format** — [spec/wire-format.md](spec/wire-format.md)
 
-Wrap serialized data in a `StorageEnvelope`. LZ4 block compression + xxHash3-64 integrity check. This is the payload stored in the backend.
+Where your SDK uses the envelope for its own auto-mode storage, wrap serialized data in a `StorageEnvelope`: LZ4 block compression + xxHash3-64 integrity check. What existing SDKs actually store in auto mode is SDK-internal and differs per SDK (Python adds a CK v3 frame; Rust skips the envelope) — see the spec's "SDK Storage Containers" section. Cross-SDK-readable values use [interop mode](spec/interop-mode.md) — plain MessagePack, **never** the envelope.
 
 **3. Encryption (optional)** — [spec/encryption.md](spec/encryption.md)
 
@@ -147,7 +111,7 @@ Protocol versions follow semver:
 | **Minor** `1.x.0` | New optional fields, new extension types | Backwards-compatible additions |
 | **Major** `x.0.0` | Wire format, key generation, or encryption changes | Breaking — all SDKs must update |
 
-All SDKs targeting protocol v1.0 **MUST** produce identical cache keys and be able to deserialize each other's payloads (given the same encryption keys, if encrypted).
+Cross-SDK guarantees are scoped to [interop mode](spec/interop-mode.md): all SDKs targeting protocol v1.0 **MUST** produce identical interop keys and interoperable interop values for identical inputs (given the same master key and tenant ID, if encrypted). Auto-mode storage is SDK-internal ([protocol#11](https://github.com/cachekit-io/protocol/issues/11)) and carries no cross-SDK read guarantee. Implementations of the ByteStorage envelope **MUST** deserialize any spec-conformant envelope.
 
 ---
 
@@ -155,9 +119,9 @@ All SDKs targeting protocol v1.0 **MUST** produce identical cache keys and be ab
 
 An SDK is protocol-compliant when:
 
-1. Key generation produces identical keys for identical inputs across all languages
-2. ByteStorage envelopes produced by one SDK can be deserialized by any other
-3. Encrypted payloads can be decrypted by any SDK with the same master key and tenant ID
+1. [Interop-mode](spec/interop-mode.md) key generation produces identical keys for identical inputs across all languages (auto-mode keys embed language-specific function identity and are not cross-SDK by design)
+2. Interop-mode values encode and decode per the canonical vectors; where the SDK implements the ByteStorage envelope, it deserializes any spec-conformant envelope
+3. Encrypted interop-mode payloads can be decrypted by any SDK with the same master key and tenant ID
 4. SaaS API integration follows the documented endpoint contracts
 
 Test vectors are published in [`test-vectors/`](test-vectors/) as JSON files.

@@ -1,7 +1,7 @@
 {
   "checksum": "xxHash3-64, 8 bytes big-endian, computed on uncompressed input",
   "compression": "LZ4 block format (NOT frame)",
-  "envelope_format": "MessagePack map: {compressed_data, checksum, original_size, format}",
+  "envelope_format": "MessagePack positional array (rmp_serde::to_vec): [compressed_data, checksum, original_size, format]; byte fields encode as msgpack arrays of integers, not bin",
   "generator": "cachekit-core v0.2.0",
   "limits": {
     "max_compressed_size": 536870912,
