@@ -1,0 +1,304 @@
+#!/usr/bin/env python3
+"""Reference tool for test-vectors/python-frame.json (Python CK v3 frame).
+
+The CK v3 frame is the Python SDK's auto-mode storage container
+(spec/wire-format.md, "SDK Storage Containers"). It is Python-SDK-internal:
+other SDKs never decode it — these vectors exist so a non-Python reader can
+*identify* Python auto-mode entries and fail with a diagnostic instead of
+misparsing, and so the documented layout is pinned against the real
+implementation.
+
+Modes:
+    verify    (default) stdlib-only. Re-parses every frame vector with an
+              independent minimal parser (no cachekit import) and checks the
+              expected header/payload; checks every error vector is rejected.
+              Runs in CI.
+    generate  Regenerates the vector file. Requires the real `cachekit`
+              package (PyPI wheel with the Rust core) plus `msgpack`;
+              the Arrow vector additionally needs `pyarrow` + `pandas`.
+              Every generated frame is round-tripped through the real
+              cachekit-py deserialization path before being written.
+
+The independent parser below implements exactly the layout documented in
+spec/wire-format.md:
+
+    MAGIC b"CK" | VERSION u8 (=3) | HDR_LEN u32-BE | HEADER (UTF-8 JSON) | PAYLOAD
+"""
+
+from __future__ import annotations
+
+import json
+import sys
+from pathlib import Path
+
+VECTOR_PATH = Path(__file__).resolve().parent.parent / "test-vectors" / "python-frame.json"
+
+MAGIC = b"CK"
+FRAME_VERSION = 3
+PREFIX_LEN = 7  # magic(2) + version(1) + header_len(4)
+
+
+class FrameError(ValueError):
+    pass
+
+
+def parse_frame(frame: bytes) -> tuple[dict, bytes]:
+    """Independent CK v3 frame parser (deliberately not importing cachekit)."""
+    if frame[:2] != MAGIC:
+        raise FrameError("not a CK frame (missing 0x43 0x4B magic)")
+    if len(frame) < PREFIX_LEN:
+        raise FrameError(f"truncated frame: {len(frame)} bytes < {PREFIX_LEN}-byte fixed prefix")
+    version = frame[2]
+    if version != FRAME_VERSION:
+        raise FrameError(f"unsupported frame version {version} (expected {FRAME_VERSION})")
+    hdr_len = int.from_bytes(frame[3:7], "big")
+    header_end = PREFIX_LEN + hdr_len
+    if header_end > len(frame):
+        raise FrameError(f"declared header length {hdr_len} exceeds frame ({len(frame)} bytes)")
+    header = json.loads(frame[PREFIX_LEN:header_end].decode("utf-8"))
+    return header, frame[header_end:]
+
+
+def verify() -> int:
+    doc = json.loads(VECTOR_PATH.read_text())
+    failures = 0
+
+    for vec in doc["frame_vectors"]:
+        name = vec["name"]
+        frame = bytes.fromhex(vec["frame_hex"])
+        vec_failed = 0
+        try:
+            header, payload = parse_frame(frame)
+        except FrameError as e:
+            print(f"FAIL {name}: parse error: {e}")
+            failures += 1
+            continue
+        if header != vec["expected_header"]:
+            print(f"FAIL {name}: header mismatch\n  got      {header}\n  expected {vec['expected_header']}")
+            vec_failed += 1
+        if "expected_payload_hex" in vec and payload.hex() != vec["expected_payload_hex"]:
+            print(f"FAIL {name}: payload mismatch")
+            vec_failed += 1
+        det = vec.get("arrow_detection")
+        if det:
+            off = det["ipc_magic_offset"]
+            magic = det["ipc_magic"].encode("ascii")
+            if payload[off : off + len(magic)] != magic:
+                print(f"FAIL {name}: Arrow IPC magic not found at payload offset {off}")
+                vec_failed += 1
+            if payload[: det["checksum_len"]].hex() != det["checksum_hex"]:
+                print(f"FAIL {name}: Arrow envelope checksum prefix mismatch")
+                vec_failed += 1
+        failures += vec_failed
+        if not vec_failed:
+            print(f"ok   {name}")
+
+    for vec in doc["error_vectors"]:
+        name = vec["name"]
+        frame = bytes.fromhex(vec["frame_hex"])
+        if name == "ck_frame_fed_to_interop_reader":
+            # Semantics: a strict single-document MessagePack reader must reject
+            # this (0x43 = fixint 67 followed by trailing bytes). Structural
+            # check only — full msgpack strictness is pinned by the generator
+            # (msgpack-python raises ExtraData) and by tools/frame-crosscheck.mjs.
+            if frame[:2] != MAGIC or len(frame) <= 1:
+                print(f"FAIL {name}: vector is not a CK frame")
+                failures += 1
+            else:
+                print(f"ok   {name} (CK-prefixed, multi-byte: not a single msgpack document)")
+            continue
+        try:
+            parse_frame(frame)
+        except FrameError:
+            print(f"ok   {name} (rejected)")
+        else:
+            print(f"FAIL {name}: expected rejection, parsed successfully")
+            failures += 1
+
+    if failures:
+        print(f"\n{failures} failure(s)")
+        return 1
+    print("\nall python-frame vectors verified")
+    return 0
+
+
+def generate() -> int:
+    import msgpack  # third-party; generation only
+
+    from cachekit._rust_serializer import ByteStorage
+    from cachekit.cache_handler import CacheSerializationHandler
+    from cachekit.serializers.wrapper import SerializationWrapper
+
+    import cachekit
+
+    vectors: list[dict] = []
+
+    # 1. Minimal parse vector: real SerializationWrapper.wrap over known raw bytes.
+    raw_payload = b"hello, cachekit!"
+    raw_meta = {"format": "msgpack", "compressed": False}
+    raw_frame = SerializationWrapper.wrap(raw_payload, raw_meta, "default")
+    p, m, s = SerializationWrapper.unwrap(raw_frame)
+    assert bytes(p) == raw_payload and m == raw_meta and s == "default"
+    # expected_header comes from this tool's own independent parser, so the
+    # vector pins what the frame actually contains (incl. the "v" field, which
+    # cachekit-py's unwrap drops) rather than a hand-maintained copy.
+    raw_header, _ = parse_frame(raw_frame)
+    vectors.append(
+        {
+            "name": "raw_payload_frame",
+            "description": "Minimal frame: SerializationWrapper.wrap over raw bytes. Parse-level vector.",
+            "frame_hex": raw_frame.hex(),
+            "expected_header": raw_header,
+            "expected_payload_hex": raw_payload.hex(),
+        }
+    )
+
+    # 2. Full default-path SaaS write: value -> msgpack -> ByteStorage envelope -> CK frame.
+    value = {"user_id": 42, "name": "cachekit", "active": True}
+    handler = CacheSerializationHandler(serializer_name="default")
+    frame = handler.serialize_data(value, cache_key="python-frame-vector")
+    assert handler.deserialize_data(frame, cache_key="python-frame-vector") == value
+    payload_mv, meta, ser_name = SerializationWrapper.unwrap(frame)
+    payload = bytes(payload_mv)
+    inner, fmt = ByteStorage("msgpack").retrieve(payload)
+    inner = bytes(inner)
+    assert msgpack.unpackb(inner) == value and fmt == "msgpack"
+    env = msgpack.unpackb(payload)  # positional fixarray(4); byte fields are int arrays
+    assert isinstance(env, list) and len(env) == 4
+    default_header, _ = parse_frame(frame)
+    assert default_header["m"] == meta and default_header["s"] == ser_name
+    vectors.append(
+        {
+            "name": "default_saas_write_msgpack_bytestorage",
+            "description": (
+                "Exact stored bytes for a default @cache write (StandardSerializer, integrity on): "
+                "CK v3 frame wrapping the ByteStorage envelope of the MessagePack-encoded value. "
+                "This is what any backend — including the SaaS — receives from cachekit-py in auto mode."
+            ),
+            "value_json": value,
+            "frame_hex": frame.hex(),
+            "expected_header": default_header,
+            "expected_payload_hex": payload.hex(),
+            "payload_envelope": {
+                "encoding": "rmp_serde::to_vec positional fixarray(4); Vec<u8>/[u8;8] fields encode as msgpack arrays of integers",
+                "compressed_data_hex": bytes(env[0]).hex(),
+                "checksum_hex": bytes(env[1]).hex(),
+                "original_size": env[2],
+                "format": env[3],
+                "inner_msgpack_hex": inner.hex(),
+            },
+        }
+    )
+
+    # 3. Arrow path: frame wrapping [8-byte xxHash3-64][Arrow IPC file].
+    # Hard requirement for generation — writing the fixture without this vector
+    # would silently shrink the committed vector set.
+    try:
+        import pandas as pd
+        import pyarrow
+
+        arrow_handler = CacheSerializationHandler(serializer_name="arrow")
+        df = pd.DataFrame({"id": [1, 2], "score": [1.5, 2.5]})
+        arrow_frame = arrow_handler.serialize_data(df, cache_key="python-frame-vector")
+        rt = arrow_handler.deserialize_data(arrow_frame, cache_key="python-frame-vector")
+        assert rt.equals(df)
+        a_payload_mv, a_meta, a_ser = SerializationWrapper.unwrap(arrow_frame)
+        a_payload = bytes(a_payload_mv)
+        assert a_payload[8:14] == b"ARROW1"
+        arrow_header, _ = parse_frame(arrow_frame)
+        assert arrow_header["m"] == a_meta and arrow_header["s"] == a_ser
+        vectors.append(
+            {
+                "name": "arrow_dataframe_write",
+                "description": (
+                    "DataFrame write via ArrowSerializer: CK v3 frame wrapping the Arrow envelope "
+                    "[8-byte xxHash3-64 checksum][Arrow IPC file]. Arrow IPC bytes are NOT canonical "
+                    f"across pyarrow versions (this vector: pyarrow {pyarrow.__version__}) — verify "
+                    "frame structure and envelope detection only, never IPC bytes."
+                ),
+                "frame_hex": arrow_frame.hex(),
+                "expected_header": arrow_header,
+                "arrow_detection": {
+                    "checksum_len": 8,
+                    "checksum_hex": a_payload[:8].hex(),
+                    "ipc_magic_offset": 8,
+                    "ipc_magic": "ARROW1",
+                },
+            }
+        )
+    except ImportError as exc:
+        print(
+            "generate requires pandas + pyarrow (the arrow_dataframe_write vector "
+            f"cannot be regenerated without them); nothing was written: {exc}",
+            file=sys.stderr,
+        )
+        raise SystemExit(1) from exc
+
+    # Error vectors, verified against the REAL implementation as we build them.
+    error_vectors = [
+        {
+            "name": "truncated_frame",
+            "frame_hex": "434b03",
+            "error": "shorter than the 7-byte fixed prefix (magic + version + header length)",
+        },
+        {
+            "name": "unsupported_frame_version",
+            "frame_hex": "434b04000000027b7d",
+            "error": "frame version 4 (only version 3 is defined)",
+        },
+        {
+            "name": "header_overrun",
+            "frame_hex": "434b03000000ff7b7d",
+            "error": "declared header length (255) exceeds the bytes present in the frame",
+        },
+    ]
+    for vec in error_vectors:
+        try:
+            SerializationWrapper.unwrap(bytes.fromhex(vec["frame_hex"]))
+        except ValueError:
+            pass
+        else:  # pragma: no cover - generation-time invariant
+            raise AssertionError(f"cachekit-py accepted error vector {vec['name']}")
+    try:
+        msgpack.unpackb(raw_frame)
+    except msgpack.exceptions.ExtraData:
+        pass  # exactly the trailing-bytes rejection the spec requires
+    else:  # pragma: no cover - generation-time invariant
+        raise AssertionError("strict msgpack reader accepted a CK frame as one document")
+    error_vectors.append(
+        {
+            "name": "ck_frame_fed_to_interop_reader",
+            "frame_hex": raw_frame.hex(),
+            "error": (
+                "not a single well-formed MessagePack document: 0x43 is fixint 67, so the frame is one "
+                "1-byte document plus trailing bytes. Interop readers MUST consume exactly one document "
+                "and reject trailing bytes; on failure, a 0x43 0x4B prefix SHOULD be reported as "
+                "'Python-SDK-internal auto-mode entry — not an interop value'"
+            ),
+        }
+    )
+
+    doc = {
+        "description": (
+            "Python SDK (cachekit-py) auto-mode storage container: CK v3 frame. "
+            "Python-SDK-internal — other SDKs identify and reject, never decode. "
+            "See spec/wire-format.md 'SDK Storage Containers (auto mode)'."
+        ),
+        "frame_layout": "MAGIC 'CK' (0x43 0x4B) | VERSION u8 (0x03) | HDR_LEN u32 big-endian | HEADER (UTF-8 JSON: {s, m, v}) | PAYLOAD (raw bytes)",
+        "generator": f"cachekit {cachekit.__version__} (PyPI wheel; Rust core via PyO3), generated by tools/python-frame-reference.py generate",
+        "frame_vectors": vectors,
+        "error_vectors": error_vectors,
+    }
+    VECTOR_PATH.write_text(json.dumps(doc, indent=2, sort_keys=False) + "\n")
+    print(f"wrote {VECTOR_PATH} ({len(vectors)} frame vectors, {len(error_vectors)} error vectors)")
+    return 0
+
+
+if __name__ == "__main__":
+    mode = sys.argv[1] if len(sys.argv) > 1 else "verify"
+    if mode == "generate":
+        sys.exit(generate())
+    if mode == "verify":
+        sys.exit(verify())
+    print(f"unsupported mode: {mode!r}; expected 'verify' or 'generate'", file=sys.stderr)
+    sys.exit(2)

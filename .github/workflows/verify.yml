@@ -38,3 +38,9 @@ jobs:
           npm init -y >/dev/null
           npm install --no-audit --no-fund --ignore-scripts @noble/hashes@2.2.0
           node tools/interop-crosscheck.mjs
+
+      - name: Python-frame verify (stdlib only)
+        run: python3 tools/python-frame-reference.py verify
+
+      - name: Python-frame JS cross-check (zero-dep independent reader, full round-trip)
+        run: node tools/frame-crosscheck.mjs
