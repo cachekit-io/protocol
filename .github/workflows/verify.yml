@@ -26,12 +26,15 @@ jobs:
           node-version: "22"
 
       - name: Python reference verify (stdlib only)
-        run: python3 tools/interop-reference.py verify
+        run: |
+          python3 tools/interop-reference.py verify
+          python3 tools/encryption-verify.py
 
       - name: Python reference verify (optional deps — AES-GCM seal + msgpack third-encoder conformance)
         run: |
           pip install cryptography==49.0.0 msgpack==1.2.1
           python3 tools/interop-reference.py verify
+          python3 tools/encryption-verify.py --require-seal
 
       - name: JS cross-check (independent encoder + @noble/hashes + WebCrypto)
         run: |
