@@ -236,7 +236,7 @@ On a `200` with `X-CacheKit-Freshness: stale`:
 An SDK that serves a stale hit and owns revalidation (the recompute is the wrapped function — the server cannot do it):
 
 1. MUST return the stale bytes (or take its local miss policy, above) without blocking on revalidation.
-2. SHOULD single-flight the recompute by attempting `POST /v1/cache/{key}/lock` (the existing [lock endpoint](#post-v1cachekeylock)) as a **non-blocking** lease. The lease is acquired **only** on `200 OK` with a non-empty `lock_id`. A `200 OK` with a `null`/absent `lock_id` — or, defensively, any non-`200` such as a legacy `409 Conflict` — means another client is revalidating: serve stale; the SDK MUST NOT wait or retry.
+2. SHOULD single-flight the recompute by attempting `POST /v1/cache/{key}/lock` (the existing [lock endpoint](#post-v1cachekeylock)) as a **non-blocking** lease. The lease is acquired **only** on `200 OK` with a non-empty `lock_id`. Contention is signalled **only** by a `200 OK` with a `null`/absent `lock_id` — or, defensively, a legacy `409 Conflict` — and means another client is revalidating: serve stale; the SDK MUST NOT wait or retry. Any other non-`200` (`401`, `403`, `429`, `5xx`, …) is **not** contention — it is an ordinary error subject to [Error Classification](#error-classification): abandon this revalidation attempt without a lease (the caller already has the stale bytes from step 1) and let a subsequent stale read re-trigger revalidation.
 
    > [!NOTE]
    > **Contested lock is `200 OK` with `{"lock_id": null}` (LAB-240).** The
@@ -430,7 +430,7 @@ SDKs should classify errors for circuit breaker integration:
 | Class | Status Codes | SDK Action |
 | :--- | :--- | :--- |
 | **Transient** | `429`, `500`, `502`, `503`, network timeouts | Retry with backoff |
-| **Permanent** | `400`, `401`, `403`, `413` | Do not retry, surface to caller |
+| **Permanent** | `400`, `401`, `403`, `409`, `413` | Do not retry, surface to caller. For `409` (`PATCH /ttl` past `fresh_until`): do not re-`PATCH` — recompute and `PUT` ([write semantics](#write-semantics)) |
 | **Cache miss** | `404` on GET/HEAD/DELETE | Not an error — return `None`/`false` |
 
 ---
