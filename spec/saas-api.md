@@ -89,7 +89,7 @@ Authorization: Bearer ck_live_xxx
 
 | Header | Description |
 | :--- | :--- |
-| `X-CacheKit-Freshness` | `fresh` or `stale`. Emitted on every `200 OK` by servers implementing [stale-while-revalidate](#stale-while-revalidate). SDKs MUST treat an absent header as `fresh` (pre-SWR servers do not emit it). On `stale`, SDKs MUST still return the bytes to the caller and SHOULD trigger background revalidation. |
+| `X-CacheKit-Freshness` | `fresh` or `stale` — lowercase, case-sensitive tokens. Emitted on every `200 OK` by servers implementing [stale-while-revalidate](#stale-while-revalidate). SDKs MUST treat an absent header as `fresh` (pre-SWR servers do not emit it) and an unrecognized value as `stale` (revalidation is the conservative action). Read behavior is specified in [Stale-While-Revalidate](#stale-while-revalidate). |
 
 ---
 
@@ -110,7 +110,7 @@ X-CacheKit-TTL: 3600
 | Header | Required | Description |
 | :--- | :---: | :--- |
 | `X-CacheKit-TTL` | No | Time-to-live in seconds. Positive integer, minimum 1, maximum 2,592,000 (30 days). Omit to use server default. |
-| `X-CacheKit-Stale-TTL` | No | [Stale-grace window](#stale-while-revalidate) in seconds after freshness expiry. Non-negative integer; `0` is equivalent to omitting the header. The applied TTL (explicit or tenant default) plus the stale window MUST NOT exceed 2,592,000 seconds total, otherwise `400 Bad Request`. Pre-SWR servers ignore this header. |
+| `X-CacheKit-Stale-TTL` | No | Stale-grace window in seconds after freshness expiry. Requires an explicit `X-CacheKit-TTL` on the same request. Validation and semantics: [Stale-While-Revalidate](#stale-while-revalidate). Pre-SWR servers ignore this header. |
 
 > [!IMPORTANT]
 > **TTL Validation Rules** — These rules are normative for both SDKs and the SaaS backend.
@@ -197,37 +197,61 @@ evict_at    = fresh_until + stale_ttl
 | :--- | :--- |
 | `now < fresh_until` | `200 OK`, `X-CacheKit-Freshness: fresh` |
 | `fresh_until ≤ now < evict_at` | `200 OK` **with the stored bytes**, `X-CacheKit-Freshness: stale` |
-| `now ≥ evict_at` | `404 Not Found`. The server MUST NOT serve an entry past `evict_at` — the stale window is a hard bound, not a hint. |
+| `now ≥ evict_at` | `404 Not Found`. The server MUST NOT serve an entry past `evict_at`. |
 
-Without `X-CacheKit-Stale-TTL` (or with `0`), `evict_at = fresh_until` and behavior is identical to the pre-SWR protocol.
+All lifecycle times are computed against the **server's clock**; SDKs MUST NOT derive freshness for backed entries from their own clocks.
+
+Without `X-CacheKit-Stale-TTL` (or with `0`), `evict_at = fresh_until` and server behavior is identical to the pre-SWR protocol.
 
 ### Validation
 
-| Condition | Server behavior |
+These rules are normative for both SDKs and the SaaS backend, mirroring the [TTL validation rules](#put-v1cachekey):
+
+| Condition | Behavior |
 | :--- | :--- |
-| `stale_ttl` negative or non-integer | `400 Bad Request` |
-| `applied_ttl + stale_ttl > 2,592,000` | `400 Bad Request` (shares the 30-day storage cap; `applied_ttl` is the explicit `X-CacheKit-TTL` or the tenant default) |
+| `stale_ttl` negative, non-integer, or > 2,591,999 | `400 Bad Request`. The standalone bound is checked **before** any arithmetic (no integer wrap on `evict_at`). |
+| `X-CacheKit-Stale-TTL` present without an explicit `X-CacheKit-TTL` | `400 Bad Request`. Validation must not depend on hidden tenant defaults — clients must be able to pre-validate. |
+| `ttl + stale_ttl > 2,592,000` | `400 Bad Request` (the stale window shares the 30-day storage cap) |
 | `stale_ttl = 0` | Accepted; equivalent to omitting the header |
+| `stale_ttl < 1` second (sub-second duration in SDK API) | SDKs MUST ceil to 1, never truncate to 0 (same rule as TTL) |
+
+### Write semantics
+
+- **`PUT` fully replaces the entry's timing metadata.** Both windows derive from the new request alone; a `PUT` that omits `X-CacheKit-Stale-TTL` (or sends `0`) leaves the entry with **no** stale window, regardless of what the previous entry had. A revalidation `PUT` therefore MUST re-send the stale window it intends to keep.
+- **`PATCH /v1/cache/{key}/ttl` within the fresh window** resets `fresh_until = now + ttl` and preserves the entry's stored stale window; the combined total is re-validated against the 30-day cap.
+- **`PATCH /v1/cache/{key}/ttl` on an entry past `fresh_until` MUST return `409 Conflict`.** A stale entry regains freshness only via a `PUT` of recomputed bytes — otherwise a routine TTL-renewal job could indefinitely resurrect stale data without revalidation, defeating the `evict_at` bound.
+
+### Reading a stale entry
+
+On a `200` with `X-CacheKit-Freshness: stale`:
+
+- An SDK MUST NOT treat the response as a protocol error.
+- By default it SHOULD return the bytes to the caller immediately — a stale response is never a blocking miss.
+- An SDK MAY instead treat a stale hit as a **miss** by local policy (e.g. security-sensitive caches where TTL is a revocation boundary) and take the ordinary synchronous miss path. Such caches SHOULD NOT set `X-CacheKit-Stale-TTL` on write in the first place.
+- Local caches (L1) MUST NOT record a stale-flagged response as fresh, and local caching MUST NOT extend service of an entry past the server's `evict_at`.
+- Revalidation is triggered only by `GET`. `HEAD` freshness is informational; an existence check MUST NOT fire a background recompute.
 
 ### Revalidation flow (SDK)
 
-On a `200` with `X-CacheKit-Freshness: stale`, an SDK that supports SWR:
+An SDK that serves a stale hit and owns revalidation (the recompute is the wrapped function — the server cannot do it):
 
-1. **Returns the stale bytes to the caller immediately.** A stale response is never a blocking miss.
-2. Attempts `POST /v1/cache/{key}/lock` (the existing [lock endpoint](#post-v1cachekeylock)) as a **non-blocking** single-flight lease:
-   - `200 OK` → this client revalidates: recompute in the background, `PUT` the new value (which resets `fresh_until` per normal PUT semantics), then `DELETE` the lock.
-   - `409 Conflict` → another client is already revalidating. Serve stale; do not wait, do not retry.
-3. If the background recompute fails, the SDK releases the lock and leaves the entry untouched. The entry hard-expires at `evict_at`, after which the next request takes the ordinary synchronous miss path — SWR degrades to pre-SWR behavior, never serves unbounded staleness.
+1. MUST return the stale bytes (or take its local miss policy, above) without blocking on revalidation.
+2. SHOULD single-flight the recompute by attempting `POST /v1/cache/{key}/lock` (the existing [lock endpoint](#post-v1cachekeylock)) as a **non-blocking** lease. The lease is acquired **only** on `200 OK` with a non-empty `lock_id`. Any other outcome — `409 Conflict`, or `200 OK` with a `null`/absent `lock_id` — means another client is revalidating: serve stale; the SDK MUST NOT wait or retry.
 
-No new coordination surface is introduced: the revalidation lease is the existing distributed lock.
+   > [!WARNING]
+   > **Discrepancy with deployed server (LAB-240)** — this spec defines contested = `409 Conflict`, but the deployed SaaS currently returns `200 OK` with `{"lock_id": null}` for a contested lock. SDKs MUST treat both shapes as contested. Branching on the HTTP status alone silently disables single-flight against today's server.
+
+3. The lease holder recomputes in the background, `PUT`s the new value (re-sending `X-CacheKit-Stale-TTL` per [write semantics](#write-semantics)), then `DELETE`s the lock.
+4. A failed recompute **or** a failed revalidation `PUT` are equivalent: release the lock, leave the entry untouched, surface no error to the caller. Subsequent stale reads MAY re-trigger revalidation until `evict_at`; past `evict_at` the next request takes the ordinary synchronous miss path. SWR degrades to pre-SWR behavior — it never serves unbounded staleness.
+5. The lease is **best-effort stampede mitigation, not a correctness guarantee**: it is bounded by the lock's `timeout_ms`, and a recompute that outlives it loses exclusivity. Duplicate revalidations are benign — concurrent revalidation `PUT`s are last-write-wins between freshly computed values, the same ordering as concurrent miss-path `PUT`s today. SDKs SHOULD size `timeout_ms` at or above the expected recompute duration.
 
 ### Semantics notes
 
-- **Metering:** a stale-window `GET` is a cache **hit** (`200`) for metered-misses billing. The background revalidation `PUT` is an ordinary write. SWR never converts hits into billable misses.
-- **Zero-knowledge:** freshness is timing metadata the server already enforces; the value bytes remain opaque. No change to the wire format, ByteStorage envelope, encryption, or AAD.
-- **Interplay with `PATCH /v1/cache/{key}/ttl`:** a TTL update resets the fresh window (`fresh_until = now + ttl`) and preserves the entry's stored stale window (`evict_at = fresh_until + stale_ttl`). The combined total is re-validated against the 30-day cap.
-- **Interplay with `GET /v1/cache/{key}/ttl`:** the returned `ttl` is the remaining time until **eviction** (`evict_at`), consistent with its existing "remaining storage lifetime" meaning.
-- **Compatibility:** the feature is additive in both directions. A pre-SWR server ignores `X-CacheKit-Stale-TTL` (the entry evicts at `fresh_until`) and emits no `X-CacheKit-Freshness` header; a pre-SWR SDK ignores the header and treats every `200` as fresh. Either way, behavior is exactly the pre-SWR protocol.
+- **Metering:** a stale-window `GET` is a cache **hit** (`200`) for metered-misses billing; the revalidation `PUT` is an ordinary write. In the [SDK metrics headers](#optional-metrics-headers), a stale serve increments `X-CacheKit-L2-Hits`; a background revalidation MUST NOT increment `X-CacheKit-Misses`.
+- **Invalidation race:** an explicit `DELETE /v1/cache/{key}` concurrent with an in-flight revalidation may be overwritten by the revalidation `PUT` (last-write-wins) — the same race as today's concurrent miss-path recompute. Callers that need durable invalidation must version their keys.
+- **Zero-knowledge:** no change to the wire format, ByteStorage envelope, encryption, or AAD; the value bytes remain opaque.
+- **`GET /v1/cache/{key}/ttl`:** the returned `ttl` is the remaining seconds until **eviction** (`evict_at`).
+- **Compatibility:** additive for servers — a pre-SWR server ignores `X-CacheKit-Stale-TTL` (the entry evicts at `fresh_until`, no freshness header is emitted) and SDK behavior is exactly pre-SWR. It is **not** transparent to mixed readers: enabling `stale_ttl` on a key affects every reader of that key, and a pre-SWR SDK will consume stale-window values as fresh (`200`, no header) where it previously saw a miss. Deployments MUST NOT enable `stale_ttl` on keys whose readers rely on hard TTL expiry (pre-SWR SDKs or security-sensitive consumers).
 
 ---
 
@@ -286,7 +310,7 @@ X-CacheKit-Lock-Id: uuid-string
 
 ### GET /v1/cache/{key}/ttl
 
-Get remaining TTL for a key.
+Get remaining TTL for a key. The returned `ttl` is the remaining seconds until **eviction** — for entries with a [stale-grace window](#stale-while-revalidate), that is `evict_at`, not `fresh_until`.
 
 | Status | Meaning | Response Body |
 | :---: | :--- | :--- |
@@ -308,12 +332,13 @@ Content-Type: application/json
 {"ttl": 7200}
 ```
 
-The `ttl` field follows the same validation rules as `X-CacheKit-TTL`: positive integer, minimum 1, maximum 2,592,000. For entries stored with a [stale-grace window](#stale-while-revalidate), the update resets `fresh_until` and preserves the stale window; the combined total is re-validated against the 30-day cap.
+The `ttl` field follows the same validation rules as `X-CacheKit-TTL`: positive integer, minimum 1, maximum 2,592,000. For entries stored with a stale-grace window, see [SWR write semantics](#write-semantics): a PATCH within the fresh window renews it; a PATCH on a stale entry MUST return `409 Conflict`.
 
 | Status | Meaning |
 | :---: | :--- |
 | `200 OK` | TTL updated |
 | `400 Bad Request` | Invalid TTL (zero, negative, exceeds maximum) |
+| `409 Conflict` | Entry is past `fresh_until` ([SWR write semantics](#write-semantics)) — refresh requires a `PUT` of recomputed bytes |
 
 ---
 

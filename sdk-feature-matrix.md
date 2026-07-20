@@ -87,7 +87,7 @@
 | Backpressure | ✅ | ❌ | ⚠️ Concurrent refresh limits | ❌ |
 | Distributed locking | ✅ | ✅ SaaS backend (`LockableBackend`) | ✅ SaaS backend only | ❌ |
 | L1/L2 dual-layer cache | ✅ | ✅ moka (native) / `l1` feature | ✅ | ❌ |
-| Cache stampede prevention | ✅ | ❌ | ✅ Version tokens + SWR | ❌ |
+| Cache stampede prevention | ✅ | ❌ | ✅ Version tokens + background L1 refresh | ❌ |
 | TTL management | ✅ | ✅ `TtlInspectable` trait | ✅ | ❌ |
 | Stale-while-revalidate (server stale-grace) | 🚧 LAB-381 | ❌ | ❌ | ❌ |
 
@@ -192,7 +192,7 @@ its spec:
 - Redis backend via ioredis, CacheKit SaaS backend via fetch API
 - Encryption via Rust NAPI (AES-256-GCM, HKDF-SHA256, counter-based nonces)
 - AAD v0x03 compliant with Python cross-SDK test vectors
-- L1 LRU cache with SWR, version tokens, namespace invalidation
+- L1 LRU cache with background refresh, version tokens, namespace invalidation
 - Circuit breaker (rolling window), retry (exponential backoff + jitter), graceful degradation
 - Distributed locking via CacheKit SaaS backend
 - Intent-based API: `createCache.minimal()`, `.production()`, `.secure()`, `.io()`
