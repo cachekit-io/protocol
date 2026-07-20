@@ -6,7 +6,7 @@
 
 **Feature parity and compliance status across all CacheKit SDK implementations.**
 
-*Last updated: 2026-07-18 — protocol#11 container documentation + version sync (py 0.11.1, rs 0.3.0, ts 0.1.2, core 0.3.0)*
+*Last updated: 2026-07-20 — LAB-381 stale-while-revalidate (server stale-grace) specified in [spec/saas-api.md](spec/saas-api.md#stale-while-revalidate)*
 
 </div>
 
@@ -89,6 +89,7 @@
 | L1/L2 dual-layer cache | ✅ | ✅ moka (native) / `l1` feature | ✅ | ❌ |
 | Cache stampede prevention | ✅ | ❌ | ✅ Version tokens + SWR | ❌ |
 | TTL management | ✅ | ✅ `TtlInspectable` trait | ✅ | ❌ |
+| Stale-while-revalidate (server stale-grace) | 🚧 LAB-381 | ❌ | ❌ | ❌ |
 
 > **Lock id transport (CWE-532):** the unlock call carries the lock capability token in the `X-CacheKit-Lock-Id` request header, never the `?lock_id=` query string (which leaks via access/proxy logs and OTel `http.url` spans). SaaS dual-reads both during the rollout; SDKs migrate to header-only — Python (#131), TypeScript (#63), Rust (#24). See [spec/saas-api.md](spec/saas-api.md#delete-v1cachekeylock).
 

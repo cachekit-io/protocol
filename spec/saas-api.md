@@ -18,6 +18,7 @@
 - [Authentication](#authentication)
 - [Content Type](#content-type)
 - [Cache Endpoints](#cache-endpoints)
+- [Stale-While-Revalidate](#stale-while-revalidate)
 - [Lock Endpoints](#lock-endpoints)
 - [TTL Endpoints](#ttl-endpoints)
 - [Health Endpoint](#health-endpoint)
@@ -84,6 +85,12 @@ Authorization: Bearer ck_live_xxx
 | `200 OK` | Cache hit | Return raw bytes to caller |
 | `404 Not Found` | Cache miss | Return `None`/`null` |
 
+**Response headers:**
+
+| Header | Description |
+| :--- | :--- |
+| `X-CacheKit-Freshness` | `fresh` or `stale`. Emitted on every `200 OK` by servers implementing [stale-while-revalidate](#stale-while-revalidate). SDKs MUST treat an absent header as `fresh` (pre-SWR servers do not emit it). On `stale`, SDKs MUST still return the bytes to the caller and SHOULD trigger background revalidation. |
+
 ---
 
 ### PUT /v1/cache/{key}
@@ -103,6 +110,7 @@ X-CacheKit-TTL: 3600
 | Header | Required | Description |
 | :--- | :---: | :--- |
 | `X-CacheKit-TTL` | No | Time-to-live in seconds. Positive integer, minimum 1, maximum 2,592,000 (30 days). Omit to use server default. |
+| `X-CacheKit-Stale-TTL` | No | [Stale-grace window](#stale-while-revalidate) in seconds after freshness expiry. Non-negative integer; `0` is equivalent to omitting the header. The applied TTL (explicit or tenant default) plus the stale window MUST NOT exceed 2,592,000 seconds total, otherwise `400 Bad Request`. Pre-SWR servers ignore this header. |
 
 > [!IMPORTANT]
 > **TTL Validation Rules** — These rules are normative for both SDKs and the SaaS backend.
@@ -161,6 +169,65 @@ Authorization: Bearer ck_live_xxx
 | :---: | :--- |
 | `200 OK` | Key exists |
 | `404 Not Found` | Key does not exist |
+
+Servers implementing [stale-while-revalidate](#stale-while-revalidate) emit the same `X-CacheKit-Freshness` response header as `GET`.
+
+---
+
+## Stale-While-Revalidate
+
+> Status: **specified** (LAB-381). Server implementation: cachekit-io/saas (pending). SDK adoption tracked in the [feature matrix](../sdk-feature-matrix.md#reliability-features).
+
+Stale-while-revalidate (SWR, [RFC 5861](https://www.rfc-editor.org/rfc/rfc5861) semantics) lets a client serve an expired-but-present value immediately and recompute it in the background, so no request pays the recompute cost at a TTL boundary. Because the recompute is the client's wrapped function, **the client owns revalidation**; the server's role is read-time staleness signaling and single-flight coordination.
+
+### Entry lifecycle
+
+An entry stored with `X-CacheKit-TTL: ttl` and `X-CacheKit-Stale-TTL: stale_ttl` has two windows:
+
+```
+stored_at ──────────── fresh_until ──────────────── evict_at
+          FRESH                       STALE
+          (200, fresh)                (200, stale)   404
+
+fresh_until = stored_at + ttl
+evict_at    = fresh_until + stale_ttl
+```
+
+| Window | `GET` / `HEAD` behavior |
+| :--- | :--- |
+| `now < fresh_until` | `200 OK`, `X-CacheKit-Freshness: fresh` |
+| `fresh_until ≤ now < evict_at` | `200 OK` **with the stored bytes**, `X-CacheKit-Freshness: stale` |
+| `now ≥ evict_at` | `404 Not Found`. The server MUST NOT serve an entry past `evict_at` — the stale window is a hard bound, not a hint. |
+
+Without `X-CacheKit-Stale-TTL` (or with `0`), `evict_at = fresh_until` and behavior is identical to the pre-SWR protocol.
+
+### Validation
+
+| Condition | Server behavior |
+| :--- | :--- |
+| `stale_ttl` negative or non-integer | `400 Bad Request` |
+| `applied_ttl + stale_ttl > 2,592,000` | `400 Bad Request` (shares the 30-day storage cap; `applied_ttl` is the explicit `X-CacheKit-TTL` or the tenant default) |
+| `stale_ttl = 0` | Accepted; equivalent to omitting the header |
+
+### Revalidation flow (SDK)
+
+On a `200` with `X-CacheKit-Freshness: stale`, an SDK that supports SWR:
+
+1. **Returns the stale bytes to the caller immediately.** A stale response is never a blocking miss.
+2. Attempts `POST /v1/cache/{key}/lock` (the existing [lock endpoint](#post-v1cachekeylock)) as a **non-blocking** single-flight lease:
+   - `200 OK` → this client revalidates: recompute in the background, `PUT` the new value (which resets `fresh_until` per normal PUT semantics), then `DELETE` the lock.
+   - `409 Conflict` → another client is already revalidating. Serve stale; do not wait, do not retry.
+3. If the background recompute fails, the SDK releases the lock and leaves the entry untouched. The entry hard-expires at `evict_at`, after which the next request takes the ordinary synchronous miss path — SWR degrades to pre-SWR behavior, never serves unbounded staleness.
+
+No new coordination surface is introduced: the revalidation lease is the existing distributed lock.
+
+### Semantics notes
+
+- **Metering:** a stale-window `GET` is a cache **hit** (`200`) for metered-misses billing. The background revalidation `PUT` is an ordinary write. SWR never converts hits into billable misses.
+- **Zero-knowledge:** freshness is timing metadata the server already enforces; the value bytes remain opaque. No change to the wire format, ByteStorage envelope, encryption, or AAD.
+- **Interplay with `PATCH /v1/cache/{key}/ttl`:** a TTL update resets the fresh window (`fresh_until = now + ttl`) and preserves the entry's stored stale window (`evict_at = fresh_until + stale_ttl`). The combined total is re-validated against the 30-day cap.
+- **Interplay with `GET /v1/cache/{key}/ttl`:** the returned `ttl` is the remaining time until **eviction** (`evict_at`), consistent with its existing "remaining storage lifetime" meaning.
+- **Compatibility:** the feature is additive in both directions. A pre-SWR server ignores `X-CacheKit-Stale-TTL` (the entry evicts at `fresh_until`) and emits no `X-CacheKit-Freshness` header; a pre-SWR SDK ignores the header and treats every `200` as fresh. Either way, behavior is exactly the pre-SWR protocol.
 
 ---
 
@@ -241,7 +308,7 @@ Content-Type: application/json
 {"ttl": 7200}
 ```
 
-The `ttl` field follows the same validation rules as `X-CacheKit-TTL`: positive integer, minimum 1, maximum 2,592,000.
+The `ttl` field follows the same validation rules as `X-CacheKit-TTL`: positive integer, minimum 1, maximum 2,592,000. For entries stored with a [stale-grace window](#stale-while-revalidate), the update resets `fresh_until` and preserves the stale window; the combined total is re-validated against the 30-day cap.
 
 | Status | Meaning |
 | :---: | :--- |
