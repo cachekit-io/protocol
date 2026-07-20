@@ -6,7 +6,7 @@
 
 **Feature parity and compliance status across all CacheKit SDK implementations.**
 
-*Last updated: 2026-07-21 — LAB-273 backend-parity audit: DynamoDB corrected (ships nowhere), backend-abstraction section added, locking/TTL rows qualified per backend, lock-id header migration recorded complete*
+*Last updated: 2026-07-20 — LAB-273 backend-parity audit: DynamoDB corrected (ships nowhere), backend-abstraction section added, locking/TTL rows qualified per backend, lock-id header migration recorded complete*
 
 </div>
 
@@ -88,7 +88,7 @@
 
 ## Backend Abstraction
 
-The contract a storage backend must satisfy per SDK (bytes in / bytes out; serialization and encryption live above the backend). Audited against code 2026-07-21 (LAB-273).
+The contract a storage backend must satisfy per SDK (bytes in / bytes out; serialization and encryption live above the backend). Audited against code 2026-07-20 (LAB-273).
 
 ### Required interface
 
@@ -112,7 +112,7 @@ The contract a storage backend must satisfy per SDK (bytes in / bytes out; seria
 > [!NOTE]
 > **Lock API shape divergence:** Python's `acquire_lock` is an async context manager yielding `bool` — the lock token stays internal and release is automatic. Rust and TypeScript return the raw `lock_id` capability token from `acquire_lock`/`acquireLock` and require an explicit `release_lock(key, lock_id)` — a direct mirror of the SaaS lock endpoint. All three pass the **bare cache key** (backends own any `:lock` namespace derivation). Porting a lockable backend across SDKs must bridge this shape difference.
 >
-> **Coverage, not shape, is the parity gap:** all three SDKs use the same required-base + optional-capability pattern, but only Python implements the optional capabilities on Redis. Rust's Redis backend lacks locking; TypeScript's Redis backend lacks both locking and TTL inspection; Rust's Workers backend lacks both despite speaking the same SaaS API (gap tickets under LAB-102).
+> **Coverage, not shape, is the parity gap:** all three SDKs use the same required-base + optional-capability pattern, but Redis optional-capability coverage varies by SDK: Python has the broadest coverage (both locking and TTL inspection), Rust's Redis backend implements TTL inspection only (no locking), and TypeScript's Redis backend implements neither. Rust's Workers backend also lacks both despite speaking the same SaaS API (gap tickets under LAB-102).
 
 ---
 
@@ -128,7 +128,7 @@ The contract a storage backend must satisfy per SDK (bytes in / bytes out; seria
 | TTL management | ✅ Redis + SaaS | ✅ Redis + SaaS (`TtlInspectable`; Workers ❌) | ✅ SaaS only (`TTLBackend`) | ❌ |
 | Stale-while-revalidate (server stale-grace) | 🚧 LAB-381 | ❌ | ❌ | ❌ |
 
-> **Lock id transport (CWE-532):** the unlock call carries the lock capability token in the `X-CacheKit-Lock-Id` request header, never the `?lock_id=` query string (which leaks via access/proxy logs and OTel `http.url` spans). **Migration complete in all three SDKs** (verified 2026-07-21, LAB-273): Python (#131, closed), Rust (#24, closed), TypeScript ships the header (ts#63 remains open only for an unrelated NAPI-rebuild item). SaaS dual-reads both during the rollout window. See [spec/saas-api.md](spec/saas-api.md#delete-v1cachekeylock).
+> **Lock id transport (CWE-532):** the unlock call carries the lock capability token in the `X-CacheKit-Lock-Id` request header, never the `?lock_id=` query string (which leaks via access/proxy logs and OTel `http.url` spans). **Migration complete in all three SDKs** (verified 2026-07-20, LAB-273): Python (#131, closed), Rust (#24, closed), TypeScript ships the header (ts#63 remains open only for an unrelated NAPI-rebuild item). SaaS dual-reads both during the rollout window. See [spec/saas-api.md](spec/saas-api.md#delete-v1cachekeylock).
 
 ---
 
@@ -191,7 +191,7 @@ its spec:
 - Hybrid Python-Rust architecture: decorators and orchestration in Python, ByteStorage and encryption in Rust (via PyO3)
 - The `cachekit-core` Rust crate is the canonical implementation for compression, checksums, and encryption
 - 4 serializers: Standard (cross-language), Auto (Python-optimized), Orjson (JSON), Arrow (columnar)
-- Backends: Redis, Memcached, File (local), CacheKit SaaS — backend auto-detected from a single unambiguous env selector (see [Cache Backends](#cache-backends))
+- Backends: Redis, Memcached, File (local), CacheKit SaaS — backend auto-detected from the environment: a single unambiguous selector, with `REDIS_URL`/localhost fallback, and ambiguous (multiple) selectors raising `ConfigurationError` (see [Cache Backends](#cache-backends))
 - Config via pydantic-settings; secrets via `SecretStr`
 
 </details>
