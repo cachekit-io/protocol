@@ -236,10 +236,14 @@ On a `200` with `X-CacheKit-Freshness: stale`:
 An SDK that serves a stale hit and owns revalidation (the recompute is the wrapped function — the server cannot do it):
 
 1. MUST return the stale bytes (or take its local miss policy, above) without blocking on revalidation.
-2. SHOULD single-flight the recompute by attempting `POST /v1/cache/{key}/lock` (the existing [lock endpoint](#post-v1cachekeylock)) as a **non-blocking** lease. The lease is acquired **only** on `200 OK` with a non-empty `lock_id`. Any other outcome — `409 Conflict`, or `200 OK` with a `null`/absent `lock_id` — means another client is revalidating: serve stale; the SDK MUST NOT wait or retry.
+2. SHOULD single-flight the recompute by attempting `POST /v1/cache/{key}/lock` (the existing [lock endpoint](#post-v1cachekeylock)) as a **non-blocking** lease. The lease is acquired **only** on `200 OK` with a non-empty `lock_id`. A `200 OK` with a `null`/absent `lock_id` — or, defensively, any non-`200` such as a legacy `409 Conflict` — means another client is revalidating: serve stale; the SDK MUST NOT wait or retry.
 
-   > [!WARNING]
-   > **Discrepancy with deployed server (LAB-240)** — this spec defines contested = `409 Conflict`, but the deployed SaaS currently returns `200 OK` with `{"lock_id": null}` for a contested lock. SDKs MUST treat both shapes as contested. Branching on the HTTP status alone silently disables single-flight against today's server.
+   > [!NOTE]
+   > **Contested lock is `200 OK` with `{"lock_id": null}` (LAB-240).** The
+   > lease/single-flight contract keys off `lock_id` **presence**, never the HTTP
+   > status — see the [lock endpoint](#post-v1cachekeylock). Do not reintroduce a
+   > `409` contested status: the deployed server never emitted one, and status-based
+   > branching silently disables single-flight.
 
 3. The lease holder recomputes in the background, `PUT`s the new value (re-sending `X-CacheKit-Stale-TTL` per [write semantics](#write-semantics)), then `DELETE`s the lock.
 4. A failed recompute **or** a failed revalidation `PUT` are equivalent: release the lock, leave the entry untouched, surface no error to the caller. Subsequent stale reads MAY re-trigger revalidation until `evict_at`; past `evict_at` the next request takes the ordinary synchronous miss path. SWR degrades to pre-SWR behavior — it never serves unbounded staleness.
@@ -274,8 +278,20 @@ Content-Type: application/json
 
 | Status | Meaning | Response Body |
 | :---: | :--- | :--- |
-| `200 OK` | Lock acquired | `{"lock_id": "uuid-string"}` |
-| `409 Conflict` | Lock held by another client | — |
+| `200 OK` | Lock **acquired** | `{"lock_id": "uuid-string"}` |
+| `200 OK` | Lock **contested** (held by another client) | `{"lock_id": null}` |
+
+Contention is signalled in the response **body**, not the HTTP status: a non-empty
+`lock_id` means the caller holds the lease; a `null` (or absent) `lock_id` means
+another client holds it. Clients MUST branch on `lock_id` presence and MUST NOT
+branch on the status code — the single-flight lease contract (see
+[Revalidation flow](#revalidation-flow-sdk)) depends on it.
+
+> **History (LAB-240):** earlier revisions of this spec specified `409 Conflict`
+> for a contested lock. The deployed server never implemented that — it has always
+> returned `200 OK` with `{"lock_id": null}` — so `409` is **not** part of the lock
+> contract. SDKs that additionally treat a `409` as contested (e.g. cachekit-ts)
+> remain correct: the body-based rule subsumes it.
 
 ---
 
@@ -400,7 +416,7 @@ SDKs SHOULD send cache metrics headers for rate limiting and observability:
 | `401` | Unauthorized | Invalid or missing API key |
 | `403` | Forbidden | API key lacks permission for this operation/namespace |
 | `404` | Not Found | Cache miss (GET/HEAD) or key not found (DELETE) |
-| `409` | Conflict | Lock already held |
+| `409` | Conflict | `PATCH /v1/cache/{key}/ttl` on a stale entry past `fresh_until`; refresh requires a `PUT` of recomputed bytes ([SWR write semantics](#write-semantics)) |
 | `413` | Payload Too Large | Value exceeds max stored value size (25 MB). Permanent — do not retry; surface "value too large" |
 | `429` | Too Many Requests | Rate limited |
 | `500` | Internal Server Error | Backend failure |
