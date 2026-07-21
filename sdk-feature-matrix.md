@@ -6,7 +6,7 @@
 
 **Feature parity and compliance status across all CacheKit SDK implementations.**
 
-*Last updated: 2026-07-20 — LAB-381 stale-while-revalidate (server stale-grace) specified in [spec/saas-api.md](spec/saas-api.md#stale-while-revalidate)*
+*Last updated: 2026-07-21 — LAB-274 Developer Experience section corrected to code-verified intent-preset / entry-point / config-surface reality*
 
 </div>
 
@@ -97,16 +97,44 @@
 
 ## Developer Experience
 
+*Audited against code 2026-07-21 (LAB-274): py 0.12.0 `config/decorator.py` + `decorators/intent.py`, rs 0.3.0 `intents.rs` + `client.rs` + `cachekit-macros/lib.rs`, ts 0.1.2 `intents.ts` + `cache.ts`.*
+
 | Feature | Python | Rust | TypeScript | PHP |
 | :--- | :---: | :---: | :---: | :---: |
-| Decorator API (`@cache`) | ✅ | ✅ `#[cachekit]` proc-macro | N/A (functional `wrap()` API) | ❌ attributes |
-| Intent-based presets | ✅ `.minimal` `.production` `.secure` `.io` | ✅ `CacheKit::minimal` `::production` `::secure` `::io` | ✅ `createCache.minimal()` etc. | ❌ |
-| Builder API | ✅ | ✅ `CacheKit::builder()` / `from_env()` | ✅ | ❌ |
+| Decorator API | ✅ `@cache` (sync + async fns; zero-arg works) | ✅ `#[cachekit]` proc-macro — async fns returning `Result<T, CachekitError>` only; `client` + `ttl` attributes required | N/A (functional `wrap()` / curried `with()`; `namespace` + `ttl` required per call) | ❌ attributes |
+| Intent-based presets | ✅ `.minimal` `.production` `.secure` `.io` (+ Python-only `.dev` `.test` `.local`) | ⚠️ `::minimal` `::production` `::encrypted` `::io` — **no `::secure` preset**; `.secure()` is a post-build accessor that errors unless encryption was configured | ✅ `createCache.minimal()` `.production()` `.secure()` `.io()` | ❌ |
+| Builder / config surface | `DecoratorConfig` intent presets + kwargs (frozen dataclass, 6 nested groups) — no builder chain, intentional | ✅ `CacheKit::builder()` / `from_env()` (env: `CACHEKIT_API_KEY/API_URL/MASTER_KEY/DEFAULT_TTL`) | Options object on `createCache()` — no builder chain, no `from_env()` (env fallback only inside `.secure()`/`.io()`) | ❌ |
 | Async support | ✅ | ✅ | ✅ | ❌ |
-| Sync support | ✅ | ✅ | ❌ | ✅ |
+| Sync support | ✅ (same decorator wraps both) | ❌ async-only (all ops `async fn`; macro output requires async) | ❌ | ✅ |
 | WASM / CF Workers | N/A | ✅ `workers` feature (`?Send`, `Rc`) | N/A | N/A |
-| pydantic-settings config | ✅ | N/A | N/A | N/A |
+| pydantic-settings config | ✅ (`CACHEKIT_` env prefix, `SecretStr` master key) | N/A — `from_env()` + `Zeroizing` is the Rust idiom | N/A — intentional, per-intent env fallback only | N/A |
 | Type hints / strict types | ✅ | ✅ | ✅ | ✅ PHP 8.1+ |
+
+### Intent-preset semantics (parity, not presence)
+
+The shared preset names configure **different things per SDK**:
+
+| Semantic | Python | Rust | TypeScript |
+| :--- | :--- | :--- | :--- |
+| Preset TTL defaults | **None — entries never expire** unless `ttl=` is passed (all presets) | 300 / 600 / 600 / 3 600 s (minimal/production/encrypted/io) | 300 / 600 / 600 / 3 600 s |
+| `minimal`: L1 | **on** (SWR/invalidation off) | **off** (`no_l1()`) | **on** (SWR/invalidation off) |
+| `minimal`: integrity checksums | **off** (`integrity_checking=False`) | n/a (values have no envelope) | **on** (ByteStorage on by default) |
+| `minimal`: reliability | circuit breaker/timeout off, **backpressure on** | none (fail-fast connect, no reconnect) | circuit breaker neutered (∞ threshold), no retry, degradation off |
+| `production`: reliability | circuit breaker + adaptive timeout + backpressure + full monitoring | auto-reconnect only (SDK has no circuit breaker — see [Reliability Features](#reliability-features)) | circuit breaker (threshold 5) + retry (3 attempts) + degradation + metrics |
+| Encrypted preset | `.secure(master_key=hex, ≥64 hex chars)`; falls back to `CACHEKIT_MASTER_KEY` | `::encrypted(url, key: &[u8], ≥32 raw bytes)` — arg only, no env fallback | `.secure({ masterKey: hex })`; falls back to `CACHEKIT_MASTER_KEY` |
+| Tenancy on encrypted preset | `tenant_extractor` callable, `single_tenant_mode`, `fail_closed` tri-state | fixed `"default"` tenant (override via builder) | `tenantId` string |
+| `io`: credentials | `CACHEKIT_API_KEY` env **only** (no kwarg) | `api_key` argument **only** (env only via `from_env()`) | `apiKey` option **or** `CACHEKIT_API_KEY` |
+| `CACHEKIT_MASTER_KEY` auto-enables encryption | **all presets** (serialization-handler auto-detect) | only `CacheKit::from_env()` | only `createCache.secure()` |
+
+> [!WARNING]
+> Preset names promise more parity than they deliver. The sharpest traps for a cross-SDK
+> user: Python preset entries **live forever** where Rust/TypeScript expire in 300–3 600 s;
+> Rust's encrypted preset is named `encrypted` (there is no `::secure`, and its `secure()`
+> accessor fails without configured encryption — whereas TypeScript's `secure.wrap()`
+> silently skips encryption on an unencrypted instance, LAB-513); and the same
+> `CACHEKIT_MASTER_KEY` env var activates encryption everywhere in Python, only in
+> `from_env()` in Rust, and only in `.secure()` in TypeScript. The canonical preset
+> contract is being specified under LAB-514 (epic LAB-105).
 
 ---
 
