@@ -6,7 +6,7 @@
 
 **Feature parity and compliance status across all CacheKit SDK implementations.**
 
-*Last updated: 2026-07-20 — LAB-381 stale-while-revalidate (server stale-grace) specified in [spec/saas-api.md](spec/saas-api.md#stale-while-revalidate)*
+*Last updated: 2026-07-21 — LAB-446: Python File backend gains full TTL inspection/refresh; Memcached gains `refresh_ttl` (touch) only (see [TTL management note](#reliability-features))*
 
 </div>
 
@@ -88,10 +88,23 @@
 | Distributed locking | ✅ | ✅ SaaS backend (`LockableBackend`) | ✅ SaaS backend only | ❌ |
 | L1/L2 dual-layer cache | ✅ | ✅ moka (native) / `l1` feature | ✅ | ❌ |
 | Cache stampede prevention | ✅ | ❌ | ✅ Version tokens + background L1 refresh | ❌ |
-| TTL management | ✅ | ✅ `TtlInspectable` trait | ✅ | ❌ |
+| TTL management | ✅ (see note) | ✅ `TtlInspectable` trait | ✅ | ❌ |
 | Stale-while-revalidate (server stale-grace) | 🚧 LAB-381 | ❌ | ❌ | ❌ |
 
 > **Lock id transport (CWE-532):** the unlock call carries the lock capability token in the `X-CacheKit-Lock-Id` request header, never the `?lock_id=` query string (which leaks via access/proxy logs and OTel `http.url` spans). SaaS dual-reads both during the rollout; SDKs migrate to header-only — Python (#131), TypeScript (#63), Rust (#24). See [spec/saas-api.md](spec/saas-api.md#delete-v1cachekeylock).
+
+> [!NOTE]
+> **TTL management is per-backend.** "TTL inspection/refresh" means the `TTLInspectableBackend`
+> capability (`get_ttl` + `refresh_ttl`) that powers `refresh_ttl_on_get` threshold-based
+> sliding expiration.
+> - **Python (LAB-446):** supported on **Redis**, **CachekitIO**, and **File**. **Memcached**
+>   implements `refresh_ttl` (via the `touch` command) but **not** `get_ttl` — the Memcached
+>   protocol has no command to read a key's remaining TTL, and pymemcache's `HashClient`
+>   exposes no meta protocol — so Memcached is **not** a full `TTLInspectableBackend` and
+>   `refresh_ttl_on_get` does not apply to it (it warns once, then serves the hit).
+> - **Rust / TypeScript:** parity for their existing backends is tracked separately; when a
+>   Memcached/File backend lands there it must match this Python split (refresh-only Memcached,
+>   full File) — see LAB-429 (rs) / LAB-430 (ts).
 
 ---
 
