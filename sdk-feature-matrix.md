@@ -6,7 +6,7 @@
 
 **Feature parity and compliance status across all CacheKit SDK implementations.**
 
-*Last updated: 2026-07-20 — LAB-381 stale-while-revalidate (server stale-grace) specified in [spec/saas-api.md](spec/saas-api.md#stale-while-revalidate)*
+*Last updated: 2026-07-21 — LAB-272 code-verified protocol-adherence audit: interop/v1 merged in Python ([cachekit-py#220](https://github.com/cachekit-io/cachekit-py/pull/220)) and TypeScript ([cachekit-ts#71](https://github.com/cachekit-io/cachekit-ts/pull/71)), Rust in review ([cachekit-rs#33](https://github.com/cachekit-io/cachekit-rs/pull/33)); test-vector CI coverage corrected*
 
 </div>
 
@@ -29,7 +29,7 @@
 
 | SDK | Package | Version | Language | Status |
 | :--- | :--- | :---: | :--- | :---: |
-| cachekit-py | `cachekit` (PyPI) | 0.11.1 | Python 3.10+ | ✅ Production |
+| cachekit-py | `cachekit` (PyPI) | 0.12.0 | Python 3.10+ | ✅ Production |
 | cachekit-rs | `cachekit-rs` (crates.io) | 0.3.0 | Rust 1.82+ | ✅ Production |
 | cachekit-core | `cachekit-core` (crates.io) | 0.3.0 | Rust (shared core) | ✅ Production |
 | cachekit-ts | `@cachekit-io/cachekit` (npm) | 0.1.2 | TypeScript | ✅ Production |
@@ -62,7 +62,7 @@
 | Counter-based nonces | ✅ via Rust | ✅ | ✅ via NAPI (Rust) | ❌ use random |
 
 > [!IMPORTANT]
-> AAD v0x03 is required for protocol compliance. SDKs without it cannot safely interoperate with encrypted payloads from compliant SDKs — the auth tag will fail verification. See [spec/encryption.md](spec/encryption.md#additional-authenticated-data-aad). Python, Rust, and TypeScript SDKs are compliant as of 2026-04-06.
+> AAD v0x03 is required for protocol compliance. SDKs without it cannot safely interoperate with encrypted payloads from compliant SDKs — the auth tag will fail verification. Python, Rust, and TypeScript construction was code-verified byte-identical on 2026-07-21 (LAB-272); the normative byte layout and the frozen `True`/`False` compressed tokens (protocol#12) are defined in [spec/encryption.md](spec/encryption.md#additional-authenticated-data-aad). Python's auto serializers append the optional `original_type` fifth component; Rust, TypeScript, and interop mode always emit exactly four. Python's read path fails closed when encryption is enabled but a stored entry claims plaintext ([cachekit-py#215](https://github.com/cachekit-io/cachekit-py/pull/215)).
 
 ---
 
@@ -129,20 +129,23 @@ its spec:
 
 | Requirement | Python | Rust | TypeScript | PHP |
 | :--- | :---: | :---: | :---: | :---: |
-| Key generation (Blake2b) | ✅ Compliant | N/A (SDK-level, not in core) | ✅ Compliant | ⚠️ Untested |
-| Wire format (ByteStorage) | ✅ Compliant¹ | ✅ Canonical (`cachekit-core`) — unused for stored values¹ | ✅ Compliant | ⚠️ Untested |
-| Storage container (auto mode)¹ | CK v3 frame (Python-internal) | Plain MessagePack (`rmp` named) — no envelope | Bare ByteStorage envelope (default) | — |
+| Key generation (Blake2b) | ✅ Compliant | N/A auto mode (no spec'd keygen)¹ — interop keygen 🚧 [#33](https://github.com/cachekit-io/cachekit-rs/pull/33) | ✅ Compliant | ⚠️ Untested |
+| Wire format (ByteStorage) | ✅ Compliant² | ✅ Canonical (`cachekit-core`) — unused for stored values² | ✅ Compliant | ⚠️ Untested |
+| Storage container (auto mode)² | CK v3 frame (Python-internal) | Plain MessagePack (`rmp` named) — no envelope | Bare ByteStorage envelope (default) | — |
 | Encryption (AES-256-GCM) | ✅ Compliant | ✅ Canonical (cachekit-core) | ✅ Compliant | ⚠️ Untested |
-| AAD v0x03 | ✅ Compliant | ✅ Compliant | ✅ Compliant | ❌ Not implemented |
+| AAD v0x03 | ✅ Compliant (5 components — every auto serializer appends `original_type`; interop mode is the sole 4-component path) | ✅ Compliant (4 components) | ✅ Compliant (4 components) | ❌ Not implemented |
 | SaaS API | ✅ Compliant | ✅ Compliant (CachekitIO backend) | ✅ Compliant | ❌ Not implemented |
-| Test vectors | ⚠️ Pending | ⚠️ Pending | ✅ Python cross-SDK vectors | ⚠️ Pending |
-| Interop mode ([spec](spec/interop-mode.md), opt-in) | ❌ Not implemented | ❌ Not implemented | ❌ Not implemented | ❌ Not implemented |
+| Test vectors in CI³ | ✅ interop/v1 (full set, incl. AAD + encryption through the real stack) | ❌ None on `main` — interop vectors land with [#33](https://github.com/cachekit-io/cachekit-rs/pull/33) | ✅ interop/v1 (full set, incl. its key vectors) + inline Python-generated AAD-construction and encryption (decrypt-Python-ciphertext) vectors | ⚠️ Pending |
+| Interop mode ([spec](spec/interop-mode.md), opt-in) | ✅ Merged ([#220](https://github.com/cachekit-io/cachekit-py/pull/220), unreleased) | 🚧 In review ([#33](https://github.com/cachekit-io/cachekit-rs/pull/33)) | ✅ Merged ([#71](https://github.com/cachekit-io/cachekit-ts/pull/71), unreleased) | ❌ Not implemented |
 
 > [!NOTE]
-> "N/A" for Rust key generation means `cachekit-core` is a protocol primitive library. Key generation (Blake2b) is an SDK-level concern — `cachekit-rs` delegates cache key construction to the caller via the `key` parameter on `get`/`set`/`#[cachekit]`.
+> ¹ "N/A" for Rust key generation means `cachekit-rs` implements no spec'd key format: `get`/`set` take caller-supplied keys, and the `#[cachekit]` macro (which has **no** `key` parameter) derives an SDK-internal legacy key — `{namespace}:{blake2b256-hex}` over the *unqualified* function name, the obsolete RFC §3.1.5 shape matching **no** current protocol key format, never usable cross-SDK. That derivation is macro-internal plumbing (it IS called at runtime by every `#[cachekit]` expansion — the LAB-424 "unused" premise was a grep miss), removed from the public API in [cachekit-rs#35](https://github.com/cachekit-io/cachekit-rs/pull/35). `cachekit-core` is a protocol primitive library with no keygen. Spec-conformant Rust keygen arrives with interop mode ([cachekit-rs#33](https://github.com/cachekit-io/cachekit-rs/pull/33)).
 
 > [!NOTE]
-> ¹ Auto-mode **stored bytes** are SDK-internal and differ per SDK — see [wire-format.md → SDK Storage Containers](spec/wire-format.md#sdk-storage-containers-auto-mode). Python stores the ByteStorage envelope *inside* its CK v3 frame; `cachekit-rs` does not use the envelope for values at all (it uses `cachekit-core` only for encryption). Cross-SDK value compatibility is exclusively an [interop-mode](spec/interop-mode.md) property (protocol#11).
+> ² Auto-mode **stored bytes** are SDK-internal and differ per SDK — see [wire-format.md → SDK Storage Containers](spec/wire-format.md#sdk-storage-containers-auto-mode). Python stores the ByteStorage envelope *inside* its CK v3 frame; `cachekit-rs` does not use the envelope for values at all (it uses `cachekit-core` only for encryption). Cross-SDK value compatibility is exclusively an [interop-mode](spec/interop-mode.md) property (protocol#11).
+
+> [!NOTE]
+> ³ "Test vectors in CI" = vectors the SDK's own default CI executes. Beyond the SDKs, this repo's `verify.yml` CI-verifies `interop-mode.json`, `encryption.json`, and `python-frame.json` against reference implementations. **Not verified by any CI anywhere**: `wire-format.json` (tracked as LAB-423) and `cache-keys.json` (generated by cachekit-py v0.5.0; tracked as LAB-425).
 
 ---
 
