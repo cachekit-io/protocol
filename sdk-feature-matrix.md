@@ -135,7 +135,7 @@ its spec:
 | Encryption (AES-256-GCM) | ✅ Compliant | ✅ Canonical (cachekit-core) | ✅ Compliant | ⚠️ Untested |
 | AAD v0x03 | ✅ Compliant (5 components — every auto serializer appends `original_type`; interop mode is the sole 4-component path) | ✅ Compliant (4 components) | ✅ Compliant (4 components) | ❌ Not implemented |
 | SaaS API | ✅ Compliant | ✅ Compliant (CachekitIO backend) | ✅ Compliant | ❌ Not implemented |
-| Test vectors in CI³ | ✅ interop/v1 (full set, incl. AAD + encryption through the real stack) | ❌ None on `main` — interop vectors land with [#33](https://github.com/cachekit-io/cachekit-rs/pull/33) | ✅ interop/v1 (full set, incl. its key vectors) + inline Python-generated AAD-construction and encryption (decrypt-Python-ciphertext) vectors | ⚠️ Pending |
+| Test vectors in CI³ | ✅ interop/v1 (full set, incl. AAD + encryption through the real stack) | ✅ interop/v1 (full set) since [#33](https://github.com/cachekit-io/cachekit-rs/pull/33) | ✅ interop/v1 (full set, incl. its key vectors) + inline Python-generated AAD-construction and encryption (decrypt-Python-ciphertext) vectors | ⚠️ Pending |
 | Interop mode ([spec](spec/interop-mode.md), opt-in) | ✅ Merged ([#220](https://github.com/cachekit-io/cachekit-py/pull/220), unreleased) | ✅ Merged ([#33](https://github.com/cachekit-io/cachekit-rs/pull/33), unreleased) | ✅ Merged ([#71](https://github.com/cachekit-io/cachekit-ts/pull/71), unreleased) | ❌ Not implemented |
 
 > [!NOTE]
