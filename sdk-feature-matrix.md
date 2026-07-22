@@ -6,7 +6,7 @@
 
 **Feature parity and compliance status across all CacheKit SDK implementations.**
 
-*Last updated: 2026-07-20 — LAB-273 backend-parity audit: DynamoDB corrected (ships nowhere), backend-abstraction section added, locking/TTL rows qualified per backend, lock-id header migration recorded complete*
+*Last updated: 2026-07-22 — LAB-520: cross-instance L1 invalidation row added (ts ✅ opt-in; py's never-wired package deleted rather than wired; rs none)*
 
 </div>
 
@@ -127,8 +127,11 @@ The contract a storage backend must satisfy per SDK (bytes in / bytes out; seria
 | Cache stampede prevention | ✅ | ❌ | ✅ Version tokens + background L1 refresh | ❌ |
 | TTL management | ✅ Redis + SaaS | ✅ Redis + SaaS (`TtlInspectable`; Workers ❌) | ✅ SaaS only (`TTLBackend`) | ❌ |
 | Stale-while-revalidate (server stale-grace) | 🚧 LAB-381 | ❌ | ❌ | ❌ |
+| Cross-instance L1 invalidation (pub/sub) | ❌³ | ❌ | ✅ opt-in `invalidation` config (Redis pub/sub channel) | ❌ |
 
 > **Lock id transport (CWE-532):** the unlock call carries the lock capability token in the `X-CacheKit-Lock-Id` request header, never the `?lock_id=` query string (which leaks via access/proxy logs and OTel `http.url` spans). **Migration complete in all three SDKs** (verified 2026-07-20, LAB-273): Python (#131, closed), Rust (#24, closed), TypeScript ships the header (ts#63 remains open only for an unrelated NAPI-rebuild item). SaaS dual-reads both during the rollout window. See [spec/saas-api.md](spec/saas-api.md#delete-v1cachekeylock).
+>
+> ³ Python shipped a complete but never-wired invalidation package (channel, events, Redis pub/sub with reconnect) — deleted 2026-07-22 (LAB-520, cachekit-py#237) rather than wired: without server-side key tracking, broadcasting mass invalidations would have other pods evict L1 and re-read stale entries from L2 that the invalidating process couldn't delete. TypeScript's implementation (`cache.ts` `invalidation` option) is the reference if Python re-adds it, paired with a distributed key registry. Note: invalidation events are **not** cross-SDK interoperable — no protocol spec exists, and ts's channel name/payload differ from what py's package used.
 
 ---
 
