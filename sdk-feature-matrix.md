@@ -6,7 +6,7 @@
 
 **Feature parity and compliance status across all CacheKit SDK implementations.**
 
-*Last updated: 2026-07-20 — LAB-273 backend-parity audit: DynamoDB corrected (ships nowhere), backend-abstraction section added, locking/TTL rows qualified per backend, lock-id header migration recorded complete*
+*Last updated: 2026-07-22 — LAB-431 Workers feasibility spike: ts Cloudflare Workers footnote records GO verdict (WebCrypto path), implementation tracked as LAB-595*
 
 </div>
 
@@ -78,7 +78,7 @@
 | Cloudflare Workers | N/A | ✅ `workers` feature (`worker::Fetch`) | ❌ Node 20+ only¹ | N/A |
 | DynamoDB | ❌² | ❌ | ❌ | ❌ |
 
-> ¹ The TS SDK cannot run on the Workers runtime today: crypto is a native NAPI module and the Redis backend is ioredis (TCP). Recorded as ❌ (a plausible target, unsupported) rather than N/A.
+> ¹ The TS SDK cannot run on the Workers runtime today: crypto is a native NAPI module and the Redis backend is ioredis (TCP). Recorded as ❌ (a plausible target, unsupported) rather than N/A. Feasibility spike LAB-431 (2026-07-22) returned **GO**: WebCrypto covers AES-256-GCM + HKDF-SHA256 natively (random 12-byte nonces are spec-sanctioned, see [encryption.md → Nonce Generation](spec/encryption.md#nonce-generation)), the CachekitIO backend is already pure `fetch`, and a `workerd`-conditional entrypoint keeps ioredis/NAPI out of the edge bundle. Implementation tracked as LAB-595 (compression stays off on Workers in phase 1 — the ByteStorage envelope is NAPI-bound).
 >
 > ² DynamoDB has never shipped in any SDK. The previous Python ✅ traced to the [custom-backend tutorial](https://github.com/cachekit-io/cachekit-py/blob/main/docs/backends/custom.md), which shows how a *user* can implement the backend protocol against DynamoDB — that is an extension point, not shipped support (LAB-273).
 
