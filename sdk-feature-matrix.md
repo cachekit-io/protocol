@@ -6,7 +6,7 @@
 
 **Feature parity and compliance status across all CacheKit SDK implementations.**
 
-*Last updated: 2026-07-23 — LAB-431 Workers feasibility spike: ts Cloudflare Workers footnote records GO verdict via wasm32 cachekit-core (~64 KB gz measured; WebCrypto as fallback), implementation tracked as LAB-595*
+*Last updated: 2026-07-23 — LAB-518 rs reliability tier: circuit breaker, retry, graceful degradation, and stampede single-flight rows flipped to ✅ for Rust; rs distributed-locking/TTL cells refreshed for the already-landed LAB-426 Redis/Workers capability parity*
 
 </div>
 
@@ -112,7 +112,7 @@ The contract a storage backend must satisfy per SDK (bytes in / bytes out; seria
 > [!NOTE]
 > **Lock API shape divergence:** Python's `acquire_lock` is an async context manager yielding `bool` — the lock token stays internal and release is automatic. Rust and TypeScript return the raw `lock_id` capability token from `acquire_lock`/`acquireLock` and require an explicit `release_lock(key, lock_id)` — a direct mirror of the SaaS lock endpoint. All three pass the **bare cache key** (backends own any `:lock` namespace derivation). Porting a lockable backend across SDKs must bridge this shape difference.
 >
-> **Coverage, not shape, is the parity gap:** all three SDKs use the same required-base + optional-capability pattern, but Redis optional-capability coverage varies by SDK: Python has the broadest coverage (both locking and TTL inspection), Rust's Redis backend implements TTL inspection only (no locking), and TypeScript's Redis backend implements neither. Rust's Workers backend also lacks both despite speaking the same SaaS API (gap tickets under LAB-102).
+> **Coverage, not shape, is the parity gap:** all three SDKs use the same required-base + optional-capability pattern, but optional-capability coverage varies by SDK: Python and Rust now cover both locking and TTL inspection on all their backends (Rust closed its Redis-locking and Workers gaps in LAB-426), while TypeScript's Redis backend implements neither (gap tickets under LAB-102).
 
 ---
 
@@ -120,12 +120,14 @@ The contract a storage backend must satisfy per SDK (bytes in / bytes out; seria
 
 | Feature | Python | Rust | TypeScript | PHP |
 | :--- | :---: | :---: | :---: | :---: |
-| Circuit breaker | ✅ | ❌ | ✅ | ❌ |
+| Circuit breaker | ✅ | ✅ `reliability` feature — on in `production`/`encrypted`/`io` presets, off in `minimal` (LAB-518) | ✅ | ❌ |
+| Retry (exponential backoff + jitter) | ✅ | ✅ on transient/timeout classification (`is_retryable`), inside the breaker (LAB-518) | ✅ | ❌ |
+| Graceful degradation | ✅ fail-open on `BackendError` | ✅ `#[cachekit]` runs the function uncached on backend failure; `secure` fails closed (LAB-518) | ✅ | ❌ |
 | Backpressure | ✅ | ❌ | ⚠️ Concurrent refresh limits | ❌ |
-| Distributed locking | ✅ Redis + SaaS backends | ✅ SaaS backend only (`LockableBackend`; Redis/Workers lack impls) | ✅ SaaS backend only | ❌ |
+| Distributed locking | ✅ Redis + SaaS backends | ✅ SaaS + Redis + Workers (`LockableBackend`, LAB-426) | ✅ SaaS backend only | ❌ |
 | L1/L2 dual-layer cache | ✅ | ✅ moka (native) / `l1` feature | ✅ | ❌ |
-| Cache stampede prevention | ✅ | ❌ | ✅ Version tokens + background L1 refresh | ❌ |
-| TTL management | ✅ Redis + SaaS | ✅ Redis + SaaS (`TtlInspectable`; Workers ❌) | ✅ SaaS only (`TTLBackend`) | ❌ |
+| Cache stampede prevention | ✅ | ✅ cold-miss single-flight: per-key in-process lock + distributed fill lock on lock-capable backends (LAB-518) | ✅ Version tokens + background L1 refresh | ❌ |
+| TTL management | ✅ Redis + SaaS | ✅ Redis + SaaS + Workers (`TtlInspectable`, LAB-426) | ✅ SaaS only (`TTLBackend`) | ❌ |
 | Stale-while-revalidate (server stale-grace) | 🚧 LAB-381 | ❌ | ❌ | ❌ |
 
 > **Lock id transport (CWE-532):** the unlock call carries the lock capability token in the `X-CacheKit-Lock-Id` request header, never the `?lock_id=` query string (which leaks via access/proxy logs and OTel `http.url` spans). **Migration complete in all three SDKs** (verified 2026-07-20, LAB-273): Python (#131, closed), Rust (#24, closed), TypeScript ships the header (ts#63 remains open only for an unrelated NAPI-rebuild item). SaaS dual-reads both during the rollout window. See [spec/saas-api.md](spec/saas-api.md#delete-v1cachekeylock).
@@ -200,9 +202,10 @@ its spec:
 <summary><strong>Rust SDK (cachekit-rs)</strong></summary>
 
 - Published on crates.io as `cachekit-rs` v0.3.0 + `cachekit-macros` v0.3.0
-- Feature flags: `redis`, `cachekitio`, `encryption`, `l1`, `macros`, `workers`
+- Feature flags: `redis`, `cachekitio`, `encryption`, `l1`, `macros`, `workers`, `reliability`
 - Backends: `RedisBackend` (fred), `CachekitIO` (reqwest), `WorkersCachekitIO` (CF Workers fetch)
 - L1 cache via moka (native only, `l1` feature)
+- Reliability tier (`reliability` feature, native): retry with backoff + jitter on the `is_retryable` classification, circuit breaker (rolling window), macro-level graceful degradation (fail-open; `secure` fail-closed), cold-miss single-flight with distributed fill locks
 - `#[cachekit]` proc-macro for decorator-style caching
 - `SecureCache` for zero-knowledge encrypted caching
 - SSRF protection, credential redaction, `Zeroizing` key material
