@@ -6,6 +6,13 @@ All notable changes to the CacheKit Protocol Specification.
 
 ### Specs
 
+- Key rotation specified (not yet implemented, LAB-516): client-side keyring —
+  one forward-only current key plus ≤3 decrypt-only master keys; fingerprint-based
+  key selection where per-entry identity exists (cachekit-py frames), sequential
+  same-AAD attempts elsewhere; no wire change. Retires the never-written 32-byte
+  `RotationAwareHeader` from the spec. Rationale, rejected options, and operator
+  runbooks in [decisions/key-rotation.md](decisions/key-rotation.md).
+
 - Interop mode promoted from draft to specified (interop/v1): flat canonical argument
   array (named→positional binding), number canonicalization (integral float64 → int,
   the only rule implementable in JS), code-point map-key ordering, encoded-byte set
