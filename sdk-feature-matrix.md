@@ -6,7 +6,7 @@
 
 **Feature parity and compliance status across all CacheKit SDK implementations.**
 
-*Last updated: 2026-07-24 — LAB-519: ts cold-miss single-flight (in-process, always on) + LockableBackend wired into `wrap()`'s miss path (opt-in); ts backpressure decision recorded; ts Redis lock/TTL capability cells refreshed for LAB-427*
+*Last updated: 2026-07-23 — LAB-519: ts cold-miss single-flight (in-process, always on) + LockableBackend wired into `wrap()`'s miss path (opt-in); ts backpressure decision recorded; ts Redis lock/TTL capability cells refreshed for LAB-427*
 
 </div>
 
@@ -236,7 +236,7 @@ its spec:
 - Circuit breaker (rolling window), retry (exponential backoff + jitter), graceful degradation
 - Distributed locking via Redis and CacheKit SaaS backends (`LockableBackend`)
 - Intent-based API: `createCache.minimal()`, `.production()`, `.secure()`, `.io()`
-- 567 tests, 94.79% statement coverage
+- 567 tests, 94.79% statement coverage (measured on the LAB-519 branch, cachekit-ts#77)
 - Dual output: ESM + CJS, Node 20+
 
 </details>
