@@ -6,7 +6,7 @@
 
 **Feature parity and compliance status across all CacheKit SDK implementations.**
 
-*Last updated: 2026-07-20 — LAB-273 backend-parity audit: DynamoDB corrected (ships nowhere), backend-abstraction section added, locking/TTL rows qualified per backend, lock-id header migration recorded complete*
+*Last updated: 2026-07-23 — LAB-426: Rust Redis gains distributed locking, Rust Workers gains locking + TTL inspection (cachekit-rs#37); rs capability cells flipped*
 
 </div>
 
@@ -104,15 +104,15 @@ The contract a storage backend must satisfy per SDK (bytes in / bytes out; seria
 
 | Capability | Python | Rust | TypeScript |
 | :--- | :--- | :--- | :--- |
-| TTL inspect / refresh | `TTLInspectableBackend` — Redis ✅, SaaS ✅, Memcached/File ❌ | `TtlInspectable` — Redis ✅, SaaS ✅, Workers ❌ | `TTLBackend` — SaaS ✅ (`TTLCachekitIO`), Redis ❌ |
-| Distributed locking | `LockableBackend` — Redis ✅ (`redis.lock.Lock`), SaaS ✅ | `LockableBackend` — SaaS ✅, Redis ❌, Workers ❌ | `LockableBackend` — SaaS ✅ (`LockableCachekitIO`), Redis ❌ |
+| TTL inspect / refresh | `TTLInspectableBackend` — Redis ✅, SaaS ✅, Memcached/File ❌ | `TtlInspectable` — Redis ✅, SaaS ✅, Workers ✅ (rs#37) | `TTLBackend` — SaaS ✅ (`TTLCachekitIO`), Redis ❌ |
+| Distributed locking | `LockableBackend` — Redis ✅ (`redis.lock.Lock`), SaaS ✅ | `LockableBackend` — SaaS ✅, Redis ✅ (`SET NX PX` + Lua compare-and-delete, `<key>:lock` shared with py; rs#37), Workers ✅ (rs#37) | `LockableBackend` — SaaS ✅ (`LockableCachekitIO`), Redis ❌ |
 | Per-operation timeout | `TimeoutConfigurableBackend` — Redis ✅ (SaaS ships a non-protocol `with_timeout` variant) | — no equivalent | — no equivalent |
 | Zero-copy buffer read | `BufferReadableBackend` / `BufferHandle` — File ✅ (mmap; #171) | — no equivalent | — no equivalent |
 
 > [!NOTE]
 > **Lock API shape divergence:** Python's `acquire_lock` is an async context manager yielding `bool` — the lock token stays internal and release is automatic. Rust and TypeScript return the raw `lock_id` capability token from `acquire_lock`/`acquireLock` and require an explicit `release_lock(key, lock_id)` — a direct mirror of the SaaS lock endpoint. All three pass the **bare cache key** (backends own any `:lock` namespace derivation). Porting a lockable backend across SDKs must bridge this shape difference.
 >
-> **Coverage, not shape, is the parity gap:** all three SDKs use the same required-base + optional-capability pattern, but Redis optional-capability coverage varies by SDK: Python has the broadest coverage (both locking and TTL inspection), Rust's Redis backend implements TTL inspection only (no locking), and TypeScript's Redis backend implements neither. Rust's Workers backend also lacks both despite speaking the same SaaS API (gap tickets under LAB-102).
+> **Coverage, not shape, is the parity gap:** all three SDKs use the same required-base + optional-capability pattern, but Redis optional-capability coverage varies by SDK. Python and Rust now cover both locking and TTL inspection on every capability-bearing backend (Rust's Redis lock and Workers lock/TTL landed in cachekit-rs#37, LAB-426); TypeScript's Redis backend still implements neither (LAB-427, under LAB-102).
 
 ---
 
@@ -122,10 +122,10 @@ The contract a storage backend must satisfy per SDK (bytes in / bytes out; seria
 | :--- | :---: | :---: | :---: | :---: |
 | Circuit breaker | ✅ | ❌ | ✅ | ❌ |
 | Backpressure | ✅ | ❌ | ⚠️ Concurrent refresh limits | ❌ |
-| Distributed locking | ✅ Redis + SaaS backends | ✅ SaaS backend only (`LockableBackend`; Redis/Workers lack impls) | ✅ SaaS backend only | ❌ |
+| Distributed locking | ✅ Redis + SaaS backends | ✅ Redis + SaaS + Workers (`LockableBackend`; rs#37) | ✅ SaaS backend only | ❌ |
 | L1/L2 dual-layer cache | ✅ | ✅ moka (native) / `l1` feature | ✅ | ❌ |
 | Cache stampede prevention | ✅ | ❌ | ✅ Version tokens + background L1 refresh | ❌ |
-| TTL management | ✅ Redis + SaaS | ✅ Redis + SaaS (`TtlInspectable`; Workers ❌) | ✅ SaaS only (`TTLBackend`) | ❌ |
+| TTL management | ✅ Redis + SaaS | ✅ Redis + SaaS + Workers (`TtlInspectable`; rs#37) | ✅ SaaS only (`TTLBackend`) | ❌ |
 | Stale-while-revalidate (server stale-grace) | 🚧 LAB-381 | ❌ | ❌ | ❌ |
 
 > **Lock id transport (CWE-532):** the unlock call carries the lock capability token in the `X-CacheKit-Lock-Id` request header, never the `?lock_id=` query string (which leaks via access/proxy logs and OTel `http.url` spans). **Migration complete in all three SDKs** (verified 2026-07-20, LAB-273): Python (#131, closed), Rust (#24, closed), TypeScript ships the header (ts#63 remains open only for an unrelated NAPI-rebuild item). SaaS dual-reads both during the rollout window. See [spec/saas-api.md](spec/saas-api.md#delete-v1cachekeylock).
