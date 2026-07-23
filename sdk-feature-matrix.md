@@ -6,7 +6,7 @@
 
 **Feature parity and compliance status across all CacheKit SDK implementations.**
 
-*Last updated: 2026-07-23 — LAB-431 Workers feasibility spike: ts Cloudflare Workers footnote records GO verdict via wasm32 cachekit-core (~64 KB gz measured; WebCrypto as fallback), implementation tracked as LAB-595*
+*Last updated: 2026-07-24 — LAB-430: ts Memcached + File backends shipped (`backends/memcached.ts`, `backends/file.ts`); TTL/locking capability rows refreshed to reflect LAB-427 (ts Redis) and LAB-446 (py File TTL, py Memcached refresh-only) landing after the LAB-273 audit*
 
 </div>
 
@@ -72,8 +72,8 @@
 | Backend | Python | Rust | TypeScript | PHP |
 | :--- | :---: | :---: | :---: | :---: |
 | Redis (direct) | ✅ `backends/redis` (redis-py, required dep) | ✅ `redis` feature (fred) | ✅ `backends/redis.ts` (ioredis) | ❌ |
-| Memcached | ✅ `backends/memcached` (`memcached` extra) | ❌ | ❌ | ❌ |
-| File (local) | ✅ `backends/file` (stdlib + mmap) | ❌ | ❌ | ❌ |
+| Memcached | ✅ `backends/memcached` (`memcached` extra) | ❌ | ✅ `backends/memcached.ts` (memjs, optional peer dep; LAB-430) | ❌ |
+| File (local) | ✅ `backends/file` (stdlib + mmap) | ❌ | ✅ `backends/file.ts` (`node:fs`, py-compatible on-disk format; LAB-430) | ❌ |
 | CacheKit SaaS (HTTP) | ✅ `backends/cachekitio` (httpx) | ✅ `cachekitio` feature (reqwest, default) | ✅ `backends/cachekitio.ts` (fetch) | 🔜 Planned |
 | Cloudflare Workers | N/A | ✅ `workers` feature (`worker::Fetch`) | ❌ Node 20+ only¹ | N/A |
 | DynamoDB | ❌² | ❌ | ❌ | ❌ |
@@ -104,15 +104,15 @@ The contract a storage backend must satisfy per SDK (bytes in / bytes out; seria
 
 | Capability | Python | Rust | TypeScript |
 | :--- | :--- | :--- | :--- |
-| TTL inspect / refresh | `TTLInspectableBackend` — Redis ✅, SaaS ✅, Memcached/File ❌ | `TtlInspectable` — Redis ✅, SaaS ✅, Workers ❌ | `TTLBackend` — SaaS ✅ (`TTLCachekitIO`), Redis ❌ |
-| Distributed locking | `LockableBackend` — Redis ✅ (`redis.lock.Lock`), SaaS ✅ | `LockableBackend` — SaaS ✅, Redis ❌, Workers ❌ | `LockableBackend` — SaaS ✅ (`LockableCachekitIO`), Redis ❌ |
+| TTL inspect / refresh | `TTLInspectableBackend` — Redis ✅, SaaS ✅, File ✅ (LAB-446); Memcached refresh-only (`refresh_ttl` via `touch`, no `get_ttl` — the protocol can't read TTLs) | `TtlInspectable` — Redis ✅, SaaS ✅, Workers ❌ | `TTLBackend` — SaaS ✅ (`TTLCachekitIO`), Redis ✅ (LAB-427), File ✅ (LAB-430); Memcached refresh-only (`refreshTTL` via `touch`, no `getTTL` — mirrors py) |
+| Distributed locking | `LockableBackend` — Redis ✅ (`redis.lock.Lock`), SaaS ✅ | `LockableBackend` — SaaS ✅, Redis ❌, Workers ❌ | `LockableBackend` — SaaS ✅ (`LockableCachekitIO`), Redis ✅ (LAB-427); Memcached/File ❌ |
 | Per-operation timeout | `TimeoutConfigurableBackend` — Redis ✅ (SaaS ships a non-protocol `with_timeout` variant) | — no equivalent | — no equivalent |
 | Zero-copy buffer read | `BufferReadableBackend` / `BufferHandle` — File ✅ (mmap; #171) | — no equivalent | — no equivalent |
 
 > [!NOTE]
 > **Lock API shape divergence:** Python's `acquire_lock` is an async context manager yielding `bool` — the lock token stays internal and release is automatic. Rust and TypeScript return the raw `lock_id` capability token from `acquire_lock`/`acquireLock` and require an explicit `release_lock(key, lock_id)` — a direct mirror of the SaaS lock endpoint. All three pass the **bare cache key** (backends own any `:lock` namespace derivation). Porting a lockable backend across SDKs must bridge this shape difference.
 >
-> **Coverage, not shape, is the parity gap:** all three SDKs use the same required-base + optional-capability pattern, but Redis optional-capability coverage varies by SDK: Python has the broadest coverage (both locking and TTL inspection), Rust's Redis backend implements TTL inspection only (no locking), and TypeScript's Redis backend implements neither. Rust's Workers backend also lacks both despite speaking the same SaaS API (gap tickets under LAB-102).
+> **Coverage, not shape, is the parity gap:** all three SDKs use the same required-base + optional-capability pattern, but Redis optional-capability coverage varies by SDK: Python and TypeScript cover both locking and TTL inspection (ts closed its gap in LAB-427), while Rust's Redis backend implements TTL inspection only (no locking). Rust's Workers backend also lacks both despite speaking the same SaaS API (gap tickets under LAB-102).
 
 ---
 
