@@ -70,6 +70,7 @@ layer's own store/retrieve flows are specified in
 | [spec/saas-api.md](spec/saas-api.md) | REST API endpoints, binary wire protocol, error codes, metrics headers |
 | [spec/interop-mode.md](spec/interop-mode.md) | Cross-SDK cache sharing — language-neutral key format, canonical argument normalization *(specified, not yet implemented in any SDK)* |
 | [sdk-feature-matrix.md](sdk-feature-matrix.md) | Feature parity tracking across Python, Rust, TypeScript, and PHP SDKs |
+| [decisions/key-rotation.md](decisions/key-rotation.md) | Decision records — master-key rotation via client-side keyring (rationale, rejected options, operator runbooks) |
 
 ---
 
