@@ -131,6 +131,10 @@ For key identification without revealing key material:
 fingerprint = SHA-256("key_fingerprint_v1" || key)[0..16]   // First 16 bytes
 ```
 
+For per-entry fingerprints — the value cachekit-py stores in CK frame metadata and
+the input to [keyring selection](#key-rotation-keyring) — `key` is the HKDF-derived
+per-tenant **encryption key** (`tenant_keys.encryption_key`), never the master key.
+
 ---
 
 ## Nonce Generation
@@ -358,7 +362,7 @@ cannot decrypt (zero-knowledge), so it can never re-encrypt. The mechanism is a
 | :--- | :--- |
 | Keyring | One **current** master key (encrypts and decrypts) plus an ordered list of **at most 3 decrypt-only** master keys — typically previous keys; during a [two-phase rollout](../decisions/key-rotation.md#runbooks-normative-for-docs), the incoming key. SDKs MUST reject configuration exceeding the cap at load — never silently truncate. |
 | Configuration | Cross-SDK env vars: `CACHEKIT_MASTER_KEY` (current, [as above](#master-key)) and `CACHEKIT_PREVIOUS_MASTER_KEYS` (decrypt-only list, comma-separated hex, same per-key validation). Programmatic naming is SDK-local. |
-| Forward-only current key | A master key that has ever occupied the current (encrypting) slot MUST NOT be re-promoted to current; it may re-appear only in the decrypt-only list. Backing out a rotation means rotating **forward** to a fresh key. Re-promotion resumes a used, unknowable nonce budget and risks catastrophic AES-GCM nonce reuse (plaintext recovery and forgery). |
+| Forward-only current key | A master key that has ever occupied the current (encrypting) slot MUST NOT be re-promoted to current; it may re-appear only in the decrypt-only list. Backing out a rotation means rotating **forward** to a fresh key. Re-promotion resumes a used, unknowable nonce budget and risks catastrophic AES-GCM nonce reuse (plaintext recovery and forgery). Enforcement: a stateless SDK cannot know whether a newly supplied current key was used before, so this invariant is **operator-enforced** (treat retired key material as destroyed); SDKs MUST reject the detectable subset — a configuration where the current key also appears in the decrypt-only list. |
 | Derivation | Each keyring entry independently derives per-tenant keys via the [HKDF construction above](#key-derivation). Salts, domains, and fingerprints are unchanged. |
 | Encrypt | Always the current key. A new master key yields freshly derived keys with a fresh per-key nonce budget — which is why rotation (always forward, to a *new* key) is the remedy when nonce-exhaustion monitoring fires. |
 | Decrypt — with per-entry key identity | Where the SDK stores a per-entry [key fingerprint](#key-fingerprint) (cachekit-py's CK frame metadata), select the keyring entry by exact fingerprint match; never trial-decrypt across the keyring. **The fingerprint is computed over the HKDF-derived per-tenant encryption key, not the master key**: selection derives the tenant's keys for each keyring entry, fingerprints each derived encryption key, and compares. A match is binding — if the matched key fails AES-GCM authentication, the failure is terminal (straight to the fail-open / fail-closed policy; no further keyring entries). No match → the SDK's existing fingerprint-mismatch semantics (fail-closed raises; fail-open attempts the current key only and treats the authentication failure as a miss). |
@@ -368,7 +372,8 @@ cannot decrypt (zero-knowledge), so it can never re-encrypt. The mechanism is a
 
 Nothing on the wire changes: the [ciphertext format](#ciphertext-format) and
 [AAD v0x03](#additional-authenticated-data-aad) contain no key identity, so every
-existing entry remains decryptable and cross-SDK interop is unaffected. Keyring
+existing entry remains format-compatible — and decryptable for as long as the key
+that encrypted it is retained in the keyring — and cross-SDK interop is unaffected. Keyring
 conformance vectors will accompany the implementations (test plan in the
 [decision record](../decisions/key-rotation.md#consequences--lab-516-sub-issues)).
 
@@ -432,13 +437,18 @@ process but fails authentication for any correct second reader (see
 ## Decryption Flow
 
 ```
-Input: ciphertext, stored metadata (format, compressed, optional original_type),
-       keyring (current master_key + decrypt-only master keys), tenant_id, cache_key
+Input: ciphertext, stored metadata (format, compressed, optional original_type,
+       optional per-entry key_fingerprint — SDK-internal storage, e.g.
+       cachekit-py's CK frame header), keyring (current master_key +
+       decrypt-only master keys), tenant_id, cache_key
 
 1. Select key:  per [Key Rotation (Keyring)](#key-rotation-keyring) — fingerprint
-                match where per-entry key identity exists, else sequential keyring
-                attempts (current first). Single-key configurations reduce to the
-                current key.
+                match where the stored key_fingerprint is present (binding: no
+                further keys after a match), else sequential keyring attempts,
+                current first — an authentication failure on an intermediate key
+                continues to the next permitted key; the hard-error semantics
+                below apply once permitted attempts are exhausted. Single-key
+                configurations reduce to the current key.
 2. Derive:      tenant_keys    = derive_tenant_keys(selected_master_key, tenant_id)
 3. Build AAD:   aad            = create_aad(tenant_id, cache_key,
                                             stored.format, stored.compressed, stored.original_type)
@@ -453,7 +463,8 @@ Input: ciphertext, stored metadata (format, compressed, optional original_type),
 ```
 
 The AAD in step 3 is rebuilt from the **stored cleartext metadata**; tampering makes
-step 4 fail authentication, which is a hard error — the no-retry and no-sniffing
+step 4 fail authentication, which is a hard error once the key attempts permitted by
+step 1 are exhausted — the no-retry and no-sniffing
 rules in [AAD v0x03 Format](#additional-authenticated-data-aad) apply. How each SDK
 stores this metadata (e.g. cachekit-py's CK frame header) is SDK-internal; the only
 cross-SDK-normative AAD inputs are interop mode's pinned four components.

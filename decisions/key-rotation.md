@@ -61,7 +61,9 @@ the operator removes the retired key.
 
 - No wire-format change: AAD v0x03 does not include key identity, and the
   ciphertext layout (`nonce ‖ ciphertext ‖ tag`) is untouched. Every deployed
-  ciphertext remains decryptable.
+  ciphertext remains format-compatible and decryptable for as long as the key
+  that encrypted it is retained in the keyring (dropping a key — retirement,
+  compromise cut-over — is the deliberate exception).
 - No server change, no SaaS involvement.
 - No state machine and no rotation API: rotation state **is** configuration.
 - Contains option B as its degenerate case: an empty decrypt-only list is a
@@ -107,6 +109,11 @@ Points that are decision, not mechanism:
   encrypting slot is never re-promoted; backing out a bad rotation means
   rotating forward to a fresh key. (Re-promotion resumes a used, unknowable
   nonce budget — catastrophic for AES-GCM. The spec carries the MUST NOT.)
+  A stateless SDK cannot detect re-promotion once the retired key has left the
+  supplied configuration, so the invariant is **operator-enforced**: treat
+  retired key material as destroyed. SDKs enforce the detectable subset only —
+  a configuration where the current key also appears in the decrypt-only list
+  is rejected at load.
 - **The cap is 3 decrypt-only keys.** Bounds worst-case sequential decrypt
   attempts and memory while allowing a forced mid-window second rotation
   (e.g. an offboarding landing during a long-TTL compliance window).
