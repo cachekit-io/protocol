@@ -6,7 +6,7 @@
 
 **Feature parity and compliance status across all CacheKit SDK implementations.**
 
-*Last updated: 2026-07-24 — LAB-446: Python File backend gains full TTL inspection/refresh; Memcached gains `refresh_ttl` (touch) only (see [TTL management note](#reliability-features)). LAB-595 shipped: ts Cloudflare Workers flipped ❌ → ✅ via the `@cachekit-io/cachekit/workers` entrypoint on a wasm32 cachekit-core build (~55 KB gz measured); footnote ¹ records the phase-1 surface and semantics deltas.*
+*Last updated: 2026-07-24 — LAB-446: Python File backend gains full TTL inspection/refresh; Memcached gains `refresh_ttl` (touch) only (see [TTL management note](#reliability-features)). LAB-595 shipped: ts Cloudflare Workers flipped ❌ → ✅ via the `@cachekit-io/cachekit/workers` entrypoint on a wasm32 cachekit-core build (~55 KB gz measured); footnote ¹ records the phase-1 surface and semantics deltas. LAB-519: ts cold-miss single-flight (in-process, always on) + LockableBackend wired into `wrap()`'s miss path (opt-in); ts backpressure decision recorded; ts Redis lock/TTL capability cells refreshed for LAB-427.*
 
 </div>
 
@@ -104,15 +104,15 @@ The contract a storage backend must satisfy per SDK (bytes in / bytes out; seria
 
 | Capability | Python | Rust | TypeScript |
 | :--- | :--- | :--- | :--- |
-| TTL inspect / refresh | `TTLInspectableBackend` — Redis ✅, SaaS ✅, File ✅, Memcached ⚠️ `refresh_ttl` only (LAB-446) | `TtlInspectable` — Redis ✅, SaaS ✅, Workers ❌ | `TTLBackend` — SaaS ✅ (`TTLCachekitIO`), Redis ❌ |
-| Distributed locking | `LockableBackend` — Redis ✅ (`redis.lock.Lock`), SaaS ✅ | `LockableBackend` — SaaS ✅, Redis ❌, Workers ❌ | `LockableBackend` — SaaS ✅ (`LockableCachekitIO`), Redis ❌ |
+| TTL inspect / refresh | `TTLInspectableBackend` — Redis ✅, SaaS ✅, File ✅, Memcached ⚠️ `refresh_ttl` only (LAB-446) | `TtlInspectable` — Redis ✅, SaaS ✅, Workers ❌ | `TTLBackend` — Redis ✅ (LAB-427), SaaS ✅ (`TTLCachekitIO`) |
+| Distributed locking | `LockableBackend` — Redis ✅ (`redis.lock.Lock`), SaaS ✅ | `LockableBackend` — SaaS ✅, Redis ❌, Workers ❌ | `LockableBackend` — Redis ✅ (LAB-427), SaaS ✅ (`LockableCachekitIO`) |
 | Per-operation timeout | `TimeoutConfigurableBackend` — Redis ✅ (SaaS ships a non-protocol `with_timeout` variant) | — no equivalent | — no equivalent |
 | Zero-copy buffer read | `BufferReadableBackend` / `BufferHandle` — File ✅ (mmap; #171) | — no equivalent | — no equivalent |
 
 > [!NOTE]
 > **Lock API shape divergence:** Python's `acquire_lock` is an async context manager yielding `bool` — the lock token stays internal and release is automatic. Rust and TypeScript return the raw `lock_id` capability token from `acquire_lock`/`acquireLock` and require an explicit `release_lock(key, lock_id)` — a direct mirror of the SaaS lock endpoint. All three pass the **bare cache key** (backends own any `:lock` namespace derivation). Porting a lockable backend across SDKs must bridge this shape difference.
 >
-> **Coverage, not shape, is the parity gap:** all three SDKs use the same required-base + optional-capability pattern, but Redis optional-capability coverage varies by SDK: Python has the broadest coverage (both locking and TTL inspection), Rust's Redis backend implements TTL inspection only (no locking), and TypeScript's Redis backend implements neither. Rust's Workers backend also lacks both despite speaking the same SaaS API (gap tickets under LAB-102).
+> **Coverage, not shape, is the parity gap:** all three SDKs use the same required-base + optional-capability pattern, but Redis optional-capability coverage varies by SDK: Python and TypeScript cover Redis fully (both locking and TTL inspection — TypeScript since LAB-427), while Rust's Redis backend implements TTL inspection only (no locking). Rust's Workers backend lacks both despite speaking the same SaaS API (gap tickets under LAB-102).
 
 ---
 
@@ -121,14 +121,16 @@ The contract a storage backend must satisfy per SDK (bytes in / bytes out; seria
 | Feature | Python | Rust | TypeScript | PHP |
 | :--- | :---: | :---: | :---: | :---: |
 | Circuit breaker | ✅ | ❌ | ✅ | ❌ |
-| Backpressure | ✅ | ❌ | ⚠️ Concurrent refresh limits | ❌ |
-| Distributed locking | ✅ Redis + SaaS backends | ✅ SaaS backend only (`LockableBackend`; Redis/Workers lack impls) | ✅ SaaS backend only | ❌ |
+| Backpressure | ✅ | ❌ | ⚠️ Refresh cap only — deliberate, decision recorded (LAB-519) | ❌ |
+| Distributed locking | ✅ Redis + SaaS backends | ✅ SaaS backend only (`LockableBackend`; Redis/Workers lack impls) | ✅ Redis + SaaS backends; wired into `wrap()` cold miss (opt-in `stampede.distributedLock`, LAB-519) | ❌ |
 | L1/L2 dual-layer cache | ✅ | ✅ moka (native) / `l1` feature | ✅ | ❌ |
-| Cache stampede prevention | ✅ | ❌ | ✅ Version tokens + background L1 refresh | ❌ |
-| TTL management | ✅ Redis + SaaS + File; Memcached refresh-only (see note) | ✅ Redis + SaaS (`TtlInspectable`; Workers ❌) | ✅ SaaS only (`TTLBackend`) | ❌ |
+| Cache stampede prevention | ✅ | ❌ | ✅ Cold-miss single-flight + SWR version tokens (LAB-519) | ❌ |
+| TTL management | ✅ Redis + SaaS + File; Memcached refresh-only (see note) | ✅ Redis + SaaS (`TtlInspectable`; Workers ❌) | ✅ Redis + SaaS (`TTLBackend`, LAB-427) | ❌ |
 | Stale-while-revalidate (server stale-grace) | 🚧 LAB-381 | ❌ | ❌ | ❌ |
 
 > **Lock id transport (CWE-532):** the unlock call carries the lock capability token in the `X-CacheKit-Lock-Id` request header, never the `?lock_id=` query string (which leaks via access/proxy logs and OTel `http.url` spans). **Migration complete in all three SDKs** (verified 2026-07-20, LAB-273): Python (#131, closed), Rust (#24, closed), TypeScript ships the header (ts#63 remains open only for an unrelated NAPI-rebuild item). SaaS dual-reads both during the rollout window. See [spec/saas-api.md](spec/saas-api.md#delete-v1cachekeylock).
+>
+> **TypeScript backpressure decision (LAB-519):** general admission control beyond L1's `maxConcurrentRefreshes` was evaluated and declined. On Node's single-threaded event loop concurrent misses don't compete for threads, cold-miss single-flight collapses the per-key herd (the amplification vector metered-misses punishes), and distinct-key miss floods are bounded by backend timeouts plus the circuit breaker — a global miss semaphore would add queueing latency and a tuning knob without a failure mode it prevents. Revisit only with evidence of backend connection exhaustion. Full rationale on `StampedeConfig` in cachekit-ts.
 
 > [!NOTE]
 > **TTL management is per-backend.** "TTL inspection/refresh" means the `TTLInspectableBackend`
@@ -243,10 +245,11 @@ its spec:
 - Encryption via Rust NAPI (AES-256-GCM, HKDF-SHA256, counter-based nonces)
 - AAD v0x03 compliant with Python cross-SDK test vectors
 - L1 LRU cache with background refresh, version tokens, namespace invalidation
+- Cold-miss single-flight per process (always on); opt-in cross-process locking via `stampede.distributedLock` (LAB-519)
 - Circuit breaker (rolling window), retry (exponential backoff + jitter), graceful degradation
-- Distributed locking via CacheKit SaaS backend
+- Distributed locking via Redis and CacheKit SaaS backends (`LockableBackend`)
 - Intent-based API: `createCache.minimal()`, `.production()`, `.secure()`, `.io()`
-- 457 tests, 93.75% statement coverage
+- 567 tests, 94.79% statement coverage (measured on the LAB-519 branch, cachekit-ts#77)
 - Dual output: ESM + CJS, Node 20+
 
 </details>
