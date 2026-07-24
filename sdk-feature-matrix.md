@@ -72,7 +72,7 @@
 | Backend | Python | Rust | TypeScript | PHP |
 | :--- | :---: | :---: | :---: | :---: |
 | Redis (direct) | ✅ `backends/redis` (redis-py, required dep) | ✅ `redis` feature (fred) | ✅ `backends/redis.ts` (ioredis) | ❌ |
-| Memcached | ✅ `backends/memcached` (`memcached` extra) | ✅ `memcached` feature (async-memcached)³ | ❌ | ❌ |
+| Memcached | ✅ `backends/memcached` (`memcached` extra) | ✅ `memcached` feature (rust-memcache)³ | ❌ | ❌ |
 | File (local) | ✅ `backends/file` (stdlib + mmap) | ✅ `file` feature (byte-compatible with py)³ | ❌ | ❌ |
 | CacheKit SaaS (HTTP) | ✅ `backends/cachekitio` (httpx) | ✅ `cachekitio` feature (reqwest, default) | ✅ `backends/cachekitio.ts` (fetch) | 🔜 Planned |
 | Cloudflare Workers | N/A | ✅ `workers` feature (`worker::Fetch`) | ❌ Node 20+ only¹ | N/A |
@@ -106,7 +106,7 @@ The contract a storage backend must satisfy per SDK (bytes in / bytes out; seria
 
 | Capability | Python | Rust | TypeScript |
 | :--- | :--- | :--- | :--- |
-| TTL inspect / refresh | `TTLInspectableBackend` — Redis ✅, SaaS ✅, File ✅ (header read/rewrite), Memcached ❌ (deliberate: protocol can't read TTLs; `refresh_ttl` ships as a bare `touch` wrapper outside the protocol) | `TtlInspectable` — Redis ✅, SaaS ✅, File ✅, Memcached ❌ (deliberate, mirrors py), Workers ❌ | `TTLBackend` — SaaS ✅ (`TTLCachekitIO`), Redis ❌ |
+| TTL inspect / refresh | `TTLInspectableBackend` — Redis ✅, SaaS ✅, File ✅ (header read/rewrite), Memcached ❌ (protocol can't read TTLs; a bare `refresh_ttl`/`touch` wrapper ships outside the protocol) | `TtlInspectable` — Redis ✅, SaaS ✅, File ✅, Memcached ❌ (protocol can't read TTLs; a bare `refresh_ttl`/`touch` wrapper ships outside the trait — same shape as py) | `TTLBackend` — SaaS ✅ (`TTLCachekitIO`), Redis ❌ |
 | Distributed locking | `LockableBackend` — Redis ✅ (`redis.lock.Lock`), SaaS ✅ | `LockableBackend` — SaaS ✅, Redis ✅ (`SET NX PX` + Lua compare-and-delete, `<key>:lock` namespace shared with py; LAB-426), Workers ❌ | `LockableBackend` — SaaS ✅ (`LockableCachekitIO`), Redis ❌ |
 | Per-operation timeout | `TimeoutConfigurableBackend` — Redis ✅ (SaaS ships a non-protocol `with_timeout` variant) | — no equivalent | — no equivalent |
 | Zero-copy buffer read | `BufferReadableBackend` / `BufferHandle` — File ✅ (mmap; #171) | — no equivalent | — no equivalent |
