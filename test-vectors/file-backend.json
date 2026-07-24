@@ -1,0 +1,40 @@
+{
+  "version": "1.0.0",
+  "generator": "cachekit-py FileBackend format v1",
+  "format": "File name = BLAKE2b-128(UTF-8 key) lowercase hex; header = CK | version | reserved | flags u16 BE | expiry u64 BE | payload",
+  "vectors": [
+    {
+      "name": "permanent_ascii",
+      "key_utf8": "test-key",
+      "filename": "0e2a03b49262c15a063c04d5a29c0158",
+      "header_hex": "434b010000000000000000000000",
+      "payload_hex": "68656c6c6f",
+      "file_hex": "434b01000000000000000000000068656c6c6f",
+      "expiry_unix_seconds": 0,
+      "flags": 0,
+      "reader_action": "return_payload"
+    },
+    {
+      "name": "future_expiry",
+      "key_utf8": "unicode-ключ-🔑",
+      "filename": "f13b0df717f97cf1d2fe3da650525c79",
+      "header_hex": "434b0100000000000000f4865700",
+      "payload_hex": "68656c6c6f",
+      "file_hex": "434b0100000000000000f486570068656c6c6f",
+      "expiry_unix_seconds": 4102444800,
+      "flags": 0,
+      "reader_action": "return_payload"
+    },
+    {
+      "name": "unknown_flag_preserved",
+      "key_utf8": "test-key",
+      "filename": "0e2a03b49262c15a063c04d5a29c0158",
+      "header_hex": "434b010000010000000000000000",
+      "payload_hex": "667574757265",
+      "file_hex": "434b010000010000000000000000667574757265",
+      "expiry_unix_seconds": 0,
+      "flags": 1,
+      "reader_action": "miss_preserve"
+    }
+  ]
+}

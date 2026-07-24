@@ -6,7 +6,7 @@
 
 **Feature parity and compliance status across all CacheKit SDK implementations.**
 
-*Last updated: 2026-07-24 — LAB-446: Python File backend gains full TTL inspection/refresh; Memcached gains `refresh_ttl` (touch) only (see [TTL management note](#reliability-features)). LAB-595 shipped: ts Cloudflare Workers flipped ❌ → ✅ via the `@cachekit-io/cachekit/workers` entrypoint on a wasm32 cachekit-core build (~55 KB gz measured); footnote ¹ records the phase-1 surface and semantics deltas. LAB-519: ts cold-miss single-flight (in-process, always on) + LockableBackend wired into `wrap()`'s miss path (opt-in); ts backpressure decision recorded; ts Redis lock/TTL capability cells refreshed for LAB-427.*
+*Last updated: 2026-07-25 — LAB-430 shipped TypeScript Node-only Memcached and File backends; the protocol-owned File format and vectors now define fail-closed flag negotiation. LAB-446: Python File backend gains full TTL inspection/refresh; Memcached gains `refresh_ttl` (touch) only (see [TTL management note](#reliability-features)). LAB-595 shipped: ts Cloudflare Workers flipped ❌ → ✅ via the `@cachekit-io/cachekit/workers` entrypoint on a wasm32 cachekit-core build (~55 KB gz measured); footnote ¹ records the phase-1 surface and semantics deltas. LAB-519: ts cold-miss single-flight (in-process, always on) + LockableBackend wired into `wrap()`'s miss path (opt-in); ts backpressure decision recorded; ts Redis lock/TTL capability cells refreshed for LAB-427.*
 
 </div>
 
@@ -72,8 +72,8 @@
 | Backend | Python | Rust | TypeScript | PHP |
 | :--- | :---: | :---: | :---: | :---: |
 | Redis (direct) | ✅ `backends/redis` (redis-py, required dep) | ✅ `redis` feature (fred) | ✅ `backends/redis.ts` (ioredis) | ❌ |
-| Memcached | ✅ `backends/memcached` (`memcached` extra) | ✅ `memcached` feature (rust-memcache)³ | ❌ | ❌ |
-| File (local) | ✅ `backends/file` (stdlib + mmap) | ✅ `file` feature (byte-compatible with py)³ | ❌ | ❌ |
+| Memcached | ✅ `backends/memcached` (`memcached` extra) | ✅ `memcached` feature (rust-memcache)³ | ✅ `backends/memcached.ts` (optional `memjs` peer; Node-only)⁴ | ❌ |
+| File (local) | ✅ `backends/file` (stdlib + mmap) | ✅ `file` feature (byte-compatible with py)³ | ✅ `backends/file.ts` (Node-only; [format](spec/file-backend-format.md))⁴ | ❌ |
 | CacheKit SaaS (HTTP) | ✅ `backends/cachekitio` (httpx) | ✅ `cachekitio` feature (reqwest, default) | ✅ `backends/cachekitio.ts` (fetch) | 🔜 Planned |
 | Cloudflare Workers | N/A | ✅ `workers` feature (`worker::Fetch`) | ✅ `@cachekit-io/cachekit/workers` (wasm32 core)¹ | N/A |
 | DynamoDB | ❌² | ❌ | ❌ | ❌ |
@@ -84,6 +84,8 @@
 
 >
 > ³ Added 2026-07-24 (LAB-429). Both are cargo features on cachekit-rs (`--features memcached` / `--features file`), native targets only (compile-error guarded against `workers`). The rs File backend shares py's on-disk format — Blake2b-128 hashed filenames, the 14-byte `CK` header, atomic write-then-rename, lazy expiry — verified by running the actual py `FileBackend` against an rs-written directory and vice versa. Not yet ported from py: LRU eviction/size caps and the mmap buffer read. rs Memcached is single-server (py's `HashClient` shards across servers); CI exercises it against a live memcached 1.6 container.
+
+> ⁴ Added 2026-07-25 (LAB-430). TypeScript exposes these Node-only backends only through subpath exports, keeping `memjs` optional and `node:fs` out of browser and edge bundles. File implements full `TTLBackend`; Memcached deliberately offers refresh-only `touch`, not `TTLBackend`, because it cannot inspect remaining TTL. File names and headers follow [spec/file-backend-format.md](spec/file-backend-format.md); unknown reserved or flag values are misses preserved for a newer reader.
 
 **Backend selection / env auto-detection:** Python is the only SDK that auto-detects *which* backend to use from the environment — a single unambiguous selector (`CACHEKIT_API_KEY` → SaaS, `CACHEKIT_REDIS_URL` → Redis, `CACHEKIT_MEMCACHED_SERVERS` → Memcached, `CACHEKIT_FILE_CACHE_DIR` → File; fallback `REDIS_URL` / localhost Redis; setting more than one selector raises `ConfigurationError`). Rust `CacheKit::from_env()` reads SaaS credentials only (`CACHEKIT_API_KEY` / `CACHEKIT_API_URL` / `CACHEKIT_MASTER_KEY` / `CACHEKIT_DEFAULT_TTL`) and always builds the CachekitIO backend — Redis/Memcached/File are wired explicitly via `.backend()`. TypeScript has no backend auto-detection: each preset fixes the backend type and env vars (`CACHEKIT_API_KEY`, `CACHEKIT_MASTER_KEY`) serve only as credential fallbacks. Whether rs/ts should gain selector-style auto-detection is an open product question, not a recorded decision (LAB-273 finding).
 
@@ -107,7 +109,7 @@ The contract a storage backend must satisfy per SDK (bytes in / bytes out; seria
 
 | Capability | Python | Rust | TypeScript |
 | :--- | :--- | :--- | :--- |
-| TTL inspect / refresh | `TTLInspectableBackend` — Redis ✅, SaaS ✅, File ✅, Memcached ⚠️ `refresh_ttl` only (LAB-446) | `TtlInspectable` — Redis ✅, SaaS ✅, File ✅, Memcached ⚠️ `refresh_ttl` only (LAB-429) | `TTLBackend` — Redis ✅ (LAB-427), SaaS ✅ (`TTLCachekitIO`) |
+| TTL inspect / refresh | `TTLInspectableBackend` — Redis ✅, SaaS ✅, File ✅, Memcached ⚠️ `refresh_ttl` only (LAB-446) | `TtlInspectable` — Redis ✅, SaaS ✅, File ✅, Memcached ⚠️ `refresh_ttl` only (LAB-429) | `TTLBackend` — Redis ✅, SaaS ✅ (`TTLCachekitIO`), File ✅; Memcached ⚠️ `refreshTTL` only (LAB-430) |
 | Distributed locking | `LockableBackend` — Redis ✅ (`redis.lock.Lock`), SaaS ✅ | `LockableBackend` — SaaS ✅, Redis ✅ (`SET NX PX` + Lua compare-and-delete, `<key>:lock` namespace shared with py; LAB-426), Workers ❌ | `LockableBackend` — Redis ✅ (LAB-427), SaaS ✅ (`LockableCachekitIO`) |
 | Per-operation timeout | `TimeoutConfigurableBackend` — Redis ✅ (SaaS ships a non-protocol `with_timeout` variant) | — no equivalent | — no equivalent |
 | Zero-copy buffer read | `BufferReadableBackend` / `BufferHandle` — File ✅ (mmap; #171) | — no equivalent | — no equivalent |
@@ -128,7 +130,7 @@ The contract a storage backend must satisfy per SDK (bytes in / bytes out; seria
 | Distributed locking | ✅ Redis + SaaS backends | ✅ Redis + SaaS (`LockableBackend`; LAB-426. Workers lacks an impl) | ✅ Redis + SaaS backends; wired into `wrap()` cold miss (opt-in `stampede.distributedLock`, LAB-519) | ❌ |
 | L1/L2 dual-layer cache | ✅ | ✅ moka (native) / `l1` feature | ✅ | ❌ |
 | Cache stampede prevention | ✅ | ❌ | ✅ Cold-miss single-flight + SWR version tokens (LAB-519) | ❌ |
-| TTL management | ✅ Redis + SaaS + File; Memcached refresh-only (see note) | ✅ Redis + SaaS + File (`TtlInspectable`); Memcached refresh-only (LAB-429) | ✅ Redis + SaaS (`TTLBackend`, LAB-427) | ❌ |
+| TTL management | ✅ Redis + SaaS + File; Memcached refresh-only (see note) | ✅ Redis + SaaS + File (`TtlInspectable`); Memcached refresh-only (LAB-429) | ✅ Redis + SaaS + File (`TTLBackend`); Memcached refresh-only (LAB-430) | ❌ |
 | Stale-while-revalidate (server stale-grace) | 🚧 LAB-381 | ❌ | ❌ | ❌ |
 
 > **Lock id transport (CWE-532):** the unlock call carries the lock capability token in the `X-CacheKit-Lock-Id` request header, never the `?lock_id=` query string (which leaks via access/proxy logs and OTel `http.url` spans). **Migration complete in all three SDKs** (verified 2026-07-20, LAB-273): Python (#131, closed), Rust (#24, closed), TypeScript ships the header (ts#63 remains open only for an unrelated NAPI-rebuild item). SaaS dual-reads both during the rollout window. See [spec/saas-api.md](spec/saas-api.md#delete-v1cachekeylock).
@@ -146,9 +148,7 @@ The contract a storage backend must satisfy per SDK (bytes in / bytes out; seria
 >   `refresh_ttl_on_get` does not apply to it (it warns once, then serves the hit).
 > - **Rust (LAB-429):** File implements the full capability; Memcached implements the
 >   refresh-only `touch` wrapper outside `TtlInspectable`, matching Python's split.
-> - **TypeScript:** parity for its existing backends is tracked separately; when a
->   Memcached/File backend lands there it must match this Python split (refresh-only Memcached,
->   full File) — see LAB-430.
+> - **TypeScript (LAB-430):** File implements the full `TTLBackend`; Memcached ships its `touch`-based `refreshTTL` method outside that capability, matching the Python and Rust split.
 
 ---
 
@@ -247,6 +247,7 @@ its spec:
 
 - Monorepo: `@cachekit-io/cachekit` (SDK) + `@cachekit-io/cachekit-core-ts` (Rust NAPI bindings)
 - Redis backend via ioredis, CacheKit SaaS backend via fetch API
+- Node-only Memcached (`memjs` optional peer) and File backends via subpath exports; File format is byte-verified against the shared protocol vectors
 - Encryption via Rust NAPI (AES-256-GCM, HKDF-SHA256, counter-based nonces)
 - AAD v0x03 compliant with Python cross-SDK test vectors
 - L1 LRU cache with background refresh, version tokens, namespace invalidation
