@@ -6,7 +6,7 @@
 
 **Feature parity and compliance status across all CacheKit SDK implementations.**
 
-*Last updated: 2026-07-24 — LAB-446: Python File backend gains full TTL inspection/refresh; Memcached gains `refresh_ttl` (touch) only (see [TTL management note](#reliability-features)). LAB-595 shipped: ts Cloudflare Workers flipped ❌ → ✅ via the `@cachekit-io/cachekit/workers` entrypoint on a wasm32 cachekit-core build (~55 KB gz measured); footnote ¹ records the phase-1 surface and semantics deltas. LAB-519: ts cold-miss single-flight (in-process, always on) + LockableBackend wired into `wrap()`'s miss path (opt-in); ts backpressure decision recorded; ts Redis lock/TTL capability cells refreshed for LAB-427.*
+*Last updated: 2026-07-25 — LAB-728: new **Stale-while-revalidate (client L1)** row, split from the server stale-grace row. rs ships L1 SWR (serve stale + `single_flight()`-deduped background re-execution, `#[cachekit]` path, rs#47); py's cell records the honest scope (L1-only mode per LAB-106 — the backed-mode ✓ was LAB-388's dead-code trust bug); ts cell summarises `getWithSwr` in `wrap()` incl. the Workers force-off¹.*
 
 </div>
 
@@ -129,6 +129,7 @@ The contract a storage backend must satisfy per SDK (bytes in / bytes out; seria
 | L1/L2 dual-layer cache | ✅ | ✅ moka (native) / `l1` feature | ✅ | ❌ |
 | Cache stampede prevention | ✅ | ❌ | ✅ Cold-miss single-flight + SWR version tokens (LAB-519) | ❌ |
 | TTL management | ✅ Redis + SaaS + File; Memcached refresh-only (see note) | ✅ Redis + SaaS + File (`TtlInspectable`); Memcached refresh-only (LAB-429) | ✅ Redis + SaaS (`TTLBackend`, LAB-427) | ❌ |
+| Stale-while-revalidate (client L1) | ✅ L1-only mode (`backend=None`) only: `get_with_swr` serves stale + refresh on a daemon thread (sync) / task (async), `swr_enabled` / `swr_threshold_ratio` (LAB-106; the backed-mode ✓ was the LAB-388 dead-code trust bug — removed) | ✅ `#[cachekit]` serves a stale L1 hit immediately + exactly one background re-execution deduped through the cold-miss `single_flight()` (in-process + distributed); builder `swr_enabled` / `swr_threshold_ratio`, default on / 0.5 ± 10% jitter; native only (LAB-728, rs#47 — live path: macro `interop_get_swr` → `L1Cache::get_with_swr`, verified non-blocking + exactly-once in `swr_tests`) | ✅ `getWithSwr` in `wrap()`: version tokens + background refresh, `maxConcurrentRefreshes` cap (forced off on the Workers entrypoint¹) | ❌ |
 | Stale-while-revalidate (server stale-grace) | 🚧 LAB-381 | ❌ | ❌ | ❌ |
 
 > **Lock id transport (CWE-532):** the unlock call carries the lock capability token in the `X-CacheKit-Lock-Id` request header, never the `?lock_id=` query string (which leaks via access/proxy logs and OTel `http.url` spans). **Migration complete in all three SDKs** (verified 2026-07-20, LAB-273): Python (#131, closed), Rust (#24, closed), TypeScript ships the header (ts#63 remains open only for an unrelated NAPI-rebuild item). SaaS dual-reads both during the rollout window. See [spec/saas-api.md](spec/saas-api.md#delete-v1cachekeylock).
