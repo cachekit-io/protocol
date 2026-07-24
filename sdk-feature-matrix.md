@@ -6,7 +6,7 @@
 
 **Feature parity and compliance status across all CacheKit SDK implementations.**
 
-*Last updated: 2026-07-23 — LAB-519: ts cold-miss single-flight (in-process, always on) + LockableBackend wired into `wrap()`'s miss path (opt-in); ts backpressure decision recorded; ts Redis lock/TTL capability cells refreshed for LAB-427*
+*Last updated: 2026-07-24 — LAB-595 shipped: ts Cloudflare Workers flipped ❌ → ✅ via the `@cachekit-io/cachekit/workers` entrypoint on a wasm32 cachekit-core build (~55 KB gz measured); footnote ¹ records the phase-1 surface and semantics deltas. LAB-519: ts cold-miss single-flight (in-process, always on) + LockableBackend wired into `wrap()`'s miss path (opt-in); ts backpressure decision recorded; ts Redis lock/TTL capability cells refreshed for LAB-427*
 
 </div>
 
@@ -75,10 +75,10 @@
 | Memcached | ✅ `backends/memcached` (`memcached` extra) | ❌ | ❌ | ❌ |
 | File (local) | ✅ `backends/file` (stdlib + mmap) | ❌ | ❌ | ❌ |
 | CacheKit SaaS (HTTP) | ✅ `backends/cachekitio` (httpx) | ✅ `cachekitio` feature (reqwest, default) | ✅ `backends/cachekitio.ts` (fetch) | 🔜 Planned |
-| Cloudflare Workers | N/A | ✅ `workers` feature (`worker::Fetch`) | ❌ Node 20+ only¹ | N/A |
+| Cloudflare Workers | N/A | ✅ `workers` feature (`worker::Fetch`) | ✅ `@cachekit-io/cachekit/workers` (wasm32 core)¹ | N/A |
 | DynamoDB | ❌² | ❌ | ❌ | ❌ |
 
-> ¹ The TS SDK cannot run on the Workers runtime today: crypto is a native NAPI module and the Redis backend is ioredis (TCP). Recorded as ❌ (a plausible target, unsupported) rather than N/A. Feasibility spike LAB-431 (2026-07-22, revised 2026-07-23) returned **GO** via a **wasm32 build of cachekit-core** — measured at ~64 KB gzipped (153 KB raw + JS glue, wasm-bindgen + wasm-opt) for the full crypto + ByteStorage surface, so counter nonces and the envelope carry over unchanged and the crypto stays single-touchpoint in the Rust core. The CachekitIO backend is already pure `fetch`, and a planned `workerd`-conditional entrypoint keeps ioredis/NAPI out of the edge bundle. WebCrypto (AES-256-GCM + HKDF-SHA256, random-nonce fallback per [encryption.md → Nonce Generation](spec/encryption.md#nonce-generation)) was evaluated as viable and stands as the documented fallback. Implementation tracked as LAB-595.
+> ¹ Shipped in LAB-595 (2026-07-24), following spike LAB-431's GO verdict: the `@cachekit-io/cachekit/workers` subpath (also the `workerd` condition on the root export) runs crypto and the ByteStorage envelope on a **wasm32 build of cachekit-core** (`@cachekit-io/cachekit-core-wasm`, 137 KB raw / ~55 KB gzipped + ~10 KB JS glue, wasm-bindgen `--target web` + wasm-opt `-Oz`) — counter nonces and the envelope carry over unchanged and the crypto stays single-touchpoint in the Rust core; byte-verified against the Python-ground-truth `test-vectors/encryption.json` and `wire-format.json` suites inside real workerd. Phase-1 surface: CachekitIO backend (pure `fetch`) or a custom `Backend` instance; Redis-URL intents, Redis Pub/Sub invalidation, and Prometheus metrics stay Node-only and are excluded from the edge bundle (CI-guarded: no `node:*`, no NAPI, no ioredis/prom-client — no `nodejs_compat` flag needed); SWR background refresh is forced off (fire-and-forget refreshes aren't tied to `ctx.waitUntil` yet and workerd cancels them at response return). Semantics delta: keys live in wasm linear memory (a host-readable ArrayBuffer), weaker isolation than NAPI's Rust heap but ~JS-heap-equivalent on Workers where the host is your own isolate; zeroized deterministically on `dispose()`. WebCrypto (AES-256-GCM + HKDF-SHA256, random-nonce fallback per [encryption.md → Nonce Generation](spec/encryption.md#nonce-generation)) remains the documented fallback if the wasm path ever hits a wall.
 >
 > ² DynamoDB has never shipped in any SDK. The previous Python ✅ traced to the [custom-backend tutorial](https://github.com/cachekit-io/cachekit-py/blob/main/docs/backends/custom.md), which shows how a *user* can implement the backend protocol against DynamoDB — that is an extension point, not shipped support (LAB-273).
 
@@ -143,7 +143,7 @@ The contract a storage backend must satisfy per SDK (bytes in / bytes out; seria
 | Builder API | ✅ | ✅ `CacheKit::builder()` / `from_env()` | ✅ | ❌ |
 | Async support | ✅ | ✅ | ✅ | ❌ |
 | Sync support | ✅ | ✅ | ❌ | ✅ |
-| WASM / CF Workers | N/A | ✅ `workers` feature (`?Send`, `Rc`) | N/A | N/A |
+| WASM / CF Workers | N/A | ✅ `workers` feature (`?Send`, `Rc`) | ✅ `/workers` entrypoint (wasm32 core)¹ | N/A |
 | pydantic-settings config | ✅ | N/A | N/A | N/A |
 | Type hints / strict types | ✅ | ✅ | ✅ | ✅ PHP 8.1+ |
 
