@@ -122,7 +122,7 @@ The contract a storage backend must satisfy per SDK (bytes in / bytes out; seria
 | :--- | :---: | :---: | :---: | :---: |
 | Circuit breaker | ✅ | ✅ `reliability` feature — on in `production`/`encrypted`/`io` presets, off in `minimal` (LAB-518) | ✅ | ❌ |
 | Retry (exponential backoff + jitter) | ✅ | ✅ on transient/timeout classification (`is_retryable`), inside the breaker (LAB-518) | ✅ | ❌ |
-| Graceful degradation | ✅ fail-open on `BackendError` | ✅ `#[cachekit]` runs the function uncached on backend failure; `secure` fails closed (LAB-518) | ✅ | ❌ |
+| Graceful degradation | ✅ fail-open on `BackendError` | ✅ `#[cachekit]` runs the function uncached on outage-class failures (transient/timeout/circuit-open); permanent/auth errors propagate; `secure` fails closed on everything (LAB-518) | ✅ | ❌ |
 | Backpressure | ✅ | ❌ | ⚠️ Concurrent refresh limits | ❌ |
 | Distributed locking | ✅ Redis + SaaS backends | ✅ SaaS + Redis + Workers (`LockableBackend`, LAB-426) | ✅ SaaS backend only | ❌ |
 | L1/L2 dual-layer cache | ✅ | ✅ moka (native) / `l1` feature | ✅ | ❌ |
