@@ -6,7 +6,7 @@
 
 **Feature parity and compliance status across all CacheKit SDK implementations.**
 
-*Last updated: 2026-07-25 — LAB-430 shipped TypeScript Node-only Memcached and File backends; the protocol-owned File format and vectors now define fail-closed flag negotiation. LAB-446: Python File backend gains full TTL inspection/refresh; Memcached gains `refresh_ttl` (touch) only (see [TTL management note](#reliability-features)). LAB-595 shipped: ts Cloudflare Workers flipped ❌ → ✅ via the `@cachekit-io/cachekit/workers` entrypoint on a wasm32 cachekit-core build (~55 KB gz measured); footnote ¹ records the phase-1 surface and semantics deltas. LAB-519: ts cold-miss single-flight (in-process, always on) + LockableBackend wired into `wrap()`'s miss path (opt-in); ts backpressure decision recorded; ts Redis lock/TTL capability cells refreshed for LAB-427.*
+*Last updated: 2026-07-25 — LAB-430 shipped TypeScript Node-only Memcached and File backends; the protocol-owned File format and vectors now define fail-closed flag negotiation. LAB-446: Python File backend gains full TTL inspection/refresh; Memcached gains `refresh_ttl` (touch) only (see [TTL management note](#reliability-features)). LAB-595 shipped: ts Cloudflare Workers flipped ❌ → ✅ via the `@cachekit-io/cachekit/workers` entrypoint on a wasm32 cachekit-core build (~55 KB gz measured); footnote ¹ records the phase-1 surface and semantics deltas. LAB-519: ts cold-miss single-flight (in-process, always on) + LockableBackend wired into `wrap()`'s miss path (opt-in); ts backpressure decision recorded; ts Redis lock/TTL capability cells refreshed for LAB-427. LAB-272 code-verified protocol-adherence audit (2026-07-22): interop/v1 merged in Python ([cachekit-py#220](https://github.com/cachekit-io/cachekit-py/pull/220)), TypeScript ([cachekit-ts#71](https://github.com/cachekit-io/cachekit-ts/pull/71)), and Rust ([cachekit-rs#33](https://github.com/cachekit-io/cachekit-rs/pull/33)); test-vector CI coverage corrected*
 
 </div>
 
@@ -63,7 +63,7 @@
 | Counter-based nonces | ✅ via Rust | ✅ | ✅ via NAPI (Rust) | ❌ use random |
 
 > [!IMPORTANT]
-> AAD v0x03 is required for protocol compliance. SDKs without it cannot safely interoperate with encrypted payloads from compliant SDKs — the auth tag will fail verification. See [spec/encryption.md](spec/encryption.md#additional-authenticated-data-aad). Python, Rust, and TypeScript SDKs are compliant as of 2026-04-06.
+> AAD v0x03 is required for protocol compliance. SDKs without it cannot safely interoperate with encrypted payloads from compliant SDKs — the auth tag will fail verification. Python, Rust, and TypeScript construction was code-verified byte-identical on 2026-07-21 (LAB-272); the normative byte layout and the frozen `True`/`False` compressed tokens (protocol#12) are defined in [spec/encryption.md](spec/encryption.md#additional-authenticated-data-aad). Python's auto serializers append the optional `original_type` fifth component; Rust, TypeScript, and interop mode always emit exactly four. Python's read path fails closed when encryption is enabled but a stored entry claims plaintext ([cachekit-py#215](https://github.com/cachekit-io/cachekit-py/pull/215)).
 
 ---
 
@@ -186,20 +186,21 @@ its spec:
 
 | Requirement | Python | Rust | TypeScript | PHP |
 | :--- | :---: | :---: | :---: | :---: |
-| Key generation (Blake2b) | ✅ Compliant | N/A (SDK-level, not in core) | ✅ Compliant | ⚠️ Untested |
-| Wire format (ByteStorage) | ✅ Compliant¹ | ✅ Canonical (`cachekit-core`) — unused for stored values¹ | ✅ Compliant | ⚠️ Untested |
-| Storage container (auto mode)¹ | CK v3 frame (Python-internal) | Plain MessagePack (`rmp` named) — no envelope | Bare ByteStorage envelope (default) | — |
+| Key generation (Blake2b) | ✅ Compliant | N/A auto mode¹ — interop/v1 keygen ✅ merged ([#33](https://github.com/cachekit-io/cachekit-rs/pull/33)); `#[cachekit]` mints interop keys ([#35](https://github.com/cachekit-io/cachekit-rs/pull/35)) | ✅ Compliant | ⚠️ Untested |
+| Wire format (ByteStorage) | ✅ Compliant² | ✅ Canonical (`cachekit-core`) — unused for stored values² | ✅ Compliant | ⚠️ Untested |
+| Storage container (auto mode)² | CK v3 frame (Python-internal) | Plain MessagePack (`rmp` named) — no envelope | Bare ByteStorage envelope (default) | — |
 | Encryption (AES-256-GCM) | ✅ Compliant | ✅ Canonical (cachekit-core) | ✅ Compliant | ⚠️ Untested |
-| AAD v0x03 | ✅ Compliant | ✅ Compliant | ✅ Compliant | ❌ Not implemented |
+| AAD v0x03 | ✅ Compliant (5 components — every auto serializer appends `original_type`; interop mode is the sole 4-component path) | ✅ Compliant (4 components) | ✅ Compliant (4 components) | ❌ Not implemented |
 | SaaS API | ✅ Compliant | ✅ Compliant (CachekitIO backend) | ✅ Compliant | ❌ Not implemented |
-| Test vectors | ⚠️ Pending | ⚠️ Pending | ✅ Python cross-SDK vectors | ⚠️ Pending |
-| Interop mode ([spec](spec/interop-mode.md), opt-in) | ❌ Not implemented | ❌ Not implemented | ❌ Not implemented | ❌ Not implemented |
+| Test vectors in CI³ | ✅ interop/v1 (full set, incl. AAD + encryption through the real stack) | ✅ interop/v1 (full set) since [#33](https://github.com/cachekit-io/cachekit-rs/pull/33) | ✅ interop/v1 (full set, incl. its key vectors) + inline Python-generated AAD-construction and encryption (decrypt-Python-ciphertext) vectors | ⚠️ Pending |
+| Interop mode ([spec](spec/interop-mode.md), opt-in) | ✅ Merged ([#220](https://github.com/cachekit-io/cachekit-py/pull/220), unreleased) | ✅ Merged ([#33](https://github.com/cachekit-io/cachekit-rs/pull/33), unreleased) | ✅ Merged ([#71](https://github.com/cachekit-io/cachekit-ts/pull/71), unreleased) | ❌ Not implemented |
 
 > [!NOTE]
-> "N/A" for Rust key generation means `cachekit-core` is a protocol primitive library. Key generation (Blake2b) is an SDK-level concern — `cachekit-rs` delegates cache key construction to the caller via the `key` parameter on `get`/`set`/`#[cachekit]`.
-
-> [!NOTE]
-> ¹ Auto-mode **stored bytes** are SDK-internal and differ per SDK — see [wire-format.md → SDK Storage Containers](spec/wire-format.md#sdk-storage-containers-auto-mode). Python stores the ByteStorage envelope *inside* its CK v3 frame; `cachekit-rs` does not use the envelope for values at all (it uses `cachekit-core` only for encryption). Cross-SDK value compatibility is exclusively an [interop-mode](spec/interop-mode.md) property (protocol#11).
+> ¹ "N/A" for Rust *auto-mode* key generation means `cachekit-rs` implements no auto-mode key format: `get`/`set` take caller-supplied keys. The `#[cachekit]` macro mints **interop/v1** keys via `interop_key` — required, compile-time-validated `interop = "operation"` and `namespace` attributes, byte-identical across SDKs ([cachekit-rs#35](https://github.com/cachekit-io/cachekit-rs/pull/35) / LAB-424; keygen itself merged in [#33](https://github.com/cachekit-io/cachekit-rs/pull/33)). The legacy RFC §3.1.5 keygen (`key::generate_cache_key`, `{namespace}:{blake2b256-hex}` — matched no protocol format, and WAS live in every `#[cachekit]` expansion despite the audit's "unused" premise, a proc-macro grep miss) is deleted outright in #35; upgrading is a full cache invalidation for `#[cachekit]` users. `cachekit-core` is a protocol primitive library with no keygen.
+>
+> ² Auto-mode **stored bytes** are SDK-internal and differ per SDK — see [wire-format.md → SDK Storage Containers](spec/wire-format.md#sdk-storage-containers-auto-mode). Python stores the ByteStorage envelope *inside* its CK v3 frame; `cachekit-rs` does not use the envelope for values at all (it uses `cachekit-core` only for encryption). Cross-SDK value compatibility is exclusively an [interop-mode](spec/interop-mode.md) property (protocol#11).
+>
+> ³ "Test vectors in CI" = vectors the SDK's own default CI executes. Beyond the SDKs, this repo's `verify.yml` CI-verifies `interop-mode.json`, `encryption.json`, `python-frame.json`, and — since LAB-423 — `wire-format.json` ([`tools/wire-format-reference.py`](tools/wire-format-reference.py)) against reference implementations. `cache-keys.json` (regenerated by cachekit-py v0.12.0, byte-identical to the v0.5.0 originals) is vendored and CI-verified in cachekit-py since [cachekit-py#229](https://github.com/cachekit-io/cachekit-py/pull/229) (LAB-425).
 
 ---
 

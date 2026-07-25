@@ -6,7 +6,7 @@
 
 **LZ4 compression + xxHash3-64 integrity wrapping for cached payloads that use the envelope.**
 
-*Protocol Version 1.0 · Verified against `cachekit-core` v0.3.0 (`src/byte_storage.rs`); envelope test vectors generated at v0.2.0 and unchanged since*
+*Protocol Version 1.1 · Verified against `cachekit-core` v0.3.0 (`src/byte_storage.rs`); legacy envelope test vectors generated at v0.2.0 and unchanged since — `bin`-encoded twins added in protocol 1.1 ([decisions/envelope-bin-encoding.md](../decisions/envelope-bin-encoding.md))*
 
 </div>
 
@@ -66,26 +66,51 @@ StorageEnvelope {
 ### Byte Layout (canonical encoding)
 
 `rmp_serde::to_vec` encodes the struct **positionally** — a 4-element MessagePack
-**array**, not a named map. And because Serde routes `Vec<u8>` / `[u8; 8]` through
-`serialize_seq`, the two byte fields are encoded as **MessagePack arrays of
-integers**, not `bin`:
+**array**, not a named map:
 
 ```text
-┌───────────────────────────────────────────────────────────────────┐
-│                  MessagePack Array (4 elements)                   │
-├───────────────────┬───────────────────────────────────────────────┤
-│ [0] compressed_data │ <array of uint> LZ4 block bytes, one int each │
-│ [1] checksum        │ <array of 8 uint> xxHash3-64, big-endian      │
-│ [2] original_size   │ <uint> bytes before compression               │
-│ [3] format          │ <str>  e.g. "msgpack"                         │
-└───────────────────┴───────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────────────┐
+│                   MessagePack Array (4 elements)                    │
+├───────────────────┬─────────────────────────────────────────────────┤
+│ [0] compressed_data │ <bin> LZ4 block bytes (0xc4/0xc5/0xc6)          │
+│ [1] checksum        │ <array of 8 uint> xxHash3-64, big-endian        │
+│ [2] original_size   │ <uint> bytes before compression                 │
+│ [3] format          │ <str>  e.g. "msgpack"                           │
+└───────────────────┴─────────────────────────────────────────────────┘
 ```
 
-Worked example — the `simple_string` vector from
+As of **protocol 1.1**, writers MUST encode `compressed_data` (element `[0]`) as
+MessagePack **`bin`** (`0xc4`/`0xc5`/`0xc6`, shortest form). Readers MUST **also**
+accept the legacy encoding below — a stored envelope never expires on a schedule,
+so legacy-read support is permanent.
+
+> [!NOTE]
+> **Implementation status:** no shipped release emits the canonical `bin`
+> encoding yet — `cachekit-core` v0.3.0 (current) still writes the legacy
+> encoding. The writer flip is tracked in LAB-764 /
+> [cachekit-core#54](https://github.com/cachekit-io/cachekit-core/issues/54).
+
+`checksum` (element `[1]`) is **deliberately excluded** from the `bin` encoding: it
+stays an array of 8 integers. The saving would be 1–7 bytes per envelope, and the
+field is crypto-adjacent surface — not worth touching
+([decisions/envelope-bin-encoding.md](../decisions/envelope-bin-encoding.md)).
+`original_size`, `format`, and the outer `fixarray(4)` are likewise unchanged.
+
+#### Legacy element[0] encoding (pre-1.1 writers)
+
+Because the pre-1.1 `StorageEnvelope` routed `Vec<u8>` through Serde's
+`serialize_seq`, `compressed_data` was encoded as a **MessagePack array of
+integers** — one element per byte, 2 bytes on the wire for any byte ≥ `0x80`.
+The envelope's logical contents are identical in both encodings; motivation and
+measurements live in
+[decisions/envelope-bin-encoding.md](../decisions/envelope-bin-encoding.md).
+
+Worked example — the `simple_string` vector pair from
 [`test-vectors/wire-format.json`](../test-vectors/wire-format.json), input
-`"hello, cachekit!"` (16 bytes):
+`"hello, cachekit!"` (16 bytes), in both encodings:
 
 ```text
+Legacy (array-of-ints, pre-1.1 writers — vector `simple_string`, 44 B):
 94                                        fixarray(4)
   dc 0012                                 array16(18)          compressed_data
     cc f0                                 uint8 240              LZ4 token (15 literals + ext)
@@ -96,15 +121,75 @@ Worked example — the `simple_string` vector from
     6d cc8a 34 ccb6 3a 3c 52 ccd3                                6d 8a 34 b6 3a 3c 52 d3
   10                                      fixint 16            original_size
   a7 6d 73 67 70 61 63 6b                 fixstr(7)            format = "msgpack"
+
+Canonical (bin, 1.1+ writers — vector `simple_string_bin`, 42 B):
+94                                        fixarray(4)
+  c4 12                                   bin8(18)             compressed_data
+    f0 01 68 65 6c 6c 6f 2c               raw bytes              same 18 LZ4 bytes,
+    20 63 61 63 68 65 6b 69 74 21                                1 byte each on the wire
+  98                                      fixarray(8)          checksum (unchanged)
+    6d cc8a 34 ccb6 3a 3c 52 ccd3                                6d 8a 34 b6 3a 3c 52 d3
+  10                                      fixint 16            original_size (unchanged)
+  a7 6d 73 67 70 61 63 6b                 fixstr(7)            format = "msgpack" (unchanged)
 ```
 
+### Encoding compatibility (dual-read)
+
+The two encodings are **mutually intelligible in both directions** under
+`rmp-serde` — this is a property of the deployed readers, not a migration
+promise. Toolchain-verified (rmp-serde 1.3.1, serde_bytes 0.11.19, rmp 0.8.15,
+serde 1.0.228) on all six byte-pinned vectors, including `bin` wire fed through
+the shipped `ByteStorage::retrieve()` with checksum validation and
+decompression-ratio guards intact (LAB-764):
+
+| Reader | Legacy wire (array-of-ints) | Canonical wire (`bin`) |
+| :--- | :---: | :---: |
+| Pre-flip (plain `Vec<u8>`, shipped today) | ✅ status quo | ✅ |
+| Post-flip (`serde_bytes`) | ✅ | ✅ |
+
+Consequences:
+
+- **This is not a breaking change, and no version field or discriminator is
+  introduced.** The MessagePack marker on element `[0]` is self-describing;
+  the outer envelope shape is unchanged.
+- The envelope codec is **single-sourced in `cachekit-core`** — every SDK
+  (py via FFI, ts via NAPI and wasm32) reaches it through the Rust core, and
+  `cachekit-rs` does not use the envelope for values at all. No SDK hand-parses
+  the envelope. Any future non-`rmp-serde` implementation is bound by the same
+  reader requirement stated under [Byte Layout](#byte-layout-canonical-encoding).
+- **Encrypted entries are unaffected structurally**: the envelope bytes are the
+  AES-GCM *plaintext*, and [AAD v0x03](encryption.md#additional-authenticated-data-aad)
+  is built exclusively from metadata (`tenant_id`, `cache_key`, `format` token,
+  `compressed` token, optional `original_type`) — no envelope bytes feed the AAD,
+  and the flip introduces no new `format` token. A stored entry decrypts to the
+  envelope encoding it was written with; the dual-read rule then applies. No
+  re-encryption, no AAD change.
+
+> [!NOTE]
+> **Size micro-regression on tiny envelopes.** The only length tier where `bin`
+> loses is `compressed_data` ≤ 15 bytes (bin8 header 2 B vs fixarray 1 B), so an
+> envelope can **grow by at most 1 byte** — and only when no payload byte is
+> ≥ `0x80` (measured: the `empty` vector grows 25 → 26 B; `single_byte` is
+> unchanged at 27 B). Every other envelope shrinks or stays equal; measured wins
+> are in [decisions/envelope-bin-encoding.md](../decisions/envelope-bin-encoding.md).
+
+Both encodings are pinned by
+[`test-vectors/wire-format.json`](../test-vectors/wire-format.json): the legacy
+vectors are retained **forever** as legacy-read proof, and each has a `*_bin`
+twin appended in protocol 1.1 (marked `"envelope_encoding": "bin"`). The fixture
+is append-only and verified in this repo's CI by
+[`tools/wire-format-reference.py`](../tools/wire-format-reference.py); vector
+provenance and the downstream re-pin plan live in
+[decisions/envelope-bin-encoding.md](../decisions/envelope-bin-encoding.md).
+
 > [!WARNING]
-> **Earlier revisions of this document described the envelope as a MessagePack map
-> with `bin`-encoded byte fields. That was never what `cachekit-core` emitted** — the
-> published test vectors (generated from the implementation) have always used the
-> positional-array encoding above, and the TypeScript SDK's protocol tests verify it
-> byte-for-byte against Python. The array encoding is authoritative and canonical.
-> Writers MUST emit it.
+> **History.** Earlier revisions of this document described the envelope as a
+> MessagePack *map* with `bin`-encoded byte fields — **that was never what
+> `cachekit-core` emitted** (the envelope has always been the positional array
+> above; protocol#11 corrected the prose). Writers emitted the array-of-ints
+> element-`[0]` encoding through protocol 1.0; protocol 1.1 makes `bin` the
+> canonical writer encoding for `compressed_data` only. `checksum` remains an
+> array of integers in **both** revisions — a reader MUST NOT expect `bin` there.
 
 > [!WARNING]
 > **Discrepancy with RFC** — The RFC (Section 4.3.3) states the checksum is **Blake3 (32 bytes)**. The actual `cachekit-core` implementation uses **xxHash3-64 (8 bytes)**. The crate comments explain: "xxHash3-64 checksums for corruption detection (19x faster than Blake3)". xxHash3-64 is non-cryptographic — tamper resistance is provided by the encryption layer (AES-GCM auth tag), not the checksum. **The implementation (xxHash3-64) is authoritative.**
@@ -176,6 +261,11 @@ let checksum: [u8; 8] = xxh3_64(&original_data).to_be_bytes();
 
 > [!IMPORTANT]
 > All three limits below MUST be enforced by every implementation of the ByteStorage envelope. The decompression bomb check uses integer arithmetic — do not substitute floating-point.
+> Additionally, a decoder MUST validate any declared MessagePack `bin`/array
+> length header against the remaining input bytes **before** allocating for it —
+> a 5-byte `bin32` header can otherwise declare a 4 GiB allocation from a
+> ~30-byte envelope. (Slice-based decoders such as `rmp-serde` satisfy this
+> inherently; readers that pre-allocate from length fields must check.)
 
 | Limit | Value | Purpose |
 | :--- | ---: | :--- |
@@ -219,7 +309,7 @@ Input: raw_data (bytes), format (string, default "msgpack")
                   original_size:   raw_data.length,
                   format:          format
               }
-6. Serialize: envelope_bytes = msgpack_encode(envelope)
+6. Serialize: envelope_bytes = msgpack_encode(envelope)   // compressed_data as bin (1.1+)
 7. Validate:  envelope_bytes.length <= 512 MB
 8. Return:    envelope_bytes
 ```
@@ -238,6 +328,7 @@ Input: envelope_bytes
 
 1.  Validate:    envelope_bytes.length <= 512 MB
 2.  Deserialize: envelope = msgpack_decode(envelope_bytes) as StorageEnvelope
+                 // accept BOTH element[0] encodings: bin AND array-of-ints
 3.  Validate:    envelope.compressed_data.length <= 512 MB
 4.  Validate:    envelope.original_size <= 512 MB
 5.  Bomb check:  (see Security Limits above)
