@@ -79,6 +79,12 @@ class _Reader:
     def be(self, n: int) -> int:
         return int.from_bytes(self.take(n), "big")
 
+    def peek(self) -> int:
+        """Look at the next marker byte without consuming it (bounds-checked)."""
+        if self.pos >= len(self.buf):
+            raise ValueError("truncated msgpack document")
+        return self.buf[self.pos]
+
 
 def _decode_uint(r: _Reader) -> int:
     m = r.u8()
@@ -114,7 +120,7 @@ def _decode_str(r: _Reader) -> str:
 
 def _decode_bytes_field(r: _Reader) -> tuple[bytes, str]:
     """Decode element[0]: either legacy array-of-ints or bin. Returns (data, encoding)."""
-    m = r.buf[r.pos]
+    m = r.peek()
     if m in (0xC4, 0xC5, 0xC6):
         r.u8()
         n = r.be({0xC4: 1, 0xC5: 2, 0xC6: 4}[m])
@@ -322,9 +328,11 @@ def verify() -> int:
 
             delta = len(new_env) - len(old_env)
             print(f"  ok {name}: legacy {len(old_env)} B -> bin {len(new_env)} B ({delta:+d} B)")
-        except (AssertionError, ValueError) as e:
+        except (AssertionError, ValueError, IndexError, KeyError) as e:
+            # Per-vector isolation: a malformed vector (truncated hex, missing
+            # field) fails only itself with a named FAIL line, not the whole run.
             failures += 1
-            print(f"  FAIL {name}: {e}", file=sys.stderr)
+            print(f"  FAIL {name}: {e!r}", file=sys.stderr)
 
     for orphan in bins:
         failures += 1
