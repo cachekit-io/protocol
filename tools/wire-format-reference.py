@@ -18,7 +18,7 @@ What `verify` proves, for every vector pair in ../test-vectors/wire-format.json:
      as its legacy base, its element[0] carries a bin marker (0xc4/0xc5/0xc6),
      the outer fixarray(4) is preserved, and re-encoding the base's fields in
      bin form reproduces the `*_bin` bytes exactly.
-  3. Documented size bound — a bin envelope is never more than 4 bytes larger
+  3. Documented size bound — a bin envelope is never more than 1 byte larger
      than its legacy twin (the header-arithmetic bound stated in the spec).
 
 Usage:
@@ -41,11 +41,12 @@ FIXTURE_PATH = Path(__file__).resolve().parent.parent / "test-vectors" / "wire-f
 FIXTURE_VERSION = "1.1.0"
 ENVELOPE_FORMAT = (
     "MessagePack positional array (rmp_serde::to_vec): "
-    "[compressed_data, checksum, original_size, format]. compressed_data: canonical "
-    "writers (protocol 1.1+) emit msgpack bin (0xc4/0xc5/0xc6); readers MUST also "
-    "accept the legacy array-of-integers encoding. Vectors without an "
-    "'envelope_encoding' field are legacy (array-of-ints) and are retained forever "
-    "as legacy-read proof. checksum always encodes as an array of 8 integers."
+    "[compressed_data, checksum, original_size, format]. Vectors without an "
+    "'envelope_encoding' field use the legacy array-of-integers encoding for "
+    "compressed_data and are retained forever as legacy-read proof; their "
+    "'*_bin' twins use msgpack bin (canonical for protocol 1.1+ writers). "
+    "checksum always encodes as an array of 8 integers. Normative rules: "
+    "spec/wire-format.md, 'Byte Layout' / 'Encoding compatibility'."
 )
 GENERATOR = (
     "legacy vectors: cachekit-core v0.2.0 (unchanged since); *_bin vectors: "
@@ -105,13 +106,10 @@ def _decode_array_header(r: _Reader) -> int:
 
 def _decode_str(r: _Reader) -> str:
     m = r.u8()
-    if 0xA0 <= m <= 0xBF:
-        n = m & 0x1F
-    elif m == 0xD9:
-        n = r.be(1)
-    else:
-        raise ValueError(f"expected msgpack str, got marker 0x{m:02x}")
-    return r.take(n).decode("utf-8")
+    if not 0xA0 <= m <= 0xBF:
+        # format is a bounded registry token (e.g. "msgpack"), always fixstr.
+        raise ValueError(f"expected msgpack fixstr, got marker 0x{m:02x}")
+    return r.take(m & 0x1F).decode("utf-8")
 
 
 def _decode_bytes_field(r: _Reader) -> tuple[bytes, str]:
@@ -168,11 +166,9 @@ def _encode_bin(data: bytes) -> bytes:
 
 def _encode_str(s: str) -> bytes:
     raw = s.encode("utf-8")
-    if len(raw) <= 31:
-        return bytes([0xA0 | len(raw)]) + raw
-    if len(raw) <= 0xFF:
-        return b"\xd9" + bytes([len(raw)]) + raw
-    raise ValueError("format string too long for envelope")
+    if len(raw) > 31:
+        raise ValueError("format string too long for a fixstr registry token")
+    return bytes([0xA0 | len(raw)]) + raw
 
 
 # --- envelope <-> fields -------------------------------------------------------
@@ -217,6 +213,11 @@ def _load() -> dict:
 def _split_vectors(fixture: dict) -> tuple[list[dict], dict[str, dict]]:
     legacy = [v for v in fixture["vectors"] if "envelope_encoding" not in v]
     bins = {v["name"]: v for v in fixture["vectors"] if v.get("envelope_encoding") == "bin"}
+    # Fail closed: every vector must classify as exactly one of the two sets,
+    # with no duplicate names — otherwise verify would silently skip it (and
+    # generate would silently drop it from the append-only fixture).
+    if len(legacy) + len(bins) != len(fixture["vectors"]) or len({v["name"] for v in legacy}) != len(legacy):
+        raise ValueError("fixture contains unclassifiable or duplicate-named vectors")
     return legacy, bins
 
 
@@ -299,8 +300,10 @@ def verify() -> int:
             assert twin["format"] == base["format"], "twin format drifted"
             assert len(new_env) == twin["envelope_size"], "twin envelope_size mismatch"
 
-            # 3. documented size bound (spec: bin header 2-5 B vs fixarray 1-3 B)
-            assert len(new_env) <= len(old_env) + 4, "bin twin exceeds +4 B header bound"
+            # 3. documented size bound: the only pairing where bin loses is
+            # bin8 (2 B) vs fixarray (1 B), i.e. compressed_data <= 15 bytes,
+            # so a bin twin is never more than 1 byte larger than its legacy base.
+            assert len(new_env) <= len(old_env) + 1, "bin twin exceeds +1 B header bound"
 
             # optional: third-encoder conformance via msgpack-python
             if msgpack is not None:
@@ -319,7 +322,7 @@ def verify() -> int:
 
             delta = len(new_env) - len(old_env)
             print(f"  ok {name}: legacy {len(old_env)} B -> bin {len(new_env)} B ({delta:+d} B)")
-        except AssertionError as e:
+        except (AssertionError, ValueError) as e:
             failures += 1
             print(f"  FAIL {name}: {e}", file=sys.stderr)
 

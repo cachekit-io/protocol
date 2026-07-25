@@ -1,7 +1,7 @@
 {
   "checksum": "xxHash3-64, 8 bytes big-endian, computed on uncompressed input",
   "compression": "LZ4 block format (NOT frame)",
-  "envelope_format": "MessagePack positional array (rmp_serde::to_vec): [compressed_data, checksum, original_size, format]. compressed_data: canonical writers (protocol 1.1+) emit msgpack bin (0xc4/0xc5/0xc6); readers MUST also accept the legacy array-of-integers encoding. Vectors without an 'envelope_encoding' field are legacy (array-of-ints) and are retained forever as legacy-read proof. checksum always encodes as an array of 8 integers.",
+  "envelope_format": "MessagePack positional array (rmp_serde::to_vec): [compressed_data, checksum, original_size, format]. Vectors without an 'envelope_encoding' field use the legacy array-of-integers encoding for compressed_data and are retained forever as legacy-read proof; their '*_bin' twins use msgpack bin (canonical for protocol 1.1+ writers). checksum always encodes as an array of 8 integers. Normative rules: spec/wire-format.md, 'Byte Layout' / 'Encoding compatibility'.",
   "generator": "legacy vectors: cachekit-core v0.2.0 (unchanged since); *_bin vectors: tools/wire-format-reference.py generate - deterministic re-encode of the legacy fields, byte-verified against rmp-serde 1.3.1 + serde_bytes 0.11.19 output (LAB-783)",
   "limits": {
     "max_compressed_size": 536870912,
