@@ -337,8 +337,10 @@ Three interop-specific pins:
    AAD — an SDK carrying auto-mode's type hint into the AAD would fail cross-SDK
    authentication. Interop AAD is always exactly four components.
 
-Key derivation (HKDF-SHA256), nonces, the ciphertext layout
-(`nonce ‖ ciphertext ‖ tag`), and the RotationAwareHeader are all unchanged.
+Key derivation (HKDF-SHA256), nonces, and the ciphertext layout
+(`nonce ‖ ciphertext ‖ tag`) are all unchanged. Interop entries carry no
+per-entry key identity, so keyring readers use sequential key attempts — see
+[encryption.md → Key Rotation (Keyring)](encryption.md#key-rotation-keyring).
 
 Two vectors substantiate this end-to-end, not just by construction:
 
