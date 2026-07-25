@@ -19,14 +19,16 @@ def check(condition: bool, name: str, detail: str) -> None:
         raise ValueError(f"{name}: {detail}")
 
 
-def main() -> None:
-    try:
-        document = json.loads(VECTORS.read_text(encoding="utf-8"))
-    except OSError as exc:
-        sys.exit(f"cannot read {VECTORS}: {exc}")
-    except json.JSONDecodeError as exc:
-        sys.exit(f"invalid JSON in {VECTORS}: {exc}")
+def expected_reader_action(reserved: int, flags: int, expiry: int, now: int) -> str:
+    """spec/file-backend-format.md: unknown reserved/flags fail closed before expiry."""
+    if reserved != 0 or flags != 0:
+        return "miss_preserve"
+    if expiry != 0 and now >= expiry:
+        return "miss_expired"
+    return "return_payload"
 
+
+def verify(document: dict) -> int:
     for vector in document["vectors"]:
         name = vector["name"]
         key = vector["key_utf8"].encode("utf-8")
@@ -38,16 +40,37 @@ def main() -> None:
         check(image[:14].hex() == vector["header_hex"], name, "header_hex mismatch")
         check(image[14:].hex() == vector["payload_hex"], name, "payload_hex mismatch")
         check(image[:2] == b"CK" and image[2] == 1, name, "bad magic or version")
-        check(image[3] == 0, name, "reserved byte not zero")
 
+        reserved = image[3]
         flags = struct.unpack(">H", image[4:6])[0]
         expiry = struct.unpack(">Q", image[6:14])[0]
+        check(reserved == vector.get("reserved", 0), name, "reserved mismatch")
         check(flags == vector["flags"], name, "flags mismatch")
         check(expiry == vector["expiry_unix_seconds"], name, "expiry mismatch")
-        expected_action = "return_payload" if flags == 0 else "miss_preserve"
-        check(vector["reader_action"] == expected_action, name, "reader_action mismatch")
 
-    print("validated", len(document["vectors"]), "File backend vectors")
+        now = vector.get("reader_now_unix_seconds", 0)
+        expected = expected_reader_action(reserved, flags, expiry, now)
+        check(vector["reader_action"] == expected, name, "reader_action mismatch")
+
+    return len(document["vectors"])
+
+
+def main() -> None:
+    try:
+        document = json.loads(VECTORS.read_text(encoding="utf-8"))
+    except OSError as exc:
+        sys.exit(f"cannot read {VECTORS}: {exc}")
+    except json.JSONDecodeError as exc:
+        sys.exit(f"invalid JSON in {VECTORS}: {exc}")
+
+    try:
+        count = verify(document)
+    except ValueError as exc:
+        sys.exit(f"invalid vector file: {exc}")
+    except (KeyError, TypeError, AttributeError) as exc:
+        sys.exit(f"invalid vector file: malformed structure ({exc!r})")
+
+    print("validated", count, "File backend vectors")
 
 
 if __name__ == "__main__":

@@ -33,6 +33,6 @@ A future nonzero flag assignment requires a protocol update and canonical test v
 
 ## Write and TTL behavior
 
-Entries are written through a temporary file in the same directory and atomically renamed into place. Refreshing TTL rewrites only bytes 6 through 13. Writers calculate the absolute deadline and store its whole-second Unix timestamp; a positive sub-second TTL can therefore expire within the current second.
+Entries are written through a temporary file in the same directory and atomically renamed into place. Refreshing TTL rewrites only bytes 6 through 13 and MUST NOT expose a torn expiry to a concurrent reader: a refresh either rewrites the entry through the same temporary-file and atomic-rename path, or updates the expiry with a single positioned 8-byte write on platforms that guarantee read/write atomicity for regular files (POSIX.1-2017 §2.9.7) — in which case readers MUST load the 14-byte header in a single read. Writers calculate the absolute deadline and store its whole-second Unix timestamp; a positive sub-second TTL can therefore expire within the current second.
 
 The canonical examples are in [`test-vectors/file-backend.json`](../test-vectors/file-backend.json).
