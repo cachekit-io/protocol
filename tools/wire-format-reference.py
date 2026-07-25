@@ -256,6 +256,68 @@ def generate() -> int:
     return 0
 
 
+def _verify_vector(base: dict, bins: dict, msgpack) -> str:
+    """Validate one legacy vector against its bin twin (popped from `bins`).
+
+    Returns the one-line size-delta summary on success, or raises
+    AssertionError/ValueError (and, on a malformed fixture entry,
+    IndexError/KeyError) which verify()'s per-vector guard isolates.
+    """
+    old_env = bytes.fromhex(base["envelope_hex"])
+    data, checksum, size, fmt, encoding = decode_envelope(old_env)
+
+    # 1. codec fidelity against the rmp_serde-generated legacy bytes
+    assert encoding == "int-array", "legacy vector not array-of-ints encoded"
+    assert encode_envelope(data, checksum, size, fmt, encoding="int-array") == old_env, (
+        "legacy re-encode not byte-identical"
+    )
+    assert len(old_env) == base["envelope_size"], "envelope_size mismatch"
+    assert fmt == base["format"], "format field mismatch"
+    assert size == base["input_size"], "original_size != input_size"
+
+    # 2. twin equivalence
+    twin = bins.pop(base["name"] + "_bin", None)
+    assert twin is not None, "missing bin twin vector"
+    new_env = bytes.fromhex(twin["envelope_hex"])
+    assert encode_envelope(data, checksum, size, fmt, encoding="bin") == new_env, (
+        "bin re-encode not byte-identical to twin"
+    )
+    assert new_env[0] == 0x94, "outer fixarray(4) not preserved"
+    assert new_env[1] in (0xC4, 0xC5, 0xC6), "element[0] not bin-encoded"
+    t_data, t_checksum, t_size, t_fmt, t_encoding = decode_envelope(new_env)
+    assert t_encoding == "bin"
+    assert (t_data, t_checksum, t_size, t_fmt) == (data, checksum, size, fmt), (
+        "twin decodes to different fields"
+    )
+    assert twin["input_hex"] == base["input_hex"], "twin input_hex drifted"
+    assert twin["input_size"] == base["input_size"], "twin input_size drifted"
+    assert twin["format"] == base["format"], "twin format drifted"
+    assert len(new_env) == twin["envelope_size"], "twin envelope_size mismatch"
+
+    # 3. documented size bound: the only pairing where bin loses is
+    # bin8 (2 B) vs fixarray (1 B), i.e. compressed_data <= 15 bytes,
+    # so a bin twin is never more than 1 byte larger than its legacy base.
+    assert len(new_env) <= len(old_env) + 1, "bin twin exceeds +1 B header bound"
+
+    # optional: third-encoder conformance via msgpack-python
+    if msgpack is not None:
+        obj = msgpack.unpackb(new_env, raw=False)
+        assert obj == [data, list(checksum), size, fmt], "msgpack-python bin decode mismatch"
+        assert msgpack.packb([data, list(checksum), size, fmt], use_bin_type=True) == new_env, (
+            "msgpack-python bin re-encode mismatch"
+        )
+        obj = msgpack.unpackb(old_env, raw=False)
+        assert obj == [list(data), list(checksum), size, fmt], (
+            "msgpack-python legacy decode mismatch"
+        )
+        assert msgpack.packb([list(data), list(checksum), size, fmt]) == old_env, (
+            "msgpack-python legacy re-encode mismatch"
+        )
+
+    delta = len(new_env) - len(old_env)
+    return f"legacy {len(old_env)} B -> bin {len(new_env)} B ({delta:+d} B)"
+
+
 def verify() -> int:
     fixture = _load()
     legacy, bins = _split_vectors(fixture)
@@ -275,59 +337,7 @@ def verify() -> int:
     for base in legacy:
         name = base["name"]
         try:
-            old_env = bytes.fromhex(base["envelope_hex"])
-            data, checksum, size, fmt, encoding = decode_envelope(old_env)
-
-            # 1. codec fidelity against the rmp_serde-generated legacy bytes
-            assert encoding == "int-array", "legacy vector not array-of-ints encoded"
-            assert encode_envelope(data, checksum, size, fmt, encoding="int-array") == old_env, (
-                "legacy re-encode not byte-identical"
-            )
-            assert len(old_env) == base["envelope_size"], "envelope_size mismatch"
-            assert fmt == base["format"], "format field mismatch"
-            assert size == base["input_size"], "original_size != input_size"
-
-            # 2. twin equivalence
-            twin = bins.pop(name + "_bin", None)
-            assert twin is not None, "missing bin twin vector"
-            new_env = bytes.fromhex(twin["envelope_hex"])
-            assert encode_envelope(data, checksum, size, fmt, encoding="bin") == new_env, (
-                "bin re-encode not byte-identical to twin"
-            )
-            assert new_env[0] == 0x94, "outer fixarray(4) not preserved"
-            assert new_env[1] in (0xC4, 0xC5, 0xC6), "element[0] not bin-encoded"
-            t_data, t_checksum, t_size, t_fmt, t_encoding = decode_envelope(new_env)
-            assert t_encoding == "bin"
-            assert (t_data, t_checksum, t_size, t_fmt) == (data, checksum, size, fmt), (
-                "twin decodes to different fields"
-            )
-            assert twin["input_hex"] == base["input_hex"], "twin input_hex drifted"
-            assert twin["input_size"] == base["input_size"], "twin input_size drifted"
-            assert twin["format"] == base["format"], "twin format drifted"
-            assert len(new_env) == twin["envelope_size"], "twin envelope_size mismatch"
-
-            # 3. documented size bound: the only pairing where bin loses is
-            # bin8 (2 B) vs fixarray (1 B), i.e. compressed_data <= 15 bytes,
-            # so a bin twin is never more than 1 byte larger than its legacy base.
-            assert len(new_env) <= len(old_env) + 1, "bin twin exceeds +1 B header bound"
-
-            # optional: third-encoder conformance via msgpack-python
-            if msgpack is not None:
-                obj = msgpack.unpackb(new_env, raw=False)
-                assert obj == [data, list(checksum), size, fmt], "msgpack-python bin decode mismatch"
-                assert msgpack.packb([data, list(checksum), size, fmt], use_bin_type=True) == new_env, (
-                    "msgpack-python bin re-encode mismatch"
-                )
-                obj = msgpack.unpackb(old_env, raw=False)
-                assert obj == [list(data), list(checksum), size, fmt], (
-                    "msgpack-python legacy decode mismatch"
-                )
-                assert msgpack.packb([list(data), list(checksum), size, fmt]) == old_env, (
-                    "msgpack-python legacy re-encode mismatch"
-                )
-
-            delta = len(new_env) - len(old_env)
-            print(f"  ok {name}: legacy {len(old_env)} B -> bin {len(new_env)} B ({delta:+d} B)")
+            print(f"  ok {name}: {_verify_vector(base, bins, msgpack)}")
         except (AssertionError, ValueError, IndexError, KeyError) as e:
             # Per-vector isolation: a malformed vector (truncated hex, missing
             # field) fails only itself with a named FAIL line, not the whole run.
