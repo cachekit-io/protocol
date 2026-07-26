@@ -47,5 +47,8 @@ jobs:
       - name: Python-frame verify (stdlib only)
         run: python3 tools/python-frame-reference.py verify
 
+      - name: File-backend format verify (stdlib only)
+        run: python3 tools/file-backend-reference.py
+
       - name: Python-frame JS cross-check (zero-dep independent reader, full round-trip)
         run: node tools/frame-crosscheck.mjs
