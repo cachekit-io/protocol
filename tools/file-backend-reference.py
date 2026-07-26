@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 from pathlib import Path
 import struct
 import sys
@@ -70,8 +71,9 @@ def main() -> None:
     except (KeyError, TypeError, AttributeError) as exc:
         sys.exit(f"invalid vector file: malformed structure ({exc!r})")
 
-    print("validated", count, "File backend vectors")
+    logging.info("validated %d File backend vectors", count)
 
 
 if __name__ == "__main__":
+    logging.basicConfig(level=logging.INFO, format="%(message)s")
     main()
