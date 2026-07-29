@@ -163,6 +163,9 @@ def _build_default_path_vector() -> tuple[dict, str]:
     # msgpack-python decodes bin as bytes and array-of-ints as list — the
     # observed type IS the wire encoding of compressed_data.
     encoding = "bin" if isinstance(env[0], bytes) else "int-array"
+    # Protocol 1.1 scopes the bin flip to compressed_data ONLY: checksum
+    # [u8;8] must stay an array of integers in every encoding.
+    assert isinstance(env[1], list), "checksum drifted to msgpack bin (excluded from the protocol 1.1 flip)"
     default_header, _ = parse_frame(frame)
     assert default_header["m"] == meta and default_header["s"] == ser_name
     vector = {
@@ -225,7 +228,15 @@ def generate() -> int:
     )
 
     # 2. Full default-path SaaS write: value -> msgpack -> ByteStorage envelope -> CK frame.
-    default_vector, _ = _build_default_path_vector()
+    default_vector, encoding = _build_default_path_vector()
+    if encoding != "int-array":
+        print(
+            f"REFUSED: installed cachekit {cachekit.__version__} emits {encoding} envelopes; "
+            "'generate' would clobber the irreproducible legacy (array-of-ints) vectors and drop "
+            "the *_bin twins. Use 'generate-bin-twin' instead. Nothing written.",
+            file=sys.stderr,
+        )
+        return 1
     vectors.append(default_vector)
 
     # 3. Arrow path: frame wrapping [8-byte xxHash3-64][Arrow IPC file].
@@ -382,6 +393,9 @@ def generate_bin_twin() -> int:
 
 if __name__ == "__main__":
     mode = sys.argv[1] if len(sys.argv) > 1 else "verify"
+    if mode in ("-h", "--help"):
+        print(__doc__)
+        sys.exit(0)
     if mode == "generate":
         sys.exit(generate())
     if mode == "generate-bin-twin":
@@ -389,4 +403,5 @@ if __name__ == "__main__":
     if mode == "verify":
         sys.exit(verify())
     print(f"unsupported mode: {mode!r}; expected 'verify', 'generate', or 'generate-bin-twin'", file=sys.stderr)
+    print(__doc__, file=sys.stderr)
     sys.exit(2)

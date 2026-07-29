@@ -211,7 +211,11 @@ for (const vec of doc.frame_vectors) {
         throw new Error(`compressed_data is ${compressed.encoding}, vector declares ${env.envelope_encoding}`);
       }
       if (bytesToHex(compressed.bytes) !== env.compressed_data_hex) throw new Error("compressed_data mismatch");
-      const checksumBytes = fieldToBytes(checksum, "checksum").bytes;
+      const checksumField = fieldToBytes(checksum, "checksum");
+      // Protocol 1.1 scopes the bin flip to compressed_data ONLY — checksum
+      // [u8;8] stays an array of integers in both encodings.
+      if (checksumField.encoding !== "int-array") throw new Error("checksum must be an array of integers (excluded from the protocol 1.1 bin flip)");
+      const checksumBytes = checksumField.bytes;
       if (checksumBytes.length !== 8) throw new Error(`checksum is ${checksumBytes.length} bytes (envelope requires exactly 8)`);
       if (bytesToHex(checksumBytes) !== env.checksum_hex) throw new Error("checksum field mismatch");
       if (originalSize !== env.original_size) throw new Error("original_size mismatch");

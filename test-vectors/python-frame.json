@@ -39,6 +39,7 @@
       "expected_payload_hex": "94dc0022ccf011cc83cca7757365725f69642acca46e616d65cca863616368656b6974cca6616374697665ccc398ccdaccf46861cc8e624bccfe20a76d73677061636b",
       "payload_envelope": {
         "encoding": "rmp_serde::to_vec positional fixarray(4); Vec<u8>/[u8;8] fields encode as msgpack arrays of integers",
+        "envelope_encoding": "int-array",
         "compressed_data_hex": "f01183a7757365725f69642aa46e616d65a863616368656b6974a6616374697665c3",
         "checksum_hex": "daf468618e624bfe",
         "original_size": 32,
