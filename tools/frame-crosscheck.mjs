@@ -79,6 +79,9 @@ function decodeOne(b, at) {
     case 0xc2: return [false, at + 1];
     case 0xc3: return [true, at + 1];
     case 0xc4: return decodeBin(b, at + 2, u8len(b, at + 1, "bin8"));
+    // LAB-868: no committed vector exceeds bin8, so these two widths are
+    // implemented but unexercised — the coverage floor below proves `bin`, not
+    // every width tier. The width-boundary vector is tracked separately.
     case 0xc5: return decodeBin(b, at + 3, dv.getUint16(at + 1));
     case 0xc6: return decodeBin(b, at + 5, dv.getUint32(at + 1));
     case 0xcb: return [dv.getFloat64(at + 1), at + 9];
