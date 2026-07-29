@@ -28,13 +28,17 @@ const hexToBytes = (hex) => {
   for (let i = 0; i < out.length; i++) out[i] = parseInt(hex.slice(i * 2, i * 2 + 2), 16);
   return out;
 };
-// Envelope byte fields are msgpack arrays of integers — reject anything a
-// Uint8Array would silently coerce (fractional, negative, >255, non-numeric).
-const intArrayToBytes = (arr, what) => {
-  if (!Array.isArray(arr) || arr.some((x) => !Number.isInteger(x) || x < 0 || x > 255)) {
-    throw new Error(`${what} is not an array of integers in 0..255`);
+// Envelope byte fields arrive as msgpack arrays of integers (legacy) or as
+// msgpack bin (protocol 1.1) — accept both, like every real reader. For the
+// array form, reject anything a Uint8Array would silently coerce (fractional,
+// negative, >255, non-numeric). Returns the bytes plus the observed encoding
+// so vectors can pin which one they carry.
+const fieldToBytes = (field, what) => {
+  if (field instanceof Uint8Array) return { bytes: field, encoding: "bin" };
+  if (!Array.isArray(field) || field.some((x) => !Number.isInteger(x) || x < 0 || x > 255)) {
+    throw new Error(`${what} is not msgpack bin or an array of integers in 0..255`);
   }
-  return Uint8Array.from(arr);
+  return { bytes: Uint8Array.from(field), encoding: "int-array" };
 };
 const bytesToHex = (b) => Array.from(b, (x) => x.toString(16).padStart(2, "0")).join("");
 
@@ -54,10 +58,11 @@ function parseFrame(frame) {
 }
 
 // ------------------------------------------------- minimal MessagePack decode
-// Covers common MessagePack types. `bin` (0xc4/0xc5/0xc6) is DELIBERATELY
-// unsupported: the corrected spec pins ByteStorage byte fields as arrays of
-// integers, and accepting bin here would silently mask a drift back to
-// bin-encoded fields. decodeOne returns [value, nextOffset]; decodeDocument
+// Covers common MessagePack types, including `bin` (0xc4/0xc5/0xc6): under
+// protocol 1.1 ByteStorage byte fields are dual-encoded (legacy arrays of
+// integers AND msgpack bin), so a reader must accept both. The legacy
+// encoding stays pinned by the legacy vectors' byte-identity, not by this
+// reader rejecting bin. decodeOne returns [value, nextOffset]; decodeDocument
 // additionally enforces single-document strictness (no trailing bytes) — the
 // property that makes CK frames fail loudly in interop readers.
 
@@ -73,6 +78,9 @@ function decodeOne(b, at) {
     case 0xc0: return [null, at + 1];
     case 0xc2: return [false, at + 1];
     case 0xc3: return [true, at + 1];
+    case 0xc4: return decodeBin(b, at + 2, b[at + 1]);
+    case 0xc5: return decodeBin(b, at + 3, dv.getUint16(at + 1));
+    case 0xc6: return decodeBin(b, at + 5, dv.getUint32(at + 1));
     case 0xcb: return [dv.getFloat64(at + 1), at + 9];
     case 0xcc: return [b[at + 1], at + 2];
     case 0xcd: return [dv.getUint16(at + 1), at + 3];
@@ -91,6 +99,10 @@ function decodeOne(b, at) {
 function decodeStr(b, at, len) {
   if (at + len > b.length) throw new Error("msgpack str overruns buffer");
   return [new TextDecoder("utf-8", { fatal: true }).decode(b.subarray(at, at + len)), at + len];
+}
+function decodeBin(b, at, len) {
+  if (at + len > b.length) throw new Error("msgpack bin overruns buffer");
+  return [b.subarray(at, at + len), at + len];
 }
 function decodeArray(b, at, count) {
   const out = [];
@@ -194,18 +206,21 @@ for (const vec of doc.frame_vectors) {
       const envelope = decodeDocument(parsed.payload);
       if (!Array.isArray(envelope) || envelope.length !== 4) throw new Error("envelope is not a 4-element msgpack array");
       const [compressedData, checksum, originalSize, format] = envelope;
-      const compressedBytes = intArrayToBytes(compressedData, "compressed_data");
-      if (bytesToHex(compressedBytes) !== env.compressed_data_hex) throw new Error("compressed_data mismatch");
-      const checksumBytes = intArrayToBytes(checksum, "checksum");
+      const compressed = fieldToBytes(compressedData, "compressed_data");
+      if (env.envelope_encoding && compressed.encoding !== env.envelope_encoding) {
+        throw new Error(`compressed_data is ${compressed.encoding}, vector declares ${env.envelope_encoding}`);
+      }
+      if (bytesToHex(compressed.bytes) !== env.compressed_data_hex) throw new Error("compressed_data mismatch");
+      const checksumBytes = fieldToBytes(checksum, "checksum").bytes;
       if (checksumBytes.length !== 8) throw new Error(`checksum is ${checksumBytes.length} bytes (envelope requires exactly 8)`);
       if (bytesToHex(checksumBytes) !== env.checksum_hex) throw new Error("checksum field mismatch");
       if (originalSize !== env.original_size) throw new Error("original_size mismatch");
       if (format !== env.format) throw new Error("format mismatch");
-      const inner = lz4BlockDecompress(compressedBytes, originalSize);
+      const inner = lz4BlockDecompress(compressed.bytes, originalSize);
       if (bytesToHex(inner) !== env.inner_msgpack_hex) throw new Error("decompressed payload mismatch");
       const value = decodeDocument(inner);
       if (!deepEqual(value, vec.value_json)) throw new Error("decoded value != value_json");
-      ok(vec.name, "full round-trip: frame -> envelope -> LZ4 -> msgpack -> value");
+      ok(vec.name, `full round-trip: frame -> envelope (${compressed.encoding}) -> LZ4 -> msgpack -> value`);
     } catch (e) {
       fail(vec.name, e.message);
     }

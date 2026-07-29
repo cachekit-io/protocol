@@ -481,8 +481,10 @@ interop value (consume exactly one document, reject trailing bytes, the
 [`test-vectors/python-frame.json`](../test-vectors/python-frame.json) pins the CK v3
 frame against the real `cachekit-py` implementation: a minimal frame, a complete
 default-path write (frame → ByteStorage envelope → inner MessagePack → value, full
-round-trip), an Arrow-envelope frame (structural checks), and must-reject error
-vectors — including a CK frame fed to a strict interop reader.
+round-trip) in both envelope encodings — the legacy array-of-ints original
+(cachekit 0.11.1) and its protocol 1.1 `bin` twin (cachekit 0.17.0, the first
+release emitting `bin`) — an Arrow-envelope frame (structural checks), and
+must-reject error vectors — including a CK frame fed to a strict interop reader.
 
 Verify:
 
