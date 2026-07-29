@@ -6,7 +6,11 @@
 
 **Language-neutral key format and plain-MessagePack value format for sharing cache entries across SDK implementations.**
 
-> **Status**: SPECIFIED (interop/v1) — normative, NOT yet implemented in any SDK.
+> **Status**: SPECIFIED (interop/v1) — normative, and **shipped opt-in in all three SDKs**:
+> Python on [PyPI](https://pypi.org/project/cachekit/) 0.14.0+, TypeScript on
+> [npm](https://www.npmjs.com/package/@cachekit-io/cachekit) 0.1.3+, Rust on
+> [crates.io](https://crates.io/crates/cachekit-rs) 0.4.0+ — floors, not snapshots; consult
+> each registry or the [SDK feature matrix](../sdk-feature-matrix.md#compliance-status) for current versions.
 > Design discussion: [Issue #1](https://github.com/cachekit-io/protocol/issues/1) ·
 > Test vectors: [`test-vectors/interop-mode.json`](../test-vectors/interop-mode.json) ·
 > Reference implementation: [`tools/interop-reference.py`](../tools/interop-reference.py)
