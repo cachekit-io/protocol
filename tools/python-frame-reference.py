@@ -55,6 +55,28 @@ class FrameError(ValueError):
     pass
 
 
+def _require(condition: bool, what: str) -> None:
+    """Generation-time invariant that survives ``python -O``.
+
+    ``assert`` is stripped under ``-O``; a silently skipped check here could
+    write a corrupt vector into the cross-SDK source of truth, so these
+    invariants must always execute.
+    """
+    if not condition:
+        raise ValueError(f"generation invariant violated: {what}")
+
+
+def _load_fixture() -> dict:
+    try:
+        return json.loads(VECTOR_PATH.read_text())
+    except OSError as exc:
+        print(f"cannot read fixture {VECTOR_PATH}: {exc}", file=sys.stderr)
+        raise SystemExit(1) from exc
+    except json.JSONDecodeError as exc:
+        print(f"fixture {VECTOR_PATH} is not valid JSON: {exc}", file=sys.stderr)
+        raise SystemExit(1) from exc
+
+
 def parse_frame(frame: bytes) -> tuple[dict, bytes]:
     """Independent CK v3 frame parser (deliberately not importing cachekit)."""
     if frame[:2] != MAGIC:
@@ -73,7 +95,7 @@ def parse_frame(frame: bytes) -> tuple[dict, bytes]:
 
 
 def verify() -> int:
-    doc = json.loads(VECTOR_PATH.read_text())
+    doc = _load_fixture()
     failures = 0
 
     for vec in doc["frame_vectors"]:
@@ -152,22 +174,22 @@ def _build_default_path_vector() -> tuple[dict, str]:
     value = {"user_id": 42, "name": "cachekit", "active": True}
     handler = CacheSerializationHandler(serializer_name="default")
     frame = handler.serialize_data(value, cache_key="python-frame-vector")
-    assert handler.deserialize_data(frame, cache_key="python-frame-vector") == value
+    _require(handler.deserialize_data(frame, cache_key="python-frame-vector") == value, "cachekit-py round-trip mismatch")
     payload_mv, meta, ser_name = SerializationWrapper.unwrap(frame)
     payload = bytes(payload_mv)
     inner, fmt = ByteStorage("msgpack").retrieve(payload)
     inner = bytes(inner)
-    assert msgpack.unpackb(inner) == value and fmt == "msgpack"
+    _require(msgpack.unpackb(inner) == value and fmt == "msgpack", "ByteStorage.retrieve round-trip mismatch")
     env = msgpack.unpackb(payload)  # positional fixarray(4)
-    assert isinstance(env, list) and len(env) == 4
+    _require(isinstance(env, list) and len(env) == 4, "envelope is not a 4-element msgpack array")
     # msgpack-python decodes bin as bytes and array-of-ints as list — the
     # observed type IS the wire encoding of compressed_data.
     encoding = "bin" if isinstance(env[0], bytes) else "int-array"
     # Protocol 1.1 scopes the bin flip to compressed_data ONLY: checksum
     # [u8;8] must stay an array of integers in every encoding.
-    assert isinstance(env[1], list), "checksum drifted to msgpack bin (excluded from the protocol 1.1 flip)"
+    _require(isinstance(env[1], list), "checksum drifted to msgpack bin (excluded from the protocol 1.1 flip)")
     default_header, _ = parse_frame(frame)
-    assert default_header["m"] == meta and default_header["s"] == ser_name
+    _require(default_header["m"] == meta and default_header["s"] == ser_name, "frame header disagrees with unwrap metadata")
     vector = {
         "name": "default_saas_write_msgpack_bytestorage",
         "description": (
@@ -212,7 +234,7 @@ def generate() -> int:
     raw_meta = {"format": "msgpack", "compressed": False}
     raw_frame = SerializationWrapper.wrap(raw_payload, raw_meta, "default")
     p, m, s = SerializationWrapper.unwrap(raw_frame)
-    assert bytes(p) == raw_payload and m == raw_meta and s == "default"
+    _require(bytes(p) == raw_payload and m == raw_meta and s == "default", "SerializationWrapper round-trip mismatch")
     # expected_header comes from this tool's own independent parser, so the
     # vector pins what the frame actually contains (incl. the "v" field, which
     # cachekit-py's unwrap drops) rather than a hand-maintained copy.
@@ -250,12 +272,12 @@ def generate() -> int:
         df = pd.DataFrame({"id": [1, 2], "score": [1.5, 2.5]})
         arrow_frame = arrow_handler.serialize_data(df, cache_key="python-frame-vector")
         rt = arrow_handler.deserialize_data(arrow_frame, cache_key="python-frame-vector")
-        assert rt.equals(df)
+        _require(rt.equals(df), "Arrow round-trip mismatch")
         a_payload_mv, a_meta, a_ser = SerializationWrapper.unwrap(arrow_frame)
         a_payload = bytes(a_payload_mv)
-        assert a_payload[8:14] == b"ARROW1"
+        _require(a_payload[8:14] == b"ARROW1", "Arrow IPC magic not at documented offset")
         arrow_header, _ = parse_frame(arrow_frame)
-        assert arrow_header["m"] == a_meta and arrow_header["s"] == a_ser
+        _require(arrow_header["m"] == a_meta and arrow_header["s"] == a_ser, "Arrow frame header disagrees with unwrap metadata")
         vectors.append(
             {
                 "name": "arrow_dataframe_write",
@@ -375,7 +397,7 @@ def generate_bin_twin() -> int:
         "tools/python-frame-reference.py generate-bin-twin"
     )
 
-    doc = json.loads(VECTOR_PATH.read_text())
+    doc = _load_fixture()
     existing = {v["name"] for v in doc["frame_vectors"]}
     if twin_name in existing:
         print(f"{twin_name} already present; nothing written.", file=sys.stderr)
