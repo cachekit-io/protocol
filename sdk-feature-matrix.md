@@ -6,7 +6,7 @@
 
 **Feature parity and compliance status across all CacheKit SDK implementations.**
 
-*Last updated: 2026-07-28 — LAB-998: interop/v1 ship-status corrected — the row no longer reads `unreleased`; all three SDKs have published it (PyPI 0.14.0+, crates.io 0.4.0+, npm 0.1.3+), stated as floors per footnote ⁴, aligned with docs.cachekit.io (LAB-996). LAB-729: rs backpressure flipped ❌ → ✅ (semaphore + bounded queue in the rs reliability stack; decision footnote records why the LAB-519 ts rationale doesn't transfer to tokio). LAB-430 shipped TypeScript Node-only Memcached and File backends; the protocol-owned File format and vectors now define fail-closed flag negotiation. LAB-446: Python File backend gains full TTL inspection/refresh; Memcached gains `refresh_ttl` (touch) only (see [TTL management note](#reliability-features)). LAB-595 shipped: ts Cloudflare Workers flipped ❌ → ✅ via the `@cachekit-io/cachekit/workers` entrypoint on a wasm32 cachekit-core build (~55 KB gz measured); footnote ¹ records the phase-1 surface and semantics deltas. LAB-519: ts cold-miss single-flight (in-process, always on) + LockableBackend wired into `wrap()`'s miss path (opt-in); ts backpressure decision recorded; ts Redis lock/TTL capability cells refreshed for LAB-427. LAB-272 code-verified protocol-adherence audit (2026-07-22): interop/v1 merged in Python ([cachekit-py#220](https://github.com/cachekit-io/cachekit-py/pull/220)), TypeScript ([cachekit-ts#71](https://github.com/cachekit-io/cachekit-ts/pull/71)), and Rust ([cachekit-rs#33](https://github.com/cachekit-io/cachekit-rs/pull/33)); test-vector CI coverage corrected*
+*Last updated: 2026-07-29 — LAB-903: SDK Overview versions refreshed against the registries after the protocol 1.1 (envelope `bin` encoding, cachekit-core 0.4.0) rollout — py 0.17.0, core 0.4.0, rs 0.5.0 + macros 0.5.0, ts 0.1.4; per-SDK rollout state (which releases carry the flip, which bumps sit merged-unreleased on main) is recorded once, in the [cachekit-core architecture note](#architecture-notes). LAB-998: interop/v1 ship-status corrected — the row no longer reads `unreleased`; all three SDKs have published it (PyPI 0.14.0+, crates.io 0.4.0+, npm 0.1.3+), stated as floors per footnote ⁴, aligned with docs.cachekit.io (LAB-996). LAB-729: rs backpressure flipped ❌ → ✅ (semaphore + bounded queue in the rs reliability stack; decision footnote records why the LAB-519 ts rationale doesn't transfer to tokio). LAB-430 shipped TypeScript Node-only Memcached and File backends; the protocol-owned File format and vectors now define fail-closed flag negotiation. LAB-446: Python File backend gains full TTL inspection/refresh; Memcached gains `refresh_ttl` (touch) only (see [TTL management note](#reliability-features)). LAB-595 shipped: ts Cloudflare Workers flipped ❌ → ✅ via the `@cachekit-io/cachekit/workers` entrypoint on a wasm32 cachekit-core build (~55 KB gz measured); footnote ¹ records the phase-1 surface and semantics deltas. LAB-519: ts cold-miss single-flight (in-process, always on) + LockableBackend wired into `wrap()`'s miss path (opt-in); ts backpressure decision recorded; ts Redis lock/TTL capability cells refreshed for LAB-427. LAB-272 code-verified protocol-adherence audit (2026-07-22): interop/v1 merged in Python ([cachekit-py#220](https://github.com/cachekit-io/cachekit-py/pull/220)), TypeScript ([cachekit-ts#71](https://github.com/cachekit-io/cachekit-ts/pull/71)), and Rust ([cachekit-rs#33](https://github.com/cachekit-io/cachekit-rs/pull/33)); test-vector CI coverage corrected*
 
 </div>
 
@@ -30,10 +30,10 @@
 
 | SDK | Package | Version | Language | Status |
 | :--- | :--- | :---: | :--- | :---: |
-| cachekit-py | `cachekit` (PyPI) | 0.12.0 | Python 3.10+ | ✅ Production |
-| cachekit-rs | `cachekit-rs` (crates.io) | 0.3.0 | Rust 1.82+ | ✅ Production |
-| cachekit-core | `cachekit-core` (crates.io) | 0.3.0 | Rust (shared core) | ✅ Production |
-| cachekit-ts | `@cachekit-io/cachekit` (npm) | 0.1.2 | TypeScript | ✅ Production |
+| cachekit-py | `cachekit` (PyPI) | 0.17.0 | Python 3.10+ | ✅ Production |
+| cachekit-rs | `cachekit-rs` (crates.io) | 0.5.0 | Rust 1.82+ | ✅ Production |
+| cachekit-core | `cachekit-core` (crates.io) | 0.4.0 | Rust (shared core) | ✅ Production |
+| cachekit-ts | `@cachekit-io/cachekit` (npm) | 0.1.4 | TypeScript | ✅ Production |
 | cachekit-php | — | — | PHP 8.1+ | 🔜 Development |
 
 ---
@@ -224,7 +224,7 @@ its spec:
 <details>
 <summary><strong>Rust SDK (cachekit-rs)</strong></summary>
 
-- Published on crates.io as `cachekit-rs` v0.3.0 + `cachekit-macros` v0.3.0
+- Published on crates.io as `cachekit-rs` v0.5.0 + `cachekit-macros` v0.5.0
 - Feature flags: `redis`, `cachekitio`, `encryption`, `l1`, `macros`, `workers`
 - Backends: `RedisBackend` (fred), `CachekitIO` (reqwest), `WorkersCachekitIO` (CF Workers fetch)
 - L1 cache via moka (native only, `l1` feature)
@@ -232,14 +232,14 @@ its spec:
 - `SecureCache` for zero-knowledge encrypted caching
 - SSRF protection, credential redaction, `Zeroizing` key material
 - WASM/Workers support: `?Send` + `Rc` paths via `cfg(target_arch = "wasm32")`
-- Depends on `cachekit-core` v0.2.0 for ByteStorage and encryption primitives
+- Depends on `cachekit-core` for encryption primitives only (the envelope is unused for stored values — see [Compliance Status](#compliance-status) note ²); core-version rollout state is recorded in the cachekit-core note below
 
 </details>
 
 <details>
 <summary><strong>Rust Core (cachekit-core)</strong></summary>
 
-- Published on crates.io as `cachekit-core` v0.3.0 (`cachekit-rs` still depends on the 0.2 line — Renovate bump tracked separately)
+- Published on crates.io as `cachekit-core` v0.4.0 — the protocol 1.1 writer flip: `StorageEnvelope.compressed_data` now *emits* msgpack `bin` (`serde_bytes`); readers dual-decode both `bin` and the legacy array-of-ints ([spec/wire-format.md](spec/wire-format.md), [decisions/envelope-bin-encoding.md](decisions/envelope-bin-encoding.md)). Consumers: cachekit-py ≥ 0.17.0 ships it ([cachekit-py#249](https://github.com/cachekit-io/cachekit-py/pull/249)); released cachekit-rs 0.5.0 and cachekit-ts 0.1.4 still pin the 0.3 line — their 0.4.0 bumps ([cachekit-rs#53](https://github.com/cachekit-io/cachekit-rs/pull/53), [cachekit-ts#91](https://github.com/cachekit-io/cachekit-ts/pull/91)) are merged on main, unreleased
 - Provides: `ByteStorage`, `ZeroKnowledgeEncryptor`, `derive_domain_key`, `derive_tenant_keys`
 - Dependencies: `lz4_flex`, `xxhash-rust`, `ring` (native) / `aes-gcm` (wasm32), `hkdf`, `sha2`, `rmp-serde`
 - Formally verified security properties via Kani

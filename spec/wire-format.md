@@ -6,7 +6,7 @@
 
 **LZ4 compression + xxHash3-64 integrity wrapping for cached payloads that use the envelope.**
 
-*Protocol Version 1.1 · Verified against `cachekit-core` v0.3.0 (`src/byte_storage.rs`); legacy envelope test vectors generated at v0.2.0 and unchanged since — `bin`-encoded twins added in protocol 1.1 ([decisions/envelope-bin-encoding.md](../decisions/envelope-bin-encoding.md))*
+*Protocol Version 1.1 · Verified against `cachekit-core` v0.4.0 (`src/byte_storage.rs`); legacy envelope test vectors generated at v0.2.0 and unchanged since — `bin`-encoded twins added in protocol 1.1 ([decisions/envelope-bin-encoding.md](../decisions/envelope-bin-encoding.md))*
 
 </div>
 
@@ -85,10 +85,12 @@ accept the legacy encoding below — a stored envelope never expires on a schedu
 so legacy-read support is permanent.
 
 > [!NOTE]
-> **Implementation status:** no shipped release emits the canonical `bin`
-> encoding yet — `cachekit-core` v0.3.0 (current) still writes the legacy
-> encoding. The writer flip is tracked in LAB-764 /
-> [cachekit-core#54](https://github.com/cachekit-io/cachekit-core/issues/54).
+> **Implementation status:** the canonical `bin` encoding **is** shipped —
+> `cachekit-core` v0.4.0 carries the writer flip, and `cachekit` (Python)
+> ≥ 0.17.0 emits it. The released `cachekit-rs` 0.5.0 and `cachekit-ts` 0.1.4
+> lines still pin core 0.3 and therefore still write the legacy encoding, so
+> readers encounter both on the wire today. Per-SDK rollout state is tracked in
+> [sdk-feature-matrix.md](../sdk-feature-matrix.md#architecture-notes).
 
 `checksum` (element `[1]`) is **deliberately excluded** from the `bin` encoding: it
 stays an array of 8 integers. The saving would be 1–7 bytes per envelope, and the
@@ -481,8 +483,10 @@ interop value (consume exactly one document, reject trailing bytes, the
 [`test-vectors/python-frame.json`](../test-vectors/python-frame.json) pins the CK v3
 frame against the real `cachekit-py` implementation: a minimal frame, a complete
 default-path write (frame → ByteStorage envelope → inner MessagePack → value, full
-round-trip), an Arrow-envelope frame (structural checks), and must-reject error
-vectors — including a CK frame fed to a strict interop reader.
+round-trip) in both envelope encodings — the legacy array-of-ints original
+(cachekit 0.11.1) and its protocol 1.1 `bin` twin (cachekit 0.17.0, the first
+release emitting `bin`) — an Arrow-envelope frame (structural checks), and
+must-reject error vectors — including a CK frame fed to a strict interop reader.
 
 Verify:
 
