@@ -55,6 +55,21 @@ CASES: list[tuple[str, Callable[[str], str], int]] = [
     ("bold floor", lambda t: t.replace(RS_FLOOR, RS_FLOOR.replace("0.6.0+", "**0.6.0+**")), 0),
     ("prerelease floor", lambda t: t.replace(RS_FLOOR, RS_FLOOR.replace("0.6.0+", "0.7.0-rc.1+")), 0),
     ("en-dash placeholder", lambda t: t.replace(PHP_ROW, "| cachekit-php | – | – | PHP 8.1+ | 🔜 |"), 0),
+    (
+        "floor carrying a footnote marker",
+        lambda t: t.replace(RS_FLOOR, RS_FLOOR.replace("0.6.0+", "0.6.0+¹⁷")),
+        0,
+    ),
+    (
+        "snapshot hidden in a second table under the same heading",
+        lambda t: t.replace(
+            PHP_ROW,
+            PHP_ROW
+            + "\n\nAnd a second table:\n\n| SDK | Package | Version |\n| :--- | :--- | :--- |\n"
+            "| cachekit-rs | `cachekit-rs` | 0.5.0 |",
+        ),
+        1,
+    ),
     # --- must ERROR rather than silently pass ---
     ("heading removed", lambda t: t.replace("## SDK Overview", "## Overview Of SDKs"), 1),
     (

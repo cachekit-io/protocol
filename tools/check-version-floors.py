@@ -45,8 +45,8 @@ FLOOR = re.compile(r"^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?\+$")
 # Placeholder for an unreleased SDK: em-dash, en-dash, or plain hyphen(s).
 PLACEHOLDER = re.compile(r"^[—–-]{1,3}$")
 SEMVER = re.compile(r"^\d+\.\d+\.\d+")
-# Markdown emphasis a version cell may legitimately carry.
-DECORATION = re.compile(r"[`*_]")
+# Markdown emphasis and footnote markers a version cell may legitimately carry.
+DECORATION = re.compile(r"[`*_\u2070\u00b9\u00b2\u00b3\u2074-\u2079]")
 
 
 def fail(msg: str) -> NoReturn:
@@ -69,6 +69,7 @@ def overview_table(text: str) -> tuple[int, list[tuple[int, list[str]]]]:
 
     header: list[str] | None = None
     version_idx = -1
+    table_ended = False
     rows: list[tuple[int, list[str]]] = []
 
     for offset, line in enumerate(lines[start + 1 :], start=start + 2):
@@ -76,11 +77,19 @@ def overview_table(text: str) -> tuple[int, list[tuple[int, list[str]]]]:
         if stripped.startswith("## "):
             break
         if "|" not in stripped:
-            # Blank lines and the `---` section rule before the table; once the
-            # table has started, a non-pipe line ends it.
+            # Blank lines and the `---` section rule before the table. Once the
+            # table has started, a non-pipe line ends it — but keep scanning so a
+            # SECOND table under this heading is caught rather than ignored.
             if header is not None and rows:
-                break
+                table_ended = True
             continue
+
+        if table_ended:
+            fail(
+                f"a second table appears under {HEADING!r} (line {offset}) — this "
+                "checker verifies the first one only, so refusing to report OK on "
+                "a section it cannot fully account for"
+            )
 
         cells = split_row(stripped)
 
