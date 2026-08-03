@@ -22,7 +22,7 @@ CHECKER = HERE / "check-version-floors.py"
 MATRIX = HERE.parent / "sdk-feature-matrix.md"
 
 RS_FLOOR = "| cachekit-rs | `cachekit-rs` (crates.io) | 0.6.0+ | Rust 1.85+ | ✅ Production |"
-PHP_ROW = "| cachekit-php | — | — | PHP 8.1+ | 🔜 Development |"
+PHP_ROW = "| cachekit-php | \u2014 | \u2014 | PHP 8.1+ | \U0001f51c Development |"
 
 # (name, mutate(text) -> text, expected_exit)
 CASES: list[tuple[str, Callable[[str], str], int]] = [
@@ -54,7 +54,11 @@ CASES: list[tuple[str, Callable[[str], str], int]] = [
     ("backticked floor", lambda t: t.replace(RS_FLOOR, RS_FLOOR.replace("0.6.0+", "`0.6.0+`")), 0),
     ("bold floor", lambda t: t.replace(RS_FLOOR, RS_FLOOR.replace("0.6.0+", "**0.6.0+**")), 0),
     ("prerelease floor", lambda t: t.replace(RS_FLOOR, RS_FLOOR.replace("0.6.0+", "0.7.0-rc.1+")), 0),
-    ("en-dash placeholder", lambda t: t.replace(PHP_ROW, "| cachekit-php | – | – | PHP 8.1+ | 🔜 |"), 0),
+    (
+        "en-dash placeholder",
+        lambda t: t.replace(PHP_ROW, "| cachekit-php | \u2013 | \u2013 | PHP 8.1+ | \U0001f51c |"),
+        0,
+    ),
     (
         "floor carrying a footnote marker",
         lambda t: t.replace(RS_FLOOR, RS_FLOOR.replace("0.6.0+", "0.6.0+¹⁷")),
@@ -98,7 +102,7 @@ def main() -> int:
     for name, mutate, expected in CASES:
         mutated = mutate(base)
         if name != "unmodified matrix" and mutated == base:
-            failures.append(f"{name}: mutation was a no-op — the anchor text moved, fix this test")
+            failures.append(f"{name}: mutation was a no-op; the anchor text moved, fix this test")
             continue
         got = run(mutated)
         verdict = "ok" if got == expected else "FAIL"

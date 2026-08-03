@@ -15,10 +15,10 @@ are exact facts about one specific artifact (an embedded `cachekit-core-0.2.0`, 
 caret-free npm pin) that appending `+` to would make false. Telling those apart
 needs the claim's intent, which a regex cannot read.
 
-So of the six matrix incidents behind this work it catches exactly one: the
-`cachekit-rs` 0.5.0 snapshot that sat in this table against a published 0.6.0.
-LAB-388 (a ✅ on dead code), LAB-998 (a ship-status boolean) and the two footnote
-regressions are all invisible to it. Rationale and the full incident list:
+So of the six matrix incidents behind this work it catches one facet of one: the
+`cachekit-rs` 0.5.0 snapshot that sat in this table against a published 0.6.0 —
+not even the six mis-marked Reliability cells from that same event. The other five
+incidents are invisible to it too. Rationale and the full incident list:
 decisions/matrix-version-verification.md
 
 Fails closed: if the table cannot be located or parsed, that is an error, not a
@@ -42,8 +42,11 @@ VERSION_HEADER = "version"
 SEPARATOR_CELL = re.compile(r"^:?-{3,}:?$")
 # A floor: 0.6.0+, 1.2.3-rc.1+
 FLOOR = re.compile(r"^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?\+$")
-# Placeholder for an unreleased SDK: em-dash, en-dash, or plain hyphen(s).
-PLACEHOLDER = re.compile(r"^[—–-]{1,3}$")
+# Placeholder for an unreleased SDK. Escaped rather than literal because the three
+# characters are visually indistinguishable inside a character class: U+2014 EM DASH,
+# U+2013 EN DASH, U+002D HYPHEN-MINUS. A cell of 1-3 of them means "no release yet";
+# no version can hide in it.
+PLACEHOLDER = re.compile("^[\u2014\u2013\u002d]{1,3}$")
 SEMVER = re.compile(r"^\d+\.\d+\.\d+")
 # Markdown emphasis and footnote markers a version cell may legitimately carry.
 DECORATION = re.compile(r"[`*_\u2070\u00b9\u00b2\u00b3\u2074-\u2079]")
@@ -65,7 +68,7 @@ def overview_table(text: str) -> tuple[int, list[tuple[int, list[str]]]]:
     try:
         start = next(i for i, raw in enumerate(lines) if raw.strip() == HEADING)
     except StopIteration:
-        fail(f"{HEADING!r} section not found — cannot verify anything")
+        fail(f"{HEADING!r} section not found; cannot verify anything")
 
     header: list[str] | None = None
     version_idx = -1
