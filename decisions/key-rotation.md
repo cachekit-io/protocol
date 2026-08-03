@@ -8,7 +8,7 @@
 | **Date** | 2026-07-23 |
 | **Ticket** | LAB-516 (filed by the LAB-275 cross-SDK feature-gap audit) |
 | **Normative spec** | [`spec/encryption.md` → Key Rotation (Keyring)](../spec/encryption.md#key-rotation-keyring) — the spec section owns the rules; this record owns the rationale and runbooks. |
-| **Implementation** | Not yet shipped in any SDK — tracked as LAB-516 sub-issues. The [feature matrix](../sdk-feature-matrix.md) rotation row is corrected to ❌ fleet-wide by the LAB-275 audit PR ([protocol#29](https://github.com/cachekit-io/protocol/pull/29)) and flips per SDK only as each implementation ships. |
+| **Implementation** | Not yet shipped in any SDK — tracked as LAB-516 sub-issues. `ZeroKnowledgeEncryptor::rotate_key()` returns `NotImplemented` (`cachekit-core/src/encryption/core.rs:492`). The [feature matrix](../sdk-feature-matrix.md#encryption) rotation row reads ❌ fleet-wide as of the LAB-1400 consolidation and flips per SDK only as each implementation ships. |
 
 ---
 

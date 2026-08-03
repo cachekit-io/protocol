@@ -32,7 +32,13 @@ This document specifies two layers:
 
 1. **The ByteStorage envelope** — the LZ4 + xxHash3-64 container implemented by
    `cachekit-core` and exposed to SDKs. This layer is byte-canonical and pinned by
-   [`test-vectors/wire-format.json`](../test-vectors/wire-format.json).
+   [`test-vectors/wire-format.json`](../test-vectors/wire-format.json), which is
+   enforced in CI in two independent places (LAB-423): this repo's `verify.yml`
+   runs [`tools/wire-format-reference.py verify`](../tools/wire-format-reference.py)
+   against the stdlib-only reference implementation, and the canonical
+   implementation [`cachekit-core`](https://github.com/cachekit-io/cachekit-core)
+   vendors the file sha256-pinned in `tests/wire_format_vectors.rs`, asserting
+   decode **and** re-encode byte-identity per vector.
 2. **[SDK storage containers](#sdk-storage-containers-auto-mode)** — what each SDK
    *actually stores* in a backend in default (auto) mode. These differ per SDK, are
    **SDK-internal**, and are documented here so their bytes are identifiable — not so
