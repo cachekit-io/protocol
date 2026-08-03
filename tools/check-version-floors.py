@@ -5,10 +5,13 @@ Versions in the SDK Overview table answer "which release do I need?", so they mu
 be floors (`0.6.0+`) — a floor stays true as new releases publish, while a snapshot
 is wrong the moment the next one lands and misleads silently until someone notices.
 
-Scope is deliberately just that table. Versions elsewhere in the matrix are exact
-facts about a specific published artifact (an embedded `cachekit-core-0.2.0`, a
-caret-free npm pin), historical statements, or dependency requirements — all
-correctly bare. Policing them would mean an allowlist that rots faster than the
+Scope is deliberately just that table. Versions elsewhere are a mix this checker
+cannot safely tell apart: some are floors too (the Compliance Status table, the
+Architecture Notes release bullets), while others are exact facts about a specific
+published artifact (an embedded `cachekit-core-0.2.0`, a caret-free npm pin),
+historical statements, or dependency requirements — and those are correctly bare.
+Telling the two apart needs the claim's intent, so the other floors stay reviewer
+discipline; policing them here would mean an allowlist that rots faster than the
 thing it guards.
 
 Rationale, and the four failures that motivated it:

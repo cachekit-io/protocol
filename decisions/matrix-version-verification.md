@@ -42,7 +42,9 @@ Two properties make it worse than ordinary staleness:
 
 3. **A merged PR is not a shipped feature.** Cite the release that carries it, not the PR that landed it. `git log` and tags describe intent; the registry describes reality.
 
-4. **Every SDK Overview version is a floor (`X+`), never a snapshot.** A floor stays true as new releases publish; a snapshot is wrong the moment the next one lands and silently misleads until someone notices. This is why that table carries `+`, and why the CI guard polices only it. Exact versions *elsewhere* are artifact evidence under rule 2 — an embedded `cachekit-core-0.2.0` is a fact about one `.node` binary, a caret-free `0.1.2` is a fact about one npm pin — and stay bare.
+4. **A version answering "which release do I need" is a floor (`X+`), never a snapshot.** A floor stays true as new releases publish; a snapshot is wrong the moment the next one lands and silently misleads until someone notices. That covers the SDK Overview table, the Compliance Status table, and the Architecture Notes release bullets. A version that is instead **evidence about one specific artifact** under rule 2 — an embedded `cachekit-core-0.2.0` in one `.node` binary, a caret-free `0.1.2` npm pin, a historical statement — stays bare, because appending `+` to it would make it false.
+
+   The CI guard polices only the SDK Overview column. The other floors are reviewer discipline: distinguishing "which release do I need" from "what is inside this artifact" needs the claim's intent, which a regex cannot read.
 
 5. **Record the verification date** next to the claim. A floor plus a date is auditable; a bare number is a guess with a decimal point.
 

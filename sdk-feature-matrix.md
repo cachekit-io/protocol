@@ -39,7 +39,7 @@
 | cachekit-ts | `@cachekit-io/cachekit` (npm) | 0.1.5+ | TypeScript (Node 22+) | ✅ Production |
 | cachekit-php | — | — | PHP 8.1+ | 🔜 Development |
 
-> Every version in **the table above** is a **floor** (`X+`), never a snapshot — see [Compliance Status](#compliance-status) note ¹⁷. Registry-verified 2026-08-04; check the registry for the current release. Bare versions elsewhere in this document are deliberate: they are exact facts about one published artifact (an embedded `cachekit-core-0.2.0`, a caret-free npm pin), not floors — do not "correct" them by adding `+`.
+> Every version in **the table above** is a **floor** (`X+`), never a snapshot — see [Compliance Status](#compliance-status) note ¹⁷. Registry-verified 2026-08-04; check the registry for the current release. Elsewhere in this document **both forms appear, deliberately**: a floor (`X+`) wherever the question is *"which release do I need"* — the [Compliance Status](#compliance-status) table, note ¹³, the [Architecture Notes](#architecture-notes) — and a bare exact version wherever the claim is a fact about **one specific artifact** (an embedded `cachekit-core-0.2.0`, a caret-free npm pin, a historical statement). Do not mechanically convert either into the other: adding `+` to an artifact fact makes it false, and stripping `+` from a floor reopens the staleness class this document has hit four times.
 
 ---
 
