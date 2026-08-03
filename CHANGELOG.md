@@ -4,6 +4,24 @@ All notable changes to the CacheKit Protocol Specification.
 
 ## [Unreleased]
 
+### SDK Feature Matrix
+
+- Consolidated ten conflicting open matrix PRs into one code-verified end-state
+  (LAB-1400), regenerated from current SDK code rather than from the stale PR
+  diffs. Cells that **reversed** — check these if you built on them: key
+  rotation (py/rs ✅ → ❌ fleet-wide; `rotate_key()` is a `NotImplemented`
+  stub, and cachekit-py's importable PyO3 `KeyRotationState` succeeds while
+  rotating nothing), Rust `::secure` preset and Rust sync support (both ✅ →
+  never existed), Builder API (py/ts ✅ → ❌), hardware-acceleration detection
+  (rs ✅ → not re-exported; ts N/A → ❌), TypeScript Arrow (🔜 → ❌), and
+  Python's encrypted read path (documented fail-closed → **fail-open by
+  default**). Six Rust reliability cells are marked 🚧 unreleased: LAB-518 /
+  LAB-728 / LAB-729 are on `main` but absent from the published 0.5.0 crate.
+  New rows: Retry, Graceful degradation, Cross-instance L1 invalidation
+  (LAB-520), client-L1 stale-while-revalidate (LAB-728), Orjson serializer,
+  plus an Observability section (LAB-275). Supersedes protocol#25, #28, #29,
+  #31, #32, #33, #35, #37, #40, #43.
+
 ### Specs
 
 - StorageEnvelope `compressed_data` canonical encoding flipped from MessagePack
