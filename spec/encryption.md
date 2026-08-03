@@ -19,7 +19,7 @@
 - [Nonce Generation](#nonce-generation)
 - [Ciphertext Format](#ciphertext-format)
 - [Additional Authenticated Data (AAD)](#additional-authenticated-data-aad)
-- [Encryption Header (Key Rotation)](#encryption-header-rotationawareheader)
+- [Key Rotation (Keyring)](#key-rotation-keyring)
 - [Encryption Flow](#encryption-flow)
 - [Decryption Flow](#decryption-flow)
 - [Compliance](#compliance)
@@ -31,7 +31,7 @@
 CacheKit provides **optional** client-side encryption using AES-256-GCM. When enabled, the backend (Redis or SaaS) stores opaque ciphertext and never has access to keys or plaintext.
 
 > [!NOTE]
-> Encryption is not configurable by design. AES-256-GCM is the only supported algorithm. See the [Encryption Algorithm Decision Record](../decisions/encryption-algorithm.md) for rationale.
+> Encryption is not configurable by design. AES-256-GCM is the only supported algorithm.
 
 | Property | Value |
 | :--- | :--- |
@@ -130,6 +130,10 @@ For key identification without revealing key material:
 ```
 fingerprint = SHA-256("key_fingerprint_v1" || key)[0..16]   // First 16 bytes
 ```
+
+For per-entry fingerprints — the value cachekit-py stores in CK frame metadata and
+the input to [keyring selection](#key-rotation-keyring) — `key` is the HKDF-derived
+per-tenant **encryption key** (`tenant_keys.encryption_key`), never the master key.
 
 ---
 
@@ -336,37 +340,51 @@ by `tools/encryption-verify.py`.
 
 ---
 
-## Encryption Header (RotationAwareHeader)
+## Key Rotation (Keyring)
 
-When key rotation is in use, a 32-byte header is prepended to identify which key encrypted the data.
+> [!WARNING]
+> **Status: specified, not yet implemented** (decision record:
+> [decisions/key-rotation.md](../decisions/key-rotation.md), 2026-07-23;
+> implementation tracked under LAB-516). Until an SDK ships this section, rotating
+> its master key invalidates every encrypted entry — fail-open readers take misses,
+> fail-closed readers take errors. The [feature matrix](../sdk-feature-matrix.md)
+> reflects per-SDK implementation status.
+>
+> Earlier revisions of this spec described a 32-byte `RotationAwareHeader` prepended
+> to ciphertext. **That header was never written by any SDK and is not part of the
+> protocol**; it is retired — rationale in the decision record.
 
-```
-┌──────┬──────┬──────────────────┬───────────────┬────────┬─────────┬──────────┐
-│ ver  │ algo │ key_fingerprint  │ tenant_hash   │ domain │ key_ver │ reserved │
-└──────┴──────┴──────────────────┴───────────────┴────────┴─────────┴──────────┘
-  1 B    1 B     16 bytes           8 bytes         4 B      1 B       1 B
-│◄──────────────────────── 32 bytes total ──────────────────────────────────────►│
-```
+Rotation is a client-side concern by construction: the backend stores ciphertext it
+cannot decrypt (zero-knowledge), so it can never re-encrypt. The mechanism is a
+**keyring** — configuration, not a state machine:
 
-| Field | Offset | Size | Description |
-| :--- | :---: | :---: | :--- |
-| `version` | 0 | 1 | Header version (must be `1`) |
-| `algorithm` | 1 | 1 | Encryption algorithm (`0` = AES-256-GCM, only valid value) |
-| `key_fingerprint` | 2 | 16 | First 16 bytes of SHA-256("key_fingerprint_v1" \|\| key) |
-| `tenant_id_hash` | 18 | 8 | Tenant identifier hash |
-| `domain` | 26 | 4 | Domain context (e.g., `"ench"` for encryption) |
-| `key_version` | 30 | 1 | `0` = original key, `1` = rotated key |
-| reserved | 31 | 1 | Reserved (must be `0x00`) |
+| Rule | Requirement |
+| :--- | :--- |
+| Keyring | One **current** master key (encrypts and decrypts) plus an ordered list of **at most 3 decrypt-only** master keys — typically previous keys; during a [two-phase rollout](../decisions/key-rotation.md#runbooks-normative-for-docs), the incoming key. SDKs MUST reject configuration exceeding the cap at load — never silently truncate. |
+| Configuration | Cross-SDK env vars: `CACHEKIT_MASTER_KEY` (current, [as above](#master-key)) and `CACHEKIT_PREVIOUS_MASTER_KEYS` (decrypt-only list, comma-separated hex, same per-key validation). Programmatic naming is SDK-local. |
+| Forward-only current key | A master key that has ever occupied the current (encrypting) slot MUST NOT be re-promoted to current; it may re-appear only in the decrypt-only list. Backing out a rotation means rotating **forward** to a fresh key. Re-promotion resumes a used, unknowable nonce budget and risks catastrophic AES-GCM nonce reuse (plaintext recovery and forgery). Enforcement: a stateless SDK cannot know whether a newly supplied current key was used before, so this invariant is **operator-enforced** (treat retired key material as destroyed); SDKs MUST reject the detectable subset — a configuration where the current key also appears in the decrypt-only list. |
+| Derivation | Each keyring entry independently derives per-tenant keys via the [HKDF construction above](#key-derivation). Salts, domains, and fingerprints are unchanged. |
+| Encrypt | Always the current key. A new master key yields freshly derived keys with a fresh per-key nonce budget — which is why rotation (always forward, to a *new* key) is the remedy when nonce-exhaustion monitoring fires. |
+| Decrypt — with per-entry key identity | Where the SDK stores a per-entry [key fingerprint](#key-fingerprint) (cachekit-py's CK frame metadata), select the keyring entry by exact fingerprint match; never trial-decrypt across the keyring. **The fingerprint is computed over the HKDF-derived per-tenant encryption key, not the master key**: selection derives the tenant's keys for each keyring entry, fingerprints each derived encryption key, and compares. A match is binding — if the matched key fails AES-GCM authentication, the failure is terminal (straight to the fail-open / fail-closed policy; no further keyring entries). No match → the SDK's existing fingerprint-mismatch semantics (fail-closed raises; fail-open attempts the current key only and treats the authentication failure as a miss). |
+| Decrypt — without per-entry key identity | (cachekit-ts, cachekit-rs, [interop mode](interop-mode.md)) Attempt each keyring key in order, current first, **rebuilding the identical AAD for every attempt**. Retrying across keys is permitted; retrying across AAD variants remains forbidden — the [no-retry rule](#additional-authenticated-data-aad) binds AAD inputs, not key count. |
+| Exhaustion | All permitted attempts fail → AES-GCM authentication failure → the SDK's existing fail-open / fail-closed policy. No new failure mode. |
+| Key hygiene | Derived keys held behind the native boundary zeroize on drop, decrypt-only keys included. Master-key material handled by managed-language runtimes (env vars, interpreter strings) cannot be reliably scrubbed — treat exposure of the keyring configuration as exposure of every key in it. |
 
-### Key Rotation Strategy
+Nothing on the wire changes: the [ciphertext format](#ciphertext-format) and
+[AAD v0x03](#additional-authenticated-data-aad) contain no key identity, so every
+existing entry remains format-compatible — and decryptable for as long as the key
+that encrypted it is retained in the keyring — and cross-SDK interop is unaffected. Keyring
+conformance vectors will accompany the implementations (test plan in the
+[decision record](../decisions/key-rotation.md#consequences--lab-516-sub-issues)).
 
-```
-1. Start rotation   → set new key, keep old key for decryption
-2. New encryptions  → use new key (key_version=1)
-3. Decryption       → try both keys based on key_version byte
-4. Migration window → run until all old-key entries expire
-5. Complete         → remove old key (complete_rotation())
-```
+**Rotation window**: writes during the window re-encrypt under the current key;
+old-key entries age out via TTL. Run the window at least as long as the longest TTL
+in use, **measured from the moment the last writer stopped encrypting under the old
+key** (fleet deploy of the promotion phase complete), then drop the retired key. An
+empty decrypt-only list is legal — the hard cut-over used for compromise response.
+Rollout choreography, preconditions (non-expiring entries), and the compromise
+runbook are normative in the
+[decision record](../decisions/key-rotation.md#runbooks-normative-for-docs).
 
 ---
 
@@ -419,24 +437,34 @@ process but fails authentication for any correct second reader (see
 ## Decryption Flow
 
 ```
-Input: ciphertext, stored metadata (format, compressed, optional original_type),
-       master_key, tenant_id, cache_key
+Input: ciphertext, stored metadata (format, compressed, optional original_type,
+       optional per-entry key_fingerprint — SDK-internal storage, e.g.
+       cachekit-py's CK frame header), keyring (current master_key +
+       decrypt-only master keys), tenant_id, cache_key
 
-1. Derive:      tenant_keys    = derive_tenant_keys(master_key, tenant_id)
-2. Build AAD:   aad            = create_aad(tenant_id, cache_key,
+1. Select key:  per [Key Rotation (Keyring)](#key-rotation-keyring) — fingerprint
+                match where the stored key_fingerprint is present (binding: no
+                further keys after a match), else sequential keyring attempts,
+                current first — an authentication failure on an intermediate key
+                continues to the next permitted key; the hard-error semantics
+                below apply once permitted attempts are exhausted. Single-key
+                configurations reduce to the current key.
+2. Derive:      tenant_keys    = derive_tenant_keys(selected_master_key, tenant_id)
+3. Build AAD:   aad            = create_aad(tenant_id, cache_key,
                                             stored.format, stored.compressed, stored.original_type)
-3. Decrypt:     plaintext_bytes = aes_256_gcm_decrypt(
+4. Decrypt:     plaintext_bytes = aes_256_gcm_decrypt(
                                       ciphertext = ciphertext,  // nonce(12) || encrypted || tag(16)
                                       key        = tenant_keys.encryption_key,
                                       aad        = aad
                                   )
-4. Unenvelope:  serialized_bytes = unenvelope(plaintext_bytes)   // per the reader's configured
+5. Unenvelope:  serialized_bytes = unenvelope(plaintext_bytes)   // per the reader's configured
                                                                  // serializer/mode — see wire-format.md
-5. Deserialize: user_data = deserialize(serialized_bytes)
+6. Deserialize: user_data = deserialize(serialized_bytes)
 ```
 
-The AAD in step 2 is rebuilt from the **stored cleartext metadata**; tampering makes
-step 3 fail authentication, which is a hard error — the no-retry and no-sniffing
+The AAD in step 3 is rebuilt from the **stored cleartext metadata**; tampering makes
+step 4 fail authentication, which is a hard error once the key attempts permitted by
+step 1 are exhausted — the no-retry and no-sniffing
 rules in [AAD v0x03 Format](#additional-authenticated-data-aad) apply. How each SDK
 stores this metadata (e.g. cachekit-py's CK frame header) is SDK-internal; the only
 cross-SDK-normative AAD inputs are interop mode's pinned four components.
