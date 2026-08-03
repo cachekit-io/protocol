@@ -38,7 +38,9 @@ This document specifies two layers:
    against the stdlib-only reference implementation, and the canonical
    implementation [`cachekit-core`](https://github.com/cachekit-io/cachekit-core)
    vendors the file sha256-pinned in `tests/wire_format_vectors.rs`, asserting
-   decode **and** re-encode byte-identity per vector.
+   decode byte-identity for every vector and re-encode byte-identity for the
+   canonical `*_bin` vectors only — legacy array-of-integers vectors are
+   decode-only, retained as legacy-read proof.
 2. **[SDK storage containers](#sdk-storage-containers-auto-mode)** — what each SDK
    *actually stores* in a backend in default (auto) mode. These differ per SDK, are
    **SDK-internal**, and are documented here so their bytes are identifiable — not so

@@ -6,7 +6,7 @@
 
 **Feature parity and compliance status across all CacheKit SDK implementations.**
 
-*Last updated: 2026-08-04 — LAB-1400 consolidation of ten open matrix PRs into one code-verified end-state. Per-cell evidence and the accept/reject verdict for each folded PR are in the consolidation PR body; per-row history is in [CHANGELOG.md](CHANGELOG.md) and `git log sdk-feature-matrix.md`. **Cells that reversed** — check these if you built on them: Key rotation (py/rs ✅ → ❌ fleet-wide), Rust `::secure` preset and Rust sync support (both ✅ → do not exist), Builder API (py/ts ✅ → ❌), Hardware acceleration (rs ✅ → not re-exported, ts N/A → ❌), TypeScript Arrow (🔜 → ❌), and the six Rust reliability cells now marked 🚧 unreleased¹³.*
+*Last updated: 2026-08-03 — LAB-1400 consolidation of ten open matrix PRs into one code-verified end-state. Per-cell evidence and the accept/reject verdict for each folded PR are in the consolidation PR body; per-row history is in [CHANGELOG.md](CHANGELOG.md) and `git log sdk-feature-matrix.md`. **Cells that reversed** — check these if you built on them: Key rotation (py/rs ✅ → ❌ fleet-wide), Rust `::secure` preset and Rust sync support (both ✅ → do not exist), Builder API (py/ts ✅ → ❌), Hardware acceleration (rs ✅ → not re-exported, ts N/A → ❌), TypeScript Arrow (🔜 → ❌), and the six Rust reliability cells now marked 🚧 unreleased¹³.*
 
 </div>
 
@@ -68,7 +68,7 @@
 
 > [!IMPORTANT]
 > AAD v0x03 is required for protocol compliance. SDKs without it cannot safely interoperate with encrypted payloads from compliant SDKs — the auth tag will fail verification. Python, Rust, and TypeScript construction was code-verified byte-identical on 2026-07-21 (LAB-272); the normative byte layout and the frozen `True`/`False` compressed tokens (protocol#12) are defined in [spec/encryption.md](spec/encryption.md#additional-authenticated-data-aad). Python's auto serializers append the optional `original_type` fifth component; Rust, TypeScript, and interop mode always emit exactly four. When encryption is enabled but a stored entry claims plaintext, Python never returns it — the entry is converted to a miss and evicted rather than raising (LAB-241, [cachekit-py#215](https://github.com/cachekit-io/cachekit-py/pull/215)); see note ⁵ for what that means if you are monitoring for hard errors.
-
+<!-- -->
 > [!WARNING]
 > ⁵ **Key rotation ships in no SDK. Rotating a master key today invalidates every encrypted entry.** Corrected 2026-08-04 (LAB-1400) from a previous Python ✅ / Rust ✅ that no code supported. `cachekit-core`'s `ZeroKnowledgeEncryptor::rotate_key()` returns `EncryptionError::NotImplemented` (`src/encryption/core.rs:492`); cachekit-rs neither re-exports nor calls any rotation API; cachekit-ts only classifies the core's nonce-exhaustion error into `NonceExhaustedError`.
 >
@@ -156,7 +156,7 @@ The contract a storage backend must satisfy per SDK (bytes in / bytes out; seria
 
 > [!IMPORTANT]
 > ¹³ **The Rust reliability tier is on `main` but not in any published crate.** `cargo add cachekit-rs` today gets **none** of the six 🚧 cells above. Verified against the tag, not the branch: `cachekit-rs-v0.5.0` is commit `494d578` (2026-07-25), whose `crates/cachekit/Cargo.toml` reads `default = ["cachekitio", "encryption", "l1"]` — there is no `reliability` feature to enable — and whose `crates/cachekit/src/` contains neither `reliability.rs` nor `flight.rs`. LAB-518, LAB-728 and LAB-729 all landed after that tag. These cells flip to ✅ on the next crates.io release. Recorded this way deliberately: a ✅ a user cannot install is the same trust bug as a ✅ no code supports (LAB-388), and it is the failure mode a feature matrix is most prone to — the code is right there on `main` and reads as shipped.
-
+<!-- -->
 > ⁷ **Python has no generic backend-operation retry** (LAB-522). What exists is Redis-client-level reconnect/timeout retry and lock-acquisition retry. Setting `max_retries` does nothing: the field on `CachekitConfig` (`config/settings.py:117`) has no **operational** consumer — its only read is a validator branch whose body is `pass` (`settings.py:252`) — and the CachekitIO backend's own `max_retries` (`backends/cachekitio/config.py:121`) has no reader at all. Rust and TypeScript both wrap backend ops in a real retry layer.
 >
 > ⁹ Python shipped a complete but never-wired `invalidation/` package (channel, events, Redis pub/sub with reconnect) and **deleted** it rather than wiring it (LAB-520, [cachekit-py#237](https://github.com/cachekit-io/cachekit-py/pull/237); the package is absent from `src/cachekit/` as of 0.17.1). The reason is worth keeping: without server-side key tracking, broadcasting mass invalidations makes other pods evict L1 and immediately re-read the stale L2 entries the invalidating process could not delete — strictly worse than not invalidating. TypeScript's implementation is the reference if Python re-adds it, paired with a distributed key registry. **Invalidation events are not cross-SDK interoperable:** no protocol spec exists and ts's channel name and payload differ from what py's package used, so the ts channel is not a protocol surface.
@@ -297,7 +297,7 @@ its spec:
 - Published on crates.io as `cachekit-rs` v0.5.0 + `cachekit-macros` v0.5.0; MSRV 1.85
 - Feature flags on `main`: `cachekitio`, `redis`, `memcached`, `file`, `encryption`, `l1`, `macros`, `workers`, `reliability`, `unsync` — default = `cachekitio` + `encryption` + `l1` + `reliability`. The published 0.5.0 has no `reliability` feature and defaults to `cachekitio` + `encryption` + `l1`
 - Backends: `RedisBackend` (fred), `CachekitIO` (reqwest), `WorkersCachekitIO` (CF Workers fetch), `MemcachedBackend`, `FileBackend` (both native-only cargo features)
-- L1 cache via moka (native only, `l1` feature), with serve-stale + single-flight background refresh (LAB-728)
+- L1 cache via moka (native only, `l1` feature); serve-stale + single-flight background refresh (LAB-728) is on `main` only — absent from the published 0.5.0 crate (see [Reliability Features](#reliability-features) note ¹³)
 - Reliability tier (`reliability` feature, native) — **on `main`, not in any published crate; absent from the 0.5.0 release** (see [Reliability Features](#reliability-features) note ¹³): retry with backoff + jitter on the `is_retryable` classification, circuit breaker, backpressure (semaphore + bounded queue), cold-miss single-flight with distributed fill locks, and macro-level graceful degradation (fail-open; `SecureCache` fail-closed)
 - `#[cachekit]` proc-macro for decorator-style caching (async fns only)
 - `SecureCache` for zero-knowledge encrypted caching
