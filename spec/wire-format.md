@@ -93,11 +93,17 @@ accept the legacy encoding below — a stored envelope never expires on a schedu
 so legacy-read support is permanent.
 
 > [!NOTE]
-> **Implementation status:** the canonical `bin` encoding **is** shipped —
-> `cachekit-core` v0.4.0 carries the writer flip, and `cachekit` (Python)
-> ≥ 0.17.0 emits it. The released `cachekit-rs` 0.5.0 and `cachekit-ts` 0.1.4
-> lines still pin core 0.3 and therefore still write the legacy encoding, so
-> readers encounter both on the wire today. Per-SDK rollout state is tracked in
+> **Implementation status** (verified against published artifacts, 2026-08-04):
+> the canonical `bin` encoding **is** shipped — `cachekit-core` v0.4.0 carries the
+> writer flip, `cachekit` (Python) ≥ 0.17.0 emits it, and `cachekit-rs` ≥ 0.6.0
+> resolves core `0.4` and emits it too. **TypeScript does not yet emit it on
+> either path:** published `@cachekit-io/cachekit` 0.1.5 pins
+> `cachekit-core-ts@0.1.2` (whose native addons embed core **0.2.0**) and
+> `cachekit-core-wasm@0.1.1` (core **0.3.0**), so it writes and reads legacy only.
+> Readers therefore encounter both encodings on the wire today, and a reader built
+> against core ≤ 0.3.0 rejects `bin` — which is why legacy-read support is
+> permanent rather than a migration window. Per-SDK rollout state, with the
+> embedded-core evidence per artifact, is tabulated in
 > [sdk-feature-matrix.md](../sdk-feature-matrix.md#architecture-notes).
 
 `checksum` (element `[1]`) is **deliberately excluded** from the `bin` encoding: it

@@ -6,7 +6,9 @@
 
 **Feature parity and compliance status across all CacheKit SDK implementations.**
 
-*Last updated: 2026-08-03 — LAB-1400 consolidation of ten open matrix PRs into one code-verified end-state. Per-cell evidence and the accept/reject verdict for each folded PR are in the consolidation PR body; per-row history is in [CHANGELOG.md](CHANGELOG.md) and `git log sdk-feature-matrix.md`. **Cells that reversed** — check these if you built on them: Key rotation (py/rs ✅ → ❌ fleet-wide), Rust `::secure` preset and Rust sync support (both ✅ → do not exist), Builder API (py/ts ✅ → ❌), Hardware acceleration (rs ✅ → not re-exported, ts N/A → ❌), TypeScript Arrow (🔜 → ❌), and the six Rust reliability cells now marked 🚧 unreleased¹³.*
+*Last updated: 2026-08-04 — LAB-1400 consolidation of ten open matrix PRs into one end-state. Every version-keyed claim is verified against the **published artifact** (registry metadata, and the `.crate`/`.tgz` contents where an embedded dependency version decides the answer), not against a repo branch — see [decisions/matrix-version-verification.md](decisions/matrix-version-verification.md) for why and how. Per-PR fold verdicts are in [CHANGELOG.md](CHANGELOG.md); per-row history is `git log sdk-feature-matrix.md`.*
+
+*__Cells that reversed — check these if you built on them:__ Key rotation (py/rs ✅ → ❌ fleet-wide), Rust `::secure` preset and Rust sync support (both ✅ → do not exist), Builder API (py/ts ✅ → ❌), Hardware acceleration (rs ✅ → not re-exported, ts N/A → ❌), TypeScript Arrow (🔜 → ❌), Python's encrypted read path (documented fail-closed → **fail-open by default**), and `cache.secure.wrap()` in TypeScript (implied encryption → **no guarantee**). The TypeScript protocol-1.1 `bin` rollout also reversed twice in two days: it is **not** shipped on either ts path (per-artifact evidence in the [cachekit-core architecture note](#architecture-notes)).*
 
 </div>
 
@@ -31,11 +33,13 @@
 
 | SDK | Package | Version | Language | Status |
 | :--- | :--- | :---: | :--- | :---: |
-| cachekit-py | `cachekit` (PyPI) | 0.17.1 | Python 3.10+ | ✅ Production |
-| cachekit-rs | `cachekit-rs` (crates.io) | 0.5.0 | Rust 1.85+ | ✅ Production |
-| cachekit-core | `cachekit-core` (crates.io) | 0.4.0 | Rust (shared core) | ✅ Production |
-| cachekit-ts | `@cachekit-io/cachekit` (npm) | 0.1.5 | TypeScript (Node 22+) | ✅ Production |
+| cachekit-py | `cachekit` (PyPI) | 0.17.1+ | Python 3.10+ | ✅ Production |
+| cachekit-rs | `cachekit-rs` (crates.io) | 0.6.0+ | Rust 1.85+ | ✅ Production |
+| cachekit-core | `cachekit-core` (crates.io) | 0.4.0+ | Rust (shared core) | ✅ Production |
+| cachekit-ts | `@cachekit-io/cachekit` (npm) | 0.1.5+ | TypeScript (Node 22+) | ✅ Production |
 | cachekit-php | — | — | PHP 8.1+ | 🔜 Development |
+
+> Every version in this document is a **floor** (`X+`), never a snapshot — see [Compliance Status](#compliance-status) note ¹⁷. Registry-verified 2026-08-04; check the registry for the current release.
 
 ---
 
@@ -48,7 +52,7 @@
 | OrjsonSerializer (fast JSON) | ✅ `[json]` extra | N/A | N/A | N/A |
 | ArrowSerializer (columnar) | ✅ `[data]` extra | N/A | ❌ (LAB-524)⁰ | ❌ |
 | ByteStorage (LZ4 + xxHash3-64) | ✅ via Rust FFI | ✅ canonical (cachekit-core) | ✅ via NAPI (Rust) | 🔜 Planned |
-| Blake2b-256 key generation | ✅ | ✅ interop mode only — N/A auto mode (see [Compliance Status](#compliance-status) note ¹) | ✅ via @noble/hashes | 🔜 Planned |
+| Blake2b-256 key generation | ✅ | ✅ interop mode only — N/A auto mode (see [Compliance Status](#compliance-status) note ¹⁴) | ✅ via @noble/hashes | 🔜 Planned |
 
 > ⁰ TypeScript Arrow was listed 🔜 Planned from 2026-06-06 with no code, stub, or tracking issue behind it; corrected to ❌, with LAB-524 owning the implement-or-decline decision. Orjson and Arrow live behind cachekit-py's `[json]` / `[data]` extras (`pyproject.toml:73-81`).
 
@@ -63,6 +67,8 @@
 | Per-tenant key isolation | ✅ | ✅ | ✅ via TenantKeys NAPI | 🔜 Planned |
 | AAD v0x03 (cache_key binding) | ✅ | ✅ | ✅ | ❌ |
 | Key rotation | ❌ mismatch detection only⁵ | ❌⁵ | ❌ nonce-exhaustion detection only⁵ | ❌ |
+| **Tamper / wrong-key failure mode** | ⚠️ **fail-OPEN by default** — warn + recompute, config-gated⁵ | ✅ Fails closed — decrypt error propagates (`client.rs:143`); `SecureCache` degradation fails closed on everything | ⚠️ Propagates from `getEntry`, but `wrap()` degradation is a bare `catch {}` with no error-class check (`reliability/degradation.ts:13`) — a decrypt failure degrades to an uncached recompute wherever degradation is on | — |
+| **Does the `secure` API enforce encryption?** | ✅ Raises without a key | ✅ `secure()` returns `Err` | ❌ **`cache.secure.wrap()` is an unconditional alias for `wrap()`** — silently caches plaintext on any instance not built by `createCache.secure()` (LAB-513, CWE-311); see [Intent-preset semantics](#intent-preset-semantics-parity-not-presence) | — |
 | Hardware acceleration detection | ✅ surfaced (`hardware_acceleration_enabled()`) | ⚠️ core-internal, not re-exported⁶ | ❌ not exposed⁶ | N/A |
 | Counter-based nonces | ✅ via Rust | ✅ | ✅ via NAPI (Rust) | ❌ use random |
 
@@ -142,20 +148,22 @@ The contract a storage backend must satisfy per SDK (bytes in / bytes out; seria
 
 | Feature | Python | Rust | TypeScript | PHP |
 | :--- | :---: | :---: | :---: | :---: |
-| Circuit breaker | ✅ | 🚧 `reliability` feature — armed in `production`/`encrypted`/`io`, off in `minimal` (LAB-518). **Unreleased**¹³ | ✅ | ❌ |
-| Retry (backoff + jitter) | ⚠️ Redis-connection retry only — no generic backend-op retry⁷ | 🚧 On the `is_retryable` classification, inside the breaker (`reliability.rs:216`, `:251`; LAB-518). **Unreleased**¹³ | ✅ `reliability/retry.ts` | ❌ |
-| Graceful degradation | ⚠️ Fail-open on backend unavailability — and the encrypted read path is **also** fail-open by default⁵ | 🚧 `#[cachekit]` runs the function uncached on outage-class failures (transient / timeout / circuit-open / shed); permanent and auth errors propagate, and `SecureCache` fails closed on everything (`cachekit-macros/src/lib.rs:425-448`; LAB-518). **Unreleased**¹³ | ✅ `reliability/degradation.ts` | ❌ |
-| Backpressure | ✅ | 🚧 Semaphore + bounded queue, decision recorded (LAB-729). **Unreleased**¹³ | ⚠️ Refresh cap only — deliberate, decision recorded (LAB-519) | ❌ |
+| Circuit breaker | ✅ | ✅ `reliability` feature (default-on) — armed in `production`/`encrypted`/`io`, off in `minimal` (LAB-518)¹³ | ✅ | ❌ |
+| Retry (backoff + jitter) | ⚠️ Redis-connection retry only — no generic backend-op retry⁷ | ✅ On the `is_retryable` classification, inside the breaker (`reliability.rs`; LAB-518)¹³ | ✅ `reliability/retry.ts` | ❌ |
+| Graceful degradation | ⚠️ Fail-open on backend unavailability — and the encrypted read path is **also** fail-open by default⁵ | ✅ `#[cachekit]` runs the function uncached on outage-class failures (transient / timeout / circuit-open / shed); permanent and auth errors propagate, and `SecureCache` fails closed on everything (`cachekit-macros/src/lib.rs:425-448`; LAB-518)¹³ | ✅ `reliability/degradation.ts` | ❌ |
+| Backpressure | ✅ | ✅ Semaphore + bounded queue, decision recorded (LAB-729)¹³ | ⚠️ Refresh cap only — deliberate, decision recorded (LAB-519) | ❌ |
 | Distributed locking | ✅ Redis + SaaS backends | ✅ Redis + SaaS + Workers (`LockableBackend`; LAB-426) | ✅ Redis + SaaS backends; wired into `wrap()` cold miss (opt-in `stampede.distributedLock`, LAB-519) | ❌ |
 | L1/L2 dual-layer cache | ✅ | ✅ moka (native) / `l1` feature | ✅ | ❌ |
-| Cache stampede prevention | ✅ Async decorators via backend lock; sync path none by design | 🚧 Cold-miss single-flight wired into every `#[cachekit]` expansion — per-key in-process gate plus a distributed fill lock on lock-capable backends (`cachekit-macros/src/lib.rs:512`, `:544`; `flight.rs:278`; LAB-518). **Unreleased**¹³ | ✅ Cold-miss single-flight + SWR version tokens (LAB-519) | ❌ |
+| Cache stampede prevention | ✅ Async decorators via backend lock; sync path none by design | ✅ Cold-miss single-flight wired into every `#[cachekit]` expansion — per-key in-process gate plus a distributed fill lock on lock-capable backends (`cachekit-macros/src/lib.rs:512`, `:544`; `flight.rs:278`; LAB-518)¹³ | ✅ Cold-miss single-flight + SWR version tokens (LAB-519) | ❌ |
 | Cross-instance L1 invalidation (pub/sub) | ❌ built, never wired, then deleted⁹ | ❌ | ✅ Opt-in `invalidation` config over a Redis pub/sub channel (`invalidation/redis-channel.ts`) | ❌ |
 | TTL management | ✅ Redis + SaaS + File; Memcached refresh-only (see note) | ✅ Redis + SaaS + File + Workers (`TtlInspectable`); Memcached refresh-only (LAB-429/426) | ✅ Redis + SaaS + File (`TTLBackend`); Memcached refresh-only (LAB-430) | ❌ |
-| Stale-while-revalidate (client L1) | ⚠️ L1-only mode (`backend=None`) **and an explicit `ttl=`** only¹⁰ | 🚧 Serve-stale + single-flight background refresh (LAB-728)¹⁰. **Unreleased**¹³ | ✅ `getWithSwr` — version tokens + background refresh, `maxConcurrentRefreshes` cap; on Workers requires a bound `ExecutionContext` (see [Cache Backends](#cache-backends) note ¹) | ❌ |
+| Stale-while-revalidate (client L1) | ⚠️ L1-only mode (`backend=None`) **and an explicit `ttl=`** only¹⁰ | ✅ Serve-stale + single-flight background refresh (LAB-728)¹⁰ ¹³ | ✅ `getWithSwr` — version tokens + background refresh, `maxConcurrentRefreshes` cap; on Workers requires a bound `ExecutionContext` (see [Cache Backends](#cache-backends) note ¹) | ❌ |
 | Stale-while-revalidate (server stale-grace) | 🚧 LAB-381 | ❌ | ❌ | ❌ |
 
 > [!IMPORTANT]
-> ¹³ **The Rust reliability tier is on `main` but not in any published crate.** `cargo add cachekit-rs` today gets **none** of the six 🚧 cells above. Verified against the tag, not the branch: `cachekit-rs-v0.5.0` is commit `494d578` (2026-07-25), whose `crates/cachekit/Cargo.toml` reads `default = ["cachekitio", "encryption", "l1"]` — there is no `reliability` feature to enable — and whose `crates/cachekit/src/` contains neither `reliability.rs` nor `flight.rs`. LAB-518, LAB-728 and LAB-729 all landed after that tag. These cells flip to ✅ on the next crates.io release. Recorded this way deliberately: a ✅ a user cannot install is the same trust bug as a ✅ no code supports (LAB-388), and it is the failure mode a feature matrix is most prone to — the code is right there on `main` and reads as shipped.
+> ¹³ **The Rust reliability tier ships in `cachekit-rs` 0.6.0+ and is on by default.** Verified inside the published artifact, not the branch: the `cachekit-rs` 0.6.0 `.crate` from crates.io (published 2026-08-03T14:58:16Z) contains `src/reliability.rs`, `src/flight.rs`, `tests/reliability_tests.rs`, and `get_with_swr` in `src/l1/mod.rs`, and its `Cargo.toml` declares `default = ["cachekitio", "encryption", "l1", "reliability"]`. So a plain `cargo add cachekit-rs` gets circuit breaker, retry, graceful degradation, backpressure, cold-miss single-flight, and L1 SWR with no feature flags. Redis-backed presets still need the non-default `redis` feature (see [Developer Experience](#developer-experience) note ¹¹).
+>
+> These six cells read **🚧 Unreleased** between 2026-07-25 and 0.6.0's release, correctly at the time — the tier had landed on `main` after the 0.5.0 tag. 0.6.0 published 74 minutes before this document's own preceding revision was committed, so the qualifier outlived its truth by one commit. Recorded because it cuts both ways: a ✅ a user cannot install and a ❌ hiding something already shipped are the same trust bug (LAB-388), and a matrix regenerated from `main` against a registry snapshot will drift in whichever direction the last release moved.
 <!-- -->
 > ⁷ **Python has no generic backend-operation retry** (LAB-522). What exists is Redis-client-level reconnect/timeout retry and lock-acquisition retry. Setting `max_retries` does nothing: the field on `CachekitConfig` (`config/settings.py:117`) has no **operational** consumer — its only read is a validator branch whose body is `pass` (`settings.py:252`) — and the CachekitIO backend's own `max_retries` (`backends/cachekitio/config.py:121`) has no reader at all. Rust and TypeScript both wrap backend ops in a real retry layer.
 >
@@ -257,23 +265,23 @@ its spec:
 
 | Requirement | Python | Rust | TypeScript | PHP |
 | :--- | :---: | :---: | :---: | :---: |
-| Key generation (Blake2b) | ✅ Compliant | N/A auto mode¹ — interop/v1 keygen ✅ merged ([#33](https://github.com/cachekit-io/cachekit-rs/pull/33)); `#[cachekit]` mints interop keys ([#35](https://github.com/cachekit-io/cachekit-rs/pull/35)) | ✅ Compliant | ⚠️ Untested |
-| Wire format (ByteStorage) | ✅ Compliant² | ✅ Canonical (`cachekit-core`) — unused for stored values² | ✅ Compliant | ⚠️ Untested |
-| Storage container (auto mode)² | CK v3 frame (Python-internal) | Plain MessagePack (`rmp` named) — no envelope | Bare ByteStorage envelope (default) | — |
+| Key generation (Blake2b) | ✅ Compliant | N/A auto mode¹⁴ — interop/v1 keygen ✅ merged ([#33](https://github.com/cachekit-io/cachekit-rs/pull/33)); `#[cachekit]` mints interop keys ([#35](https://github.com/cachekit-io/cachekit-rs/pull/35)) | ✅ Compliant | ⚠️ Untested |
+| Wire format (ByteStorage) | ✅ Compliant¹⁵ | ✅ Canonical (`cachekit-core`) — unused for stored values¹⁵ | ✅ Compliant | ⚠️ Untested |
+| Storage container (auto mode)¹⁵ | CK v3 frame (Python-internal) | Plain MessagePack (`rmp` named) — no envelope | Bare ByteStorage envelope (default) | — |
 | Encryption (AES-256-GCM) | ✅ Compliant | ✅ Canonical (cachekit-core) | ✅ Compliant | ⚠️ Untested |
 | AAD v0x03 | ✅ Compliant (5 components — every auto serializer appends `original_type`; interop mode is the sole 4-component path) | ✅ Compliant (4 components) | ✅ Compliant (4 components) | ❌ Not implemented |
 | SaaS API | ✅ Compliant | ✅ Compliant (CachekitIO backend) | ✅ Compliant | ❌ Not implemented |
-| Test vectors in CI³ | ✅ interop/v1 (full set, incl. AAD + encryption through the real stack) | ✅ interop/v1 (full set) since [#33](https://github.com/cachekit-io/cachekit-rs/pull/33) | ✅ interop/v1 (full set, incl. its key vectors) + inline Python-generated AAD-construction and encryption (decrypt-Python-ciphertext) vectors | ⚠️ Pending |
-| Interop mode ([spec](spec/interop-mode.md), opt-in) | ✅ Released — PyPI 0.14.0+⁴ ([#220](https://github.com/cachekit-io/cachekit-py/pull/220)) | ✅ Released — crates.io 0.4.0+ ([#33](https://github.com/cachekit-io/cachekit-rs/pull/33)) | ✅ Released — npm 0.1.3+ ([#71](https://github.com/cachekit-io/cachekit-ts/pull/71)) | ❌ Not implemented |
+| Test vectors in CI¹⁶ | ✅ interop/v1 (full set, incl. AAD + encryption through the real stack) | ✅ interop/v1 (full set) since [#33](https://github.com/cachekit-io/cachekit-rs/pull/33) | ✅ interop/v1 (full set, incl. its key vectors) + inline Python-generated AAD-construction and encryption (decrypt-Python-ciphertext) vectors | ⚠️ Pending |
+| Interop mode ([spec](spec/interop-mode.md), opt-in) | ✅ Released — PyPI 0.14.0+¹⁷ ([#220](https://github.com/cachekit-io/cachekit-py/pull/220)) | ✅ Released — crates.io 0.4.0+ ([#33](https://github.com/cachekit-io/cachekit-rs/pull/33)) | ✅ Released — npm 0.1.3+ ([#71](https://github.com/cachekit-io/cachekit-ts/pull/71)) | ❌ Not implemented |
 
 > [!NOTE]
-> ¹ "N/A" for Rust *auto-mode* key generation means `cachekit-rs` implements no auto-mode key format: `get`/`set` take caller-supplied keys. The `#[cachekit]` macro mints **interop/v1** keys via `interop_key` — required, compile-time-validated `interop = "operation"` and `namespace` attributes, byte-identical across SDKs ([cachekit-rs#35](https://github.com/cachekit-io/cachekit-rs/pull/35) / LAB-424; keygen itself merged in [#33](https://github.com/cachekit-io/cachekit-rs/pull/33)). The legacy RFC §3.1.5 keygen (`key::generate_cache_key`, `{namespace}:{blake2b256-hex}` — matched no protocol format, and WAS live in every `#[cachekit]` expansion despite the audit's "unused" premise, a proc-macro grep miss) is deleted outright in #35; upgrading is a full cache invalidation for `#[cachekit]` users. `cachekit-core` is a protocol primitive library with no keygen.
+> ¹⁴ "N/A" for Rust *auto-mode* key generation means `cachekit-rs` implements no auto-mode key format: `get`/`set` take caller-supplied keys. The `#[cachekit]` macro mints **interop/v1** keys via `interop_key` — required, compile-time-validated `interop = "operation"` and `namespace` attributes, byte-identical across SDKs ([cachekit-rs#35](https://github.com/cachekit-io/cachekit-rs/pull/35) / LAB-424; keygen itself merged in [#33](https://github.com/cachekit-io/cachekit-rs/pull/33)). The legacy RFC §3.1.5 keygen (`key::generate_cache_key`, `{namespace}:{blake2b256-hex}` — matched no protocol format, and WAS live in every `#[cachekit]` expansion despite the audit's "unused" premise, a proc-macro grep miss) is deleted outright in #35; upgrading is a full cache invalidation for `#[cachekit]` users. `cachekit-core` is a protocol primitive library with no keygen.
 >
-> ² Auto-mode **stored bytes** are SDK-internal and differ per SDK — see [wire-format.md → SDK Storage Containers](spec/wire-format.md#sdk-storage-containers-auto-mode). Python stores the ByteStorage envelope *inside* its CK v3 frame; `cachekit-rs` does not use the envelope for values at all (it uses `cachekit-core` only for encryption). Cross-SDK value compatibility is exclusively an [interop-mode](spec/interop-mode.md) property (protocol#11).
+> ¹⁵ Auto-mode **stored bytes** are SDK-internal and differ per SDK — see [wire-format.md → SDK Storage Containers](spec/wire-format.md#sdk-storage-containers-auto-mode). Python stores the ByteStorage envelope *inside* its CK v3 frame; `cachekit-rs` does not use the envelope for values at all (it uses `cachekit-core` only for encryption). Cross-SDK value compatibility is exclusively an [interop-mode](spec/interop-mode.md) property (protocol#11).
 >
-> ³ "Test vectors in CI" = vectors the SDK's own default CI executes. Beyond the SDKs, this repo's `verify.yml` CI-verifies `interop-mode.json`, `encryption.json`, `python-frame.json`, `file-backend.json` ([`tools/file-backend-reference.py`](tools/file-backend-reference.py)), and — since LAB-423 — `wire-format.json` ([`tools/wire-format-reference.py`](tools/wire-format-reference.py)) against reference implementations. `cache-keys.json` (regenerated by cachekit-py v0.12.0, byte-identical to the v0.5.0 originals) is vendored and CI-verified in cachekit-py since [cachekit-py#229](https://github.com/cachekit-io/cachekit-py/pull/229) (LAB-425).
+> ¹⁶ "Test vectors in CI" = vectors the SDK's own default CI executes. Beyond the SDKs, this repo's `verify.yml` CI-verifies `interop-mode.json`, `encryption.json`, `python-frame.json`, `file-backend.json` ([`tools/file-backend-reference.py`](tools/file-backend-reference.py)), and — since LAB-423 — `wire-format.json` ([`tools/wire-format-reference.py`](tools/wire-format-reference.py)) against reference implementations. `cache-keys.json` (regenerated by cachekit-py v0.12.0, byte-identical to the v0.5.0 originals) is vendored and CI-verified in cachekit-py since [cachekit-py#229](https://github.com/cachekit-io/cachekit-py/pull/229) (LAB-425).
 >
-> ⁴ Version cells are **floors** (`X+`), not snapshots — they stay true as new versions publish; check the registry for the current release. Python's floor is the first *installable* one: interop merged under the `v0.13.0` tag, but neither `0.12.0` nor `0.13.0` was ever published to PyPI, so `0.14.0` is the earliest PyPI release containing interop mode. Do not "correct" this to 0.13.0 from the cachekit-py changelog alone.
+> ¹⁷ Version cells are **floors** (`X+`), not snapshots — they stay true as new versions publish; check the registry for the current release. Python's floor is the first *installable* one: interop merged under the `v0.13.0` tag, but neither `0.12.0` nor `0.13.0` was ever published to PyPI, so `0.14.0` is the earliest PyPI release containing interop mode. Do not "correct" this to 0.13.0 from the cachekit-py changelog alone.
 
 ---
 
@@ -294,11 +302,11 @@ its spec:
 <details>
 <summary><strong>Rust SDK (cachekit-rs)</strong></summary>
 
-- Published on crates.io as `cachekit-rs` v0.5.0 + `cachekit-macros` v0.5.0; MSRV 1.85
-- Feature flags on `main`: `cachekitio`, `redis`, `memcached`, `file`, `encryption`, `l1`, `macros`, `workers`, `reliability`, `unsync` — default = `cachekitio` + `encryption` + `l1` + `reliability`. The published 0.5.0 has no `reliability` feature and defaults to `cachekitio` + `encryption` + `l1`
+- Published on crates.io as `cachekit-rs` v0.6.0+ + `cachekit-macros` v0.6.0+; MSRV 1.85
+- Feature flags: `cachekitio`, `redis`, `memcached`, `file`, `encryption`, `l1`, `macros`, `workers`, `reliability`, `unsync` — default = `cachekitio` + `encryption` + `l1` + `reliability` (verified in the published 0.6.0 `.crate`)
 - Backends: `RedisBackend` (fred), `CachekitIO` (reqwest), `WorkersCachekitIO` (CF Workers fetch), `MemcachedBackend`, `FileBackend` (both native-only cargo features)
-- L1 cache via moka (native only, `l1` feature); serve-stale + single-flight background refresh (LAB-728) is on `main` only — absent from the published 0.5.0 crate (see [Reliability Features](#reliability-features) note ¹³)
-- Reliability tier (`reliability` feature, native) — **on `main`, not in any published crate; absent from the 0.5.0 release** (see [Reliability Features](#reliability-features) note ¹³): retry with backoff + jitter on the `is_retryable` classification, circuit breaker, backpressure (semaphore + bounded queue), cold-miss single-flight with distributed fill locks, and macro-level graceful degradation (fail-open; `SecureCache` fail-closed)
+- L1 cache via moka (native only, `l1` feature), with serve-stale + single-flight background refresh (LAB-728)
+- Reliability tier (`reliability` feature, native, **on by default since 0.6.0**): retry with backoff + jitter on the `is_retryable` classification, circuit breaker, backpressure (semaphore + bounded queue), cold-miss single-flight with distributed fill locks, and macro-level graceful degradation (fail-open; `SecureCache` fail-closed)
 - `#[cachekit]` proc-macro for decorator-style caching (async fns only)
 - `SecureCache` for zero-knowledge encrypted caching
 - SSRF protection, credential redaction, `Zeroizing` key material
@@ -310,7 +318,18 @@ its spec:
 <details>
 <summary><strong>Rust Core (cachekit-core)</strong></summary>
 
-- Published on crates.io as `cachekit-core` v0.4.0 — the protocol 1.1 writer flip: `StorageEnvelope.compressed_data` now *emits* msgpack `bin` (`serde_bytes`); readers dual-decode both `bin` and the legacy array-of-ints ([spec/wire-format.md](spec/wire-format.md), [decisions/envelope-bin-encoding.md](decisions/envelope-bin-encoding.md)). Consumers: cachekit-py ≥ 0.17.0 ships it ([cachekit-py#249](https://github.com/cachekit-io/cachekit-py/pull/249)); cachekit-ts ships it as of **0.1.5** ([cachekit-ts#91](https://github.com/cachekit-io/cachekit-ts/pull/91), released 2026-08-03), and `@cachekit-io/cachekit-core-wasm@0.1.2` pins 0.4.0 so the Workers path carries it too; **released cachekit-rs 0.5.0 does not** — its bump ([cachekit-rs#53](https://github.com/cachekit-io/cachekit-rs/pull/53)) is merged on `main`, unreleased. Dual-decode is a **core ≥ 0.4.0 property**: readers on core ≤ 0.3.0 reject `bin`
+- Published on crates.io as `cachekit-core` v0.4.0+ — the protocol 1.1 writer flip: `StorageEnvelope.compressed_data` now *emits* msgpack `bin` (`serde_bytes`); readers dual-decode both `bin` and the legacy array-of-ints ([spec/wire-format.md](spec/wire-format.md), [decisions/envelope-bin-encoding.md](decisions/envelope-bin-encoding.md)). Dual-decode is a **core ≥ 0.4.0 property**: a reader built against core ≤ 0.3.0 rejects `bin`. Per-SDK rollout of the flip, each row verified inside the published artifact (2026-08-04) rather than from a repo branch:
+
+| SDK | Published release | Embedded / resolved `cachekit-core` | Writes `bin`? |
+| :--- | :--- | :--- | :--- |
+| cachekit-py | 0.17.1 (PyPI) | 0.4.0 ([#249](https://github.com/cachekit-io/cachekit-py/pull/249)) | ✅ since 0.17.0 |
+| cachekit-rs | 0.6.0 (crates.io, 2026-08-03T14:58Z) | `0.4` per the published `Cargo.toml` ([#53](https://github.com/cachekit-io/cachekit-rs/pull/53)) | ✅ since 0.6.0 |
+| cachekit-ts — NAPI path | 0.1.5 (npm) → exact pin `cachekit-core-ts@0.1.2` | **0.2.0** (all five platform `.node` binaries) | ❌ legacy only |
+| cachekit-ts — Workers path | 0.1.5 (npm) → exact pin `cachekit-core-wasm@0.1.1` | **0.3.0** | ❌ legacy only |
+
+  **TypeScript has not shipped the flip on either path.** `@cachekit-io/cachekit@0.1.5` (published 2026-08-03T11:15Z) carries dependency pins byte-identical to 0.1.4's — exact, caret-free pins on `cachekit-core-ts@0.1.2` (published 2026-05-17, before core 0.3.0 existed) and `cachekit-core-wasm@0.1.1`. `cachekit-core-wasm@0.1.2` does embed core 0.4.0, but it published at 14:28Z — **3h13m after** ts 0.1.5 — so no published `cachekit` release pins it. [cachekit-ts#91](https://github.com/cachekit-io/cachekit-ts/pull/91) bumped the source pin and is in 0.1.5's tree, but the NAPI addon it consumes was never republished, so the shipped binary is unchanged.
+
+  This is a rollout-skew hazard, **not** a cross-SDK interop break: auto-mode stored bytes are SDK-internal and no SDK reads another's ([protocol#11](https://github.com/cachekit-io/protocol/issues/11)), so py writing `bin` cannot break a ts reader. The exposure is *within* one SDK — once a `cachekit-core-ts` carrying core ≥ 0.4.0 publishes, ts instances still on 0.1.2 will meet `bin` envelopes written by newer instances of themselves over a shared backend and reject them. Sequence the ts core-ts republish before, not alongside, any fleet upgrade.
 - Provides: `ByteStorage`, `ZeroKnowledgeEncryptor`, `derive_domain_key`, `derive_tenant_keys`
 - Dependencies: `lz4_flex`, `xxhash-rust`, `ring` (native) / `aes-gcm` (wasm32), `hkdf`, `sha2`, `rmp-serde`
 - Formally verified security properties via Kani
