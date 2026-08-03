@@ -13,16 +13,18 @@
 
 ## Context
 
-[`sdk-feature-matrix.md`](../sdk-feature-matrix.md) is a trust surface: readers use it to decide what they can rely on without reading four SDKs. In six weeks it produced **four** failures of one mechanical class — a cell describing a repository branch while claiming to describe a shipped SDK:
+[`sdk-feature-matrix.md`](../sdk-feature-matrix.md) is a trust surface: readers use it to decide what they can rely on without reading four SDKs. In six weeks it produced **six** failures of one family — a cell asserting something the reader would act on that the shipped artifacts did not support:
 
 | # | Failure | Direction |
 | :--- | :--- | :--- |
 | LAB-388 | "SWR ✓" for orphaned, never-called code | claimed more than shipped |
 | LAB-998 | interop/v1 ship-status false | claimed less than shipped |
-| LAB-1400 (first pass) | six Rust reliability cells marked 🚧 unreleased — `cachekit-rs` 0.6.0 had published 74 minutes earlier | claimed less than shipped |
-| LAB-1400 (first pass) | "cachekit-ts ships the `bin` flip as of 0.1.5" — the published 0.1.5 pins a NAPI addon embedding `cachekit-core` 0.2.0 | claimed more than shipped |
+| LAB-1400 pass 1 | six Rust reliability cells marked 🚧 unreleased — `cachekit-rs` 0.6.0 had published 74 minutes earlier | claimed less than shipped |
+| LAB-1400 pass 1 | "cachekit-ts ships the `bin` flip as of 0.1.5" — the published 0.1.5 pins a NAPI addon embedding `cachekit-core` 0.2.0 | claimed more than shipped |
+| LAB-1400 pass 2 | a floor-scoping instruction that, read literally, told maintainers to strip the seven floors living outside the Overview table | would have reopened LAB-998 |
+| LAB-1400 pass 3 | "a reader built against core ≤ 0.3.0 rejects `bin`", with fleet-upgrade sequencing advice derived from it — contradicted by `cachekit-core/tests/dual_decode.rs`, which asserts pre-flip readers accept `bin` | invented a migration risk |
 
-The last two were committed *by the audit that existed to remove the first two.* That is the signal: the failure is not carelessness, it is a method that cannot detect this class. Reading `main` tells you what the next release will contain, never what the current one does, and the gap between them is exactly where a trust bug lives.
+**Four of the six were committed by the audit that existed to remove the first two.** That is the signal, and it is not carelessness: each was written by someone holding the correct general rule and applying it to a claim they had not opened the artifact for. Reading `main` tells you what the *next* release will contain, never what the current one does. Reading a plausible mechanism tells you what *could* happen, never what the test asserts. The gap in both cases is where the trust bug lives.
 
 Two properties make it worse than ordinary staleness:
 
@@ -48,11 +50,16 @@ Two properties make it worse than ordinary staleness:
 
 5. **Record the verification date** next to the claim. A floor plus a date is auditable; a bare number is a guess with a decimal point.
 
+6. **For a behavioural claim, cite the executed test — not a mechanism you traced.** Reading a code path and reasoning "therefore X rejects Y" produces claims that are plausible and wrong; three of the six incidents above were exactly that. Where a test already asserts the behaviour, cite the test (`cachekit-core/tests/dual_decode.rs` settles the dual-read question in one file). Where none does, trace the **whole** path including its error handling — a claim about what an SDK does on failure is worthless if the operation runs inside a `catch` you did not read — and say which layer you checked. If the two disagree, the test wins.
+
 ## Consequences
 
 - Refreshing the matrix costs a handful of artifact downloads. That is the price of the document meaning anything, and it is minutes.
-- CI enforces rule 4 mechanically: [`.github/workflows/verify.yml`](../.github/workflows/verify.yml) runs [`tools/check-version-floors.py`](../tools/check-version-floors.py), which fails on any bare `X.Y.Z` in `sdk-feature-matrix.md` that is not written as a floor. It cannot catch a *wrong* floor — only a snapshot masquerading as fact. Rules 1–3 and 5 remain reviewer discipline.
-- The guard is deliberately narrow. It encodes the one failure mode that recurred four times and nothing speculative.
+- CI partially enforces rule 4: [`.github/workflows/verify.yml`](../.github/workflows/verify.yml) runs [`tools/check-version-floors.py`](../tools/check-version-floors.py), which fails on a non-floor version in the **SDK Overview table only**, and [`tools/test_check_version_floors.py`](../tools/test_check_version_floors.py), a 15-case mutation suite that runs first so the guard cannot silently degrade to reporting OK.
+
+- **Be honest about the guard's reach: it catches one of the six incidents above** — the `cachekit-rs` 0.5.0 snapshot that sat in the Overview table against a published 0.6.0. LAB-388 (a ✅ on dead code), LAB-998 (a ship-status boolean) and both LAB-1400 regressions (which lived in footnotes and Reliability cells) are all invisible to it, and it cannot tell whether a floor is *accurate*. Rules 1–3 and 5, and every floor outside that one table, remain reviewer discipline.
+
+  This matters more than it looks. An earlier revision of this record and of `verify.yml` both claimed the guard encoded "the one failure mode that recurred four times" — which would tell the next auditor that CI has this covered when it does not. An overclaiming gate is worse than no gate, because it converts a known gap into an assumed-safe one. The guard's own first version also passed a snapshot hidden behind an ASCII-hyphen placeholder and rejected a valid backticked floor; the mutation suite exists because of that.
 
 ## Rejected alternatives
 

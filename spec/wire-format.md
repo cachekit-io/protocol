@@ -100,10 +100,15 @@ so legacy-read support is permanent.
 > either path:** published `@cachekit-io/cachekit` 0.1.5 pins
 > `@cachekit-io/cachekit-core-ts@0.1.2` (whose native addons embed core **0.2.0**) and
 > `@cachekit-io/cachekit-core-wasm@0.1.1` (core **0.3.0**), so it writes and reads legacy only.
-> Readers therefore encounter both encodings on the wire today, and a reader built
-> against core ≤ 0.3.0 rejects `bin` — which is why legacy-read support is
-> permanent rather than a migration window. Per-SDK rollout state, with the
-> embedded-core evidence per artifact, is tabulated in
+> Readers therefore encounter both encodings on the wire today — which is fine,
+> and why the flip is **not** a breaking change: dual-read is mutual, so a
+> pre-flip reader shape accepts `bin` and a 1.1 reader accepts legacy, per the
+> toolchain-verified table under
+> [Encoding compatibility](#encoding-compatibility-dual-read) and the permanent
+> CI proof in `cachekit-core/tests/dual_decode.rs`. A lagging SDK therefore
+> needs no rollout ordering; it simply forgoes the size saving on its own writes
+> until it picks up core ≥ 0.4.0. Per-SDK rollout state, with the embedded-core
+> evidence per artifact, is tabulated in
 > [sdk-feature-matrix.md](../sdk-feature-matrix.md#architecture-notes).
 
 `checksum` (element `[1]`) is **deliberately excluded** from the `bin` encoding: it

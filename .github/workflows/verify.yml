@@ -53,8 +53,12 @@ jobs:
       - name: Python-frame JS cross-check (zero-dep independent reader, full round-trip)
         run: node tools/frame-crosscheck.mjs
 
-      # Four matrix failures in six weeks were one class: a version stated as a
-      # snapshot, true when written and false at the next release
-      # (decisions/matrix-version-verification.md).
+      # Narrow on purpose: catches ONE of the five matrix incidents behind
+      # LAB-1400 — a version in the SDK Overview table stated as a snapshot,
+      # true when written and false at the next release. The other four (a ✅ on
+      # dead code, a ship-status boolean, two footnote regressions) need a
+      # reader, not a regex (decisions/matrix-version-verification.md).
       - name: SDK Overview versions are floors, not snapshots
-        run: python3 tools/check-version-floors.py
+        run: |
+          python3 tools/test_check_version_floors.py
+          python3 tools/check-version-floors.py
