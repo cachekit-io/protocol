@@ -156,17 +156,15 @@ The contract a storage backend must satisfy per SDK (bytes in / bytes out; seria
 
 ## Observability
 
-Audited against code 2026-07-21 (LAB-275). "Wired" means the live cache path feeds it with zero user plumbing.
+Audited against code 2026-07-21 (LAB-275); TypeScript cells re-verified 2026-08-04 after [cachekit-ts#75](https://github.com/cachekit-io/cachekit-ts/pull/75) (LAB-517) merged. "Wired" means the live cache path feeds it with zero user plumbing.
 
 | Feature | Python | Rust | TypeScript | PHP |
 | :--- | :---: | :---: | :---: | :---: |
-| Metrics | ✅ live `prometheus_client` counters/gauges/histograms (default registry; no HTTP exposition helper — py#146) | ⚠️ `L1Stats` SaaS header telemetry only, requires a user-supplied `MetricsProvider` nothing auto-wires (LAB-521) | ❌ Prometheus module exists but is dead — `metrics` option accepted and **silently ignored** (LAB-517)¹ | ❌ |
-| Structured logging | ✅ JSON ring-buffer logger with sensitive-data masking | ❌ no `log`/`tracing` integration (LAB-521) | ❌ ad-hoc `console.error` only (LAB-517) | ❌ |
+| Metrics | ✅ live `prometheus_client` counters/gauges/histograms (default registry; no HTTP exposition helper — py#146) | ⚠️ `L1Stats` SaaS header telemetry only, requires a user-supplied `MetricsProvider` nothing auto-wires (LAB-521) | ✅ live Prometheus counters/gauges/histograms via optional `prom-client` peer dep — `metrics: boolean \| MetricsConfig`, custom registry supported; warns loudly once and degrades to no-op when `prom-client` is absent (LAB-517) | ❌ |
+| Structured logging | ✅ JSON ring-buffer logger with sensitive-data masking | ❌ no `log`/`tracing` integration (LAB-521) | ⚠️ pluggable error-logger hook (`setLogger`), default `console.error` — still not a structured logger (LAB-517) | ❌ |
 | Distributed tracing (OTel) | ❌ span-shaped API is a no-op (`NoOpSpan`) | ❌ | ❌ | ❌ |
-| SaaS telemetry headers (`X-CacheKit-L1-*`) | ✅ auto | ⚠️ reports `disabled` unless user wires a provider (LAB-521) | ⚠️ user-supplied `metricsProvider`, never auto-wired | ❌ |
+| SaaS telemetry headers (`X-CacheKit-L1-*`) | ✅ auto | ⚠️ reports `disabled` unless user wires a provider (LAB-521) | ✅ auto-wired from live L1/L2 hit/miss counters (explicit user `metricsProvider` still wins) | ❌ |
 
-> ¹ The silent no-op is the trust bug: every intent preset accepts `metrics` (`intents.ts`), `CacheImpl` never reads it, and the Prometheus module isn't exported. LAB-517 wires it or rejects the option.
->
 > Distributed tracing is absent in **every** SDK (a fleet-wide roadmap item, not a parity gap); Python's no-op span API should not be mistaken for tracing support.
 
 ---
