@@ -98,8 +98,8 @@ so legacy-read support is permanent.
 > writer flip, `cachekit` (Python) ≥ 0.17.0 emits it, and `cachekit-rs` ≥ 0.6.0
 > resolves core `0.4` and emits it too. **TypeScript does not yet emit it on
 > either path:** published `@cachekit-io/cachekit` 0.1.5 pins
-> `cachekit-core-ts@0.1.2` (whose native addons embed core **0.2.0**) and
-> `cachekit-core-wasm@0.1.1` (core **0.3.0**), so it writes and reads legacy only.
+> `@cachekit-io/cachekit-core-ts@0.1.2` (whose native addons embed core **0.2.0**) and
+> `@cachekit-io/cachekit-core-wasm@0.1.1` (core **0.3.0**), so it writes and reads legacy only.
 > Readers therefore encounter both encodings on the wire today, and a reader built
 > against core ≤ 0.3.0 rejects `bin` — which is why legacy-read support is
 > permanent rather than a migration window. Per-SDK rollout state, with the
