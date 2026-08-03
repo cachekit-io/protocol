@@ -42,7 +42,7 @@ Two properties make it worse than ordinary staleness:
 
 3. **A merged PR is not a shipped feature.** Cite the release that carries it, not the PR that landed it. `git log` and tags describe intent; the registry describes reality.
 
-4. **Every version in the matrix is a floor (`X+`), never a snapshot.** A floor stays true as new releases publish; a snapshot is wrong the moment the next one lands and silently misleads until someone notices. This is why the SDK Overview table carries `+`.
+4. **Every SDK Overview version is a floor (`X+`), never a snapshot.** A floor stays true as new releases publish; a snapshot is wrong the moment the next one lands and silently misleads until someone notices. This is why that table carries `+`, and why the CI guard polices only it. Exact versions *elsewhere* are artifact evidence under rule 2 — an embedded `cachekit-core-0.2.0` is a fact about one `.node` binary, a caret-free `0.1.2` is a fact about one npm pin — and stay bare.
 
 5. **Record the verification date** next to the claim. A floor plus a date is auditable; a bare number is a guess with a decimal point.
 

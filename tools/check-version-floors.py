@@ -39,7 +39,7 @@ def overview_rows(text: str) -> list[tuple[int, list[str]]]:
     """Data rows of the SDK Overview table, as (line number, cells)."""
     lines = text.splitlines()
     try:
-        start = next(i for i, l in enumerate(lines) if l.strip() == HEADING)
+        start = next(i for i, raw in enumerate(lines) if raw.strip() == HEADING)
     except StopIteration:
         print(f"check-version-floors: {HEADING!r} section not found", file=sys.stderr)
         sys.exit(1)

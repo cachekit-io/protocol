@@ -39,7 +39,7 @@
 | cachekit-ts | `@cachekit-io/cachekit` (npm) | 0.1.5+ | TypeScript (Node 22+) | ✅ Production |
 | cachekit-php | — | — | PHP 8.1+ | 🔜 Development |
 
-> Every version in this document is a **floor** (`X+`), never a snapshot — see [Compliance Status](#compliance-status) note ¹⁷. Registry-verified 2026-08-04; check the registry for the current release.
+> Every version in **the table above** is a **floor** (`X+`), never a snapshot — see [Compliance Status](#compliance-status) note ¹⁷. Registry-verified 2026-08-04; check the registry for the current release. Bare versions elsewhere in this document are deliberate: they are exact facts about one published artifact (an embedded `cachekit-core-0.2.0`, a caret-free npm pin), not floors — do not "correct" them by adding `+`.
 
 ---
 
