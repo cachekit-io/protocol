@@ -32,7 +32,15 @@ This document specifies two layers:
 
 1. **The ByteStorage envelope** — the LZ4 + xxHash3-64 container implemented by
    `cachekit-core` and exposed to SDKs. This layer is byte-canonical and pinned by
-   [`test-vectors/wire-format.json`](../test-vectors/wire-format.json).
+   [`test-vectors/wire-format.json`](../test-vectors/wire-format.json), which is
+   enforced in CI in two independent places (LAB-423): this repo's `verify.yml`
+   runs [`tools/wire-format-reference.py verify`](../tools/wire-format-reference.py)
+   against the stdlib-only reference implementation, and the canonical
+   implementation [`cachekit-core`](https://github.com/cachekit-io/cachekit-core)
+   vendors the file sha256-pinned in `tests/wire_format_vectors.rs`, asserting
+   decode byte-identity for every vector and re-encode byte-identity for the
+   canonical `*_bin` vectors only — legacy array-of-integers vectors are
+   decode-only, retained as legacy-read proof.
 2. **[SDK storage containers](#sdk-storage-containers-auto-mode)** — what each SDK
    *actually stores* in a backend in default (auto) mode. These differ per SDK, are
    **SDK-internal**, and are documented here so their bytes are identifiable — not so
@@ -85,11 +93,22 @@ accept the legacy encoding below — a stored envelope never expires on a schedu
 so legacy-read support is permanent.
 
 > [!NOTE]
-> **Implementation status:** the canonical `bin` encoding **is** shipped —
-> `cachekit-core` v0.4.0 carries the writer flip, and `cachekit` (Python)
-> ≥ 0.17.0 emits it. The released `cachekit-rs` 0.5.0 and `cachekit-ts` 0.1.4
-> lines still pin core 0.3 and therefore still write the legacy encoding, so
-> readers encounter both on the wire today. Per-SDK rollout state is tracked in
+> **Implementation status** (verified against published artifacts, 2026-08-04):
+> the canonical `bin` encoding **is** shipped — `cachekit-core` v0.4.0 carries the
+> writer flip, `cachekit` (Python) ≥ 0.17.0 emits it, and `cachekit-rs` ≥ 0.6.0
+> resolves core `0.4` and emits it too. **TypeScript does not yet emit it on
+> either path:** published `@cachekit-io/cachekit` 0.1.5 pins
+> `@cachekit-io/cachekit-core-ts@0.1.2` (whose native addons embed core **0.2.0**) and
+> `@cachekit-io/cachekit-core-wasm@0.1.1` (core **0.3.0**), so it writes and reads legacy only.
+> Readers therefore encounter both encodings on the wire today — which is fine,
+> and why the flip is **not** a breaking change: dual-read is mutual, so a
+> pre-flip reader shape accepts `bin` and a 1.1 reader accepts legacy, per the
+> toolchain-verified table under
+> [Encoding compatibility](#encoding-compatibility-dual-read) and the permanent
+> CI proof in `cachekit-core/tests/dual_decode.rs`. A lagging SDK therefore
+> needs no rollout ordering; it simply forgoes the size saving on its own writes
+> until it picks up core ≥ 0.4.0. Per-SDK rollout state, with the embedded-core
+> evidence per artifact, is tabulated in
 > [sdk-feature-matrix.md](../sdk-feature-matrix.md#architecture-notes).
 
 `checksum` (element `[1]`) is **deliberately excluded** from the `bin` encoding: it

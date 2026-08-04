@@ -4,6 +4,64 @@ All notable changes to the CacheKit Protocol Specification.
 
 ## [Unreleased]
 
+### SDK Feature Matrix
+
+- Consolidated ten conflicting open matrix PRs into one code-verified end-state
+  (LAB-1400), regenerated from current SDK code rather than from the stale PR
+  diffs. Cells that **reversed** — check these if you built on them: key
+  rotation (py/rs ✅ → ❌ fleet-wide; `rotate_key()` is a `NotImplemented`
+  stub, and cachekit-py's importable PyO3 `KeyRotationState` succeeds while
+  rotating nothing), Rust `::secure` preset and Rust sync support (both ✅ →
+  never existed), Builder API (py/ts ✅ → ❌), hardware-acceleration detection
+  (rs ✅ → not re-exported; ts N/A → ❌), TypeScript Arrow (🔜 → ❌), and
+  Python's encrypted read path (documented fail-closed → **fail-open by
+  default**), and `cache.secure.wrap()` in TypeScript (implied encryption → no
+  guarantee at all; LAB-513, CWE-311). New rows: Retry, Graceful degradation,
+  Cross-instance L1 invalidation (LAB-520), client-L1 stale-while-revalidate
+  (LAB-728), Orjson serializer, tamper/wrong-key failure mode, `secure`-API
+  enforcement, plus an Observability section (LAB-275). Supersedes protocol#25,
+  #28, #29, #31, #32, #33, #35, #37, #40, #43 — per-PR fold verdicts below.
+
+- **Every version-keyed claim re-verified against published artifacts**, after an
+  expert-panel review found the first pass had introduced two new false cells of
+  the very class it was fixing. `cachekit-rs` 0.6.0 published 74 minutes before
+  that pass's final commit, so six Rust reliability cells shipped marked 🚧
+  unreleased when the tier was in fact released and **on by default**; and
+  "cachekit-ts ships the protocol-1.1 `bin` flip as of 0.1.5" was false —
+  published `@cachekit-io/cachekit@0.1.5` carries dependency pins byte-identical
+  to 0.1.4's, on `cachekit-core-ts@0.1.2` (native addons embed core **0.2.0**)
+  and `cachekit-core-wasm@0.1.1` (core **0.3.0**), so TypeScript emits legacy on
+  both paths. The matrix now carries a per-artifact rollout table with the
+  embedded-core evidence, and the method is recorded in
+  [decisions/matrix-version-verification.md](decisions/matrix-version-verification.md):
+  registry metadata establishes which artifact is current, and where an embedded
+  dependency decides the claim the `.crate`/`.tgz` is opened. Versions in the SDK
+  Overview are now floors (`X+`), enforced by
+  [`tools/check-version-floors.py`](tools/check-version-floors.py) in `verify.yml`
+  — four failures of this one mechanical class in six weeks.
+
+- Footnote namespace repaired: markers `¹`–`⁴` were each defined **twice** with
+  unrelated content (Cache Backends and Protocol Compliance), so half the
+  evidence pointers in the file resolved to the wrong note — including the
+  "version cells are floors" note. The Protocol Compliance block is now `¹⁴`–`¹⁷`
+  and every marker is defined exactly once.
+
+#### Per-PR fold verdicts (LAB-1400)
+
+| PR | Ticket | Verdict |
+| :--- | :--- | :--- |
+| [#25](https://github.com/cachekit-io/protocol/pull/25) | LAB-423 | Incorporated — `spec/wire-format.md` lacked the CI-enforcement note; both enforcement points now named |
+| [#28](https://github.com/cachekit-io/protocol/pull/28) | LAB-274 | Incorporated incl. the intent-preset semantics table; rejected its stale "rs has no circuit breaker" line |
+| [#29](https://github.com/cachekit-io/protocol/pull/29) | LAB-275 | Partly incorporated (key rotation, hardware accel, Observability, serializer rows, MSRV 1.85); versions / ts-Workers / rs-stampede / interop claims rejected as stale |
+| [#31](https://github.com/cachekit-io/protocol/pull/31) | LAB-520 | Incorporated as-is |
+| [#32](https://github.com/cachekit-io/protocol/pull/32) | LAB-426 | Incorporated — rs Workers locking + TTL was still missing from `main` |
+| [#33](https://github.com/cachekit-io/protocol/pull/33) | LAB-427 | Already on `main`; would have reintroduced a stale rs-Redis-lock ❌ |
+| [#35](https://github.com/cachekit-io/protocol/pull/35) | LAB-518 | Incorporated; rejected its "backpressure stays ❌" line (LAB-729) |
+| [#37](https://github.com/cachekit-io/protocol/pull/37) | LAB-430 | Already on `main`; same stale-cell problem as #33 |
+| [#40](https://github.com/cachekit-io/protocol/pull/40) | LAB-751 | Incorporated — `main` still claimed "SWR forced off" on Workers |
+| [#43](https://github.com/cachekit-io/protocol/pull/43) | LAB-728 | Incorporated; extended the py cell, which understated its gate (needs an explicit `ttl=`) |
+| [#17](https://github.com/cachekit-io/protocol/pull/17) | — | Out of scope, left open |
+
 ### Specs
 
 - StorageEnvelope `compressed_data` canonical encoding flipped from MessagePack
