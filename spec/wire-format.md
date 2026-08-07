@@ -6,7 +6,7 @@
 
 **LZ4 compression + xxHash3-64 integrity wrapping for cached payloads that use the envelope.**
 
-*Protocol Version 1.1 · Verified against `cachekit-core` v0.4.0 (`src/byte_storage.rs`); legacy envelope test vectors generated at v0.2.0 and unchanged since — `bin`-encoded twins added in protocol 1.1 ([decisions/envelope-bin-encoding.md](../decisions/envelope-bin-encoding.md))*
+*Protocol Version 1.1 · Verified against `cachekit-core` v0.4.0 (`src/byte_storage.rs`); six original legacy envelope test vectors were generated at v0.2.0, with the `width_boundary_bin16` legacy vector added by `cachekit-core` v0.5.0 — `bin`-encoded twins added in protocol 1.1 ([decisions/envelope-bin-encoding.md](../decisions/envelope-bin-encoding.md))*
 
 </div>
 
@@ -159,8 +159,8 @@ Canonical (bin, 1.1+ writers — vector `simple_string_bin`, 42 B):
 The two encodings are **mutually intelligible in both directions** under
 `rmp-serde` — this is a property of the deployed readers, not a migration
 promise. Toolchain-verified (rmp-serde 1.3.1, serde_bytes 0.11.19, rmp 0.8.15,
-serde 1.0.228) on all six byte-pinned vectors, including `bin` wire fed through
-the shipped `ByteStorage::retrieve()` with checksum validation and
+serde 1.0.228) on all seven byte-pinned vectors, including `bin` wire fed
+through the shipped `ByteStorage::retrieve()` with checksum validation and
 decompression-ratio guards intact (LAB-764):
 
 | Reader | Legacy wire (array-of-ints) | Canonical wire (`bin`) |
@@ -202,6 +202,14 @@ is append-only and verified in this repo's CI by
 [`tools/wire-format-reference.py`](../tools/wire-format-reference.py); vector
 provenance and the downstream re-pin plan live in
 [decisions/envelope-bin-encoding.md](../decisions/envelope-bin-encoding.md).
+
+The fixture deliberately includes the `bin8` → `bin16` boundary but not a
+`bin32` fixture pair. A pair with more than 65,535 compressed bytes would add
+roughly 590 KB of hex-encoded fixture data once the legacy array-of-integers
+twin is included, then be vendored into every SDK. The `bin16` pair verifies
+the generic shortest-width selection property at fixture level, while
+`cachekit-core/tests/dual_decode.rs::width_boundary_bin16_bin32` exercises
+`bin32` at runtime without that distribution cost.
 
 > [!WARNING]
 > **History.** Earlier revisions of this document described the envelope as a

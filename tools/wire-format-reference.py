@@ -49,7 +49,8 @@ ENVELOPE_FORMAT = (
     "spec/wire-format.md, 'Byte Layout' / 'Encoding compatibility'."
 )
 GENERATOR = (
-    "legacy vectors: cachekit-core v0.2.0 (unchanged since); *_bin vectors: "
+    "six original legacy vectors: cachekit-core v0.2.0; width_boundary_bin16 "
+    "legacy vector: cachekit-core v0.5.0 real writer; *_bin vectors: "
     "tools/wire-format-reference.py generate - deterministic re-encode of the "
     "legacy fields, byte-verified against rmp-serde 1.3.1 + serde_bytes 0.11.19 "
     "output (LAB-783)"
