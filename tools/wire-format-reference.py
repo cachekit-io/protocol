@@ -38,7 +38,7 @@ from pathlib import Path
 
 FIXTURE_PATH = Path(__file__).resolve().parent.parent / "test-vectors" / "wire-format.json"
 
-FIXTURE_VERSION = "1.1.0"
+FIXTURE_VERSION = "1.1.1"
 ENVELOPE_FORMAT = (
     "MessagePack positional array (rmp_serde::to_vec): "
     "[compressed_data, checksum, original_size, format]. Vectors without an "
