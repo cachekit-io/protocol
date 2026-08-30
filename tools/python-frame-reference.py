@@ -146,7 +146,7 @@ def verify() -> int:
                 # from the 1.1 flip: checksum stays an array of 8 integers and
                 # format stays a fixstr, in BOTH encodings.
                 try:
-                    *_, actual = _wire.decode_envelope(payload)
+                    data, checksum, size, fmt, actual = _wire.decode_envelope(payload)
                 except ValueError as e:
                     print(f"FAIL {name}: envelope decode: {e}")
                     vec_failed += 1
@@ -154,8 +154,29 @@ def verify() -> int:
                     if actual != declared:
                         print(f"FAIL {name}: compressed_data is {actual}, vector declares {declared}")
                         vec_failed += 1
+                    elif _wire.encode_envelope(data, checksum, size, fmt, encoding=actual) != payload:
+                        # decode_envelope tolerates reader-lenient forms no
+                        # rmp_serde writer emits (array16/array32 outer header,
+                        # non-shortest uints); re-encode byte-fidelity pins the
+                        # canonical writer form, incl. the fixarray(4) marker.
+                        print(f"FAIL {name}: envelope is not in canonical shortest-form encoding (re-encode differs)")
+                        vec_failed += 1
                     else:
-                        observed_encodings.add(actual)
+                        drifted = [
+                            fname
+                            for fname, got in (
+                                ("compressed_data_hex", data.hex()),
+                                ("checksum_hex", checksum.hex()),
+                                ("original_size", size),
+                                ("format", fmt),
+                            )
+                            if env.get(fname) != got
+                        ]
+                        if drifted:
+                            print(f"FAIL {name}: payload_envelope field(s) disagree with the envelope bytes: {', '.join(drifted)}")
+                            vec_failed += 1
+                        else:
+                            observed_encodings.add(actual)
         det = vec.get("arrow_detection")
         if det:
             off = det["ipc_magic_offset"]
@@ -286,19 +307,19 @@ def _build_default_path_vector() -> dict:
     }
 
 
-def _upsert(committed: list[dict], built: list[dict], generator_stamp: str) -> int:
+def _upsert(committed: list[dict], built: list[dict], generator_stamp: str) -> list[str]:
     """Replace committed vectors the wheel rebuilt (matched by name); append new names.
 
     Never removes anything: a vector this run did not rebuild stays exactly as
     committed, so dropping a committed vector is structurally impossible. A
     rebuilt vector whose content matches the committed one (ignoring its
     per-vector 'generator' provenance) keeps the committed entry byte-untouched
-    — a no-op `generate` leaves the fixture byte-identical. Returns the number
-    of vectors actually rewritten or added.
+    — a no-op `generate` leaves the fixture byte-identical. Returns the names
+    of the vectors actually rewritten or added.
     """
     index = {v["name"]: i for i, v in enumerate(committed)}
     _require(len(index) == len(committed), "committed fixture has duplicate vector names")
-    changed = 0
+    changed: list[str] = []
     for vec in built:
         i = index.get(vec["name"])
         if i is not None and {k: v for k, v in committed[i].items() if k != "generator"} == vec:
@@ -309,7 +330,7 @@ def _upsert(committed: list[dict], built: list[dict], generator_stamp: str) -> i
             committed.append(stamped)
         else:
             committed[i] = stamped
-        changed += 1
+        changed.append(vec["name"])
     return changed
 
 
@@ -323,12 +344,19 @@ def _require_twin_equivalence(frame_vectors: list[dict]) -> None:
     downstream SDKs pin (LAB-903).
     """
     by_name = {v["name"]: v for v in frame_vectors}
-    legacy = by_name.get("default_saas_write_msgpack_bytestorage")
-    twin = by_name.get("default_saas_write_msgpack_bytestorage_bin")
-    _require(legacy is not None and twin is not None, "default-path vector pair incomplete")
-    assert legacy is not None and twin is not None  # narrowing; _require already raised
+    try:
+        legacy = by_name["default_saas_write_msgpack_bytestorage"]
+        twin = by_name["default_saas_write_msgpack_bytestorage_bin"]
+    except KeyError as exc:
+        raise ValueError("generation invariant violated: default-path vector pair incomplete") from exc
     _require(twin["value_json"] == legacy["value_json"], "twin value_json differs from the legacy vector")
-    _require(twin["expected_header"] == legacy["expected_header"], "twin frame header differs from the legacy vector")
+    # Header equality must hold at the BYTE level, not just as parsed JSON — a
+    # wheel that reorders or reformats the header JSON would otherwise slip a
+    # byte-level non-twin past a dict compare. The frame prefix is everything
+    # before the payload: magic, version, header length, header bytes.
+    legacy_prefix = legacy["frame_hex"][: len(legacy["frame_hex"]) - len(legacy["expected_payload_hex"])]
+    twin_prefix = twin["frame_hex"][: len(twin["frame_hex"]) - len(twin["expected_payload_hex"])]
+    _require(twin_prefix == legacy_prefix, "twin frame prefix (magic/version/header bytes) differs from the legacy vector")
     for field in ("compressed_data_hex", "checksum_hex", "original_size", "format", "inner_msgpack_hex"):
         _require(
             twin["payload_envelope"][field] == legacy["payload_envelope"][field],
@@ -463,17 +491,28 @@ def generate() -> int:
         f"cachekit {cachekit.__version__} (PyPI wheel; Rust core via PyO3), "
         "generated by tools/python-frame-reference.py generate"
     )
+    unstamped = {v["name"] for v in doc["frame_vectors"] + doc["error_vectors"] if "generator" not in v}
     changed = _upsert(doc["frame_vectors"], built, generator_stamp)
     changed += _upsert(doc["error_vectors"], built_errors, generator_stamp)
     _require_twin_equivalence(doc["frame_vectors"])
 
     if not changed:
-        print(f"{VECTOR_PATH} already up to date ({len(built)} frame, {len(built_errors)} error vectors rebuilt identical); nothing written")
+        print(
+            f"{VECTOR_PATH} already up to date ({len(built)} frame, {len(built_errors)} error "
+            "vectors rebuilt, all identical to committed); nothing written"
+        )
         return 0
+    if unstamped & set(changed) and not doc["generator"].startswith("mixed provenance"):
+        # Rewriting a vector the top-level provenance claim covered would turn
+        # that claim into a lie; per-vector 'generator' becomes authoritative.
+        doc["generator"] = (
+            "mixed provenance — vectors carrying a per-vector 'generator' field record "
+            f"their own; all others: {doc['generator']}"
+        )
     VECTOR_PATH.write_text(json.dumps(doc, indent=2, sort_keys=False) + "\n")
     print(
-        f"wrote {VECTOR_PATH} ({changed} vector(s) rewritten or added; "
-        f"{len(doc['frame_vectors'])} frame, {len(doc['error_vectors'])} error vectors total)"
+        f"wrote {VECTOR_PATH} — rewrote/added: {', '.join(changed)} "
+        f"({len(doc['frame_vectors'])} frame, {len(doc['error_vectors'])} error vectors total)"
     )
     return 0
 

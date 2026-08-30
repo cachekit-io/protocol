@@ -103,8 +103,18 @@ All notable changes to the CacheKit Protocol Specification.
   The ByteStorage envelope codec is no longer reimplemented there: encode/decode
   come from `tools/wire-format-reference.py`, the one shared implementation of
   the encoding these fixtures pin. Rewritten vectors carry per-vector
-  `generator` provenance; `test-vectors/python-frame.json` is byte-unchanged by
-  this refactor, and a no-op `generate` never rewrites the file.
+  `generator` provenance (and the top-level provenance flips to an explicit
+  "mixed provenance" statement the first time a previously-unstamped vector is
+  rewritten); `test-vectors/python-frame.json` is byte-unchanged by this
+  refactor, and a no-op `generate` never rewrites the file. The stdlib `verify`
+  leg got strictly stronger (expert-panel findings): it now fully decodes each
+  `payload_envelope` via the shared codec (enforcing the protocol 1.1 flip
+  exclusions — checksum stays an array of 8 integers, format stays fixstr),
+  requires the envelope to re-encode byte-identically (pinning the canonical
+  rmp_serde shortest-form encoding, including the outer fixarray(4) marker),
+  and pins the declared `compressed_data_hex`/`checksum_hex`/`original_size`/
+  `format` fields against the actual envelope bytes; the generate-time twin
+  proof now compares frame prefixes at the byte level, not as parsed JSON.
 
 - 7 legacy/`bin` vector pairs in `test-vectors/wire-format.json` (append-only;
   legacy vectors are retained forever as legacy-read proof; fixture
