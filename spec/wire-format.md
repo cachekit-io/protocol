@@ -298,8 +298,8 @@ let checksum: [u8; 8] = xxh3_64(&original_data).to_be_bytes();
 
 | Limit | Value | Purpose |
 | :--- | ---: | :--- |
-| Max uncompressed size | 512 MB | Memory safety |
-| Max compressed size | 512 MB | Memory safety |
+| Max uncompressed size | 512 MiB (536,870,912 B) | Memory safety |
+| Max compressed size | 512 MiB (536,870,912 B) | Memory safety |
 | Max compression ratio | 1000:1 | Decompression bomb protection |
 
 ### Decompression Bomb Detection
@@ -328,9 +328,9 @@ if original_size > max_allowed:
 ```
 Input: raw_data (bytes), format (string, default "msgpack")
 
-1. Validate:  raw_data.length <= 512 MB
+1. Validate:  raw_data.length <= 512 MiB
 2. Compress:  compressed = lz4_block_compress(raw_data)
-3. Validate:  compressed.length <= 512 MB
+3. Validate:  compressed.length <= 512 MiB
 4. Checksum:  checksum = xxh3_64(raw_data).to_be_bytes()  // Hash ORIGINAL
 5. Envelope:  StorageEnvelope {
                   compressed_data: compressed,
@@ -339,7 +339,7 @@ Input: raw_data (bytes), format (string, default "msgpack")
                   format:          format
               }
 6. Serialize: envelope_bytes = msgpack_encode(envelope)   // compressed_data as bin (1.1+)
-7. Validate:  envelope_bytes.length <= 512 MB
+7. Validate:  envelope_bytes.length <= 512 MiB
 8. Return:    envelope_bytes
 ```
 
@@ -355,11 +355,11 @@ Input: raw_data (bytes), format (string, default "msgpack")
 ```
 Input: envelope_bytes
 
-1.  Validate:    envelope_bytes.length <= 512 MB
+1.  Validate:    envelope_bytes.length <= 512 MiB
 2.  Deserialize: envelope = msgpack_decode(envelope_bytes) as StorageEnvelope
                  // accept BOTH element[0] encodings: bin AND array-of-ints
-3.  Validate:    envelope.compressed_data.length <= 512 MB
-4.  Validate:    envelope.original_size <= 512 MB
+3.  Validate:    envelope.compressed_data.length <= 512 MiB
+4.  Validate:    envelope.original_size <= 512 MiB
 5.  Bomb check:  (see Security Limits above)
 6.  Decompress:  data = lz4_block_decompress(envelope.compressed_data, envelope.original_size)
 7.  Checksum:    computed = xxh3_64(data).to_be_bytes()

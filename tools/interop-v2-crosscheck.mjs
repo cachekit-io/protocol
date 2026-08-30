@@ -22,6 +22,17 @@ const MAX_UNCOMPRESSED = 512n * 1024n * 1024n;
 const MAX_COMPRESSED = 512 * 1024 * 1024;
 const MAX_RATIO = 1000n;
 
+// Strict hex decoder for every JSON-provided hex field. Buffer.from(s, "hex")
+// silently truncates at the first invalid character and drops a trailing odd
+// nibble — a corrupted vector file could otherwise "pass" against only the
+// valid prefix of a field.
+function fromHex(s, field) {
+  if (typeof s !== "string" || s.length % 2 !== 0 || /[^0-9a-fA-F]/.test(s)) {
+    throw new Error(`vector field ${field} is not valid even-length hex`);
+  }
+  return Buffer.from(s, "hex");
+}
+
 // --- LZ4 block decompressor (independent implementation) --------------------
 function lz4BlockDecompress(block, originalSize) {
   const out = Buffer.alloc(originalSize);
@@ -210,7 +221,7 @@ function constructSalt(domain, tenantSalt) {
 async function deriveEncryptionKey(masterKeyHex, tenantId) {
   const masterKey = await webcrypto.subtle.importKey(
     "raw",
-    Buffer.from(masterKeyHex, "hex"),
+    fromHex(masterKeyHex, "master_key_hex"),
     "HKDF",
     false,
     ["deriveBits"],
@@ -243,10 +254,11 @@ const check = (name, kind, expected, actual) => {
 
 for (const v of doc.container_vectors) {
   try {
-    const value = decodeContainer(Buffer.from(v.container_hex, "hex"));
+    const container = fromHex(v.container_hex, `${v.name}.container_hex`);
+    const value = decodeContainer(container);
     check(v.name, "decoded value bytes", v.value_msgpack_hex, value.toString("hex"));
     // Structural pins: method / original_size / payload fields agree with the parse.
-    const parsed = parseContainer(Buffer.from(v.container_hex, "hex"));
+    const parsed = parseContainer(container);
     check(v.name, "method", BigInt(v.method), parsed.method);
     check(v.name, "original_size", BigInt(v.original_size), parsed.originalSize);
     check(v.name, "payload_hex", v.payload_hex, parsed.payload.toString("hex"));
@@ -271,13 +283,13 @@ for (const v of doc.encryption_vectors ?? []) {
     check(v.name, "derived_key_fingerprint_hex", v.derived_key_fingerprint_hex, fp.toString("hex"));
 
     const gcmKey = await webcrypto.subtle.importKey("raw", derived, "AES-GCM", false, ["decrypt"]);
-    const ct = Buffer.from(v.ciphertext_hex, "hex");
+    const ct = fromHex(v.ciphertext_hex, `${v.name}.ciphertext_hex`);
     const plaintext = Buffer.from(
       await webcrypto.subtle.decrypt(
         {
           name: "AES-GCM",
           iv: ct.subarray(0, 12),
-          additionalData: Buffer.from(v.aad_hex, "hex"),
+          additionalData: fromHex(v.aad_hex, `${v.name}.aad_hex`),
           tagLength: 128,
         },
         gcmKey,
@@ -298,12 +310,20 @@ for (const v of doc.encryption_vectors ?? []) {
 }
 
 for (const v of doc.reject_vectors) {
+  // Parse the hex OUTSIDE the expected-rejection block: a malformed vector
+  // file must fail the run, not masquerade as a passing rejection.
+  const container = fromHex(v.container_hex, `${v.name}.container_hex`);
   try {
-    decodeContainer(Buffer.from(v.container_hex, "hex"));
+    decodeContainer(container);
     failures++;
     console.error(`FAIL ${v.name}: expected rejection (${v.error}), but decoding succeeded`);
-  } catch {
-    /* expected */
+  } catch (err) {
+    // Expected — but only a deliberate reader rejection (a plain Error thrown
+    // by the parser/decoder), never an unrelated crash such as a TypeError.
+    if (!(err instanceof Error) || err.constructor !== Error) {
+      failures++;
+      console.error(`FAIL ${v.name}: rejected by unexpected error type ${err?.constructor?.name}: ${err?.message ?? err}`);
+    }
   }
 }
 
@@ -311,13 +331,14 @@ for (const v of doc.reject_vectors) {
 for (const v of doc.crypto_reject_vectors ?? []) {
   const derived = await deriveEncryptionKey(v.master_key_hex, v.tenant_id);
   const gcmKey = await webcrypto.subtle.importKey("raw", derived, "AES-GCM", false, ["decrypt"]);
-  const ct = Buffer.from(v.ciphertext_hex, "hex");
+  const ct = fromHex(v.ciphertext_hex, `${v.name}.ciphertext_hex`);
+  const aad = fromHex(v.aad_hex, `${v.name}.aad_hex`);
   try {
     await webcrypto.subtle.decrypt(
       {
         name: "AES-GCM",
         iv: ct.subarray(0, 12),
-        additionalData: Buffer.from(v.aad_hex, "hex"),
+        additionalData: aad,
         tagLength: 128,
       },
       gcmKey,
@@ -325,8 +346,13 @@ for (const v of doc.crypto_reject_vectors ?? []) {
     );
     failures++;
     console.error(`FAIL ${v.name}: cross-mode decrypt unexpectedly succeeded (${v.error})`);
-  } catch {
-    /* expected: authentication failure */
+  } catch (err) {
+    // Expected — but only a WebCrypto authentication failure (OperationError),
+    // never an unrelated crash.
+    if (err?.name !== "OperationError") {
+      failures++;
+      console.error(`FAIL ${v.name}: expected AES-GCM authentication failure (OperationError), got ${err?.name}: ${err?.message ?? err}`);
+    }
   }
 }
 

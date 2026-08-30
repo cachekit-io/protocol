@@ -22,7 +22,7 @@ All notable changes to the CacheKit Protocol Specification.
   (compressed, uncompressed, and non-canonical-widths round-trips,
   compressed+encrypted round-trip, 16 structural + 2 cryptographic
   must-reject vectors). Security limits
-  reuse the wire-format constants (512 MB / 1000:1, enforced before
+  reuse the wire-format constants (512 MiB / 1000:1, enforced before
   decompression); the CRIME/BREACH verdict is recorded in-spec (in threat
   model, accepted with normative mitigations); the legacy array-of-ints
   payload leniency is explicitly **not** inherited. Interop/v1 is

@@ -34,16 +34,20 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import logging
 import sys
 from pathlib import Path
+from types import ModuleType
 
 _HERE = Path(__file__).resolve().parent
 
 
-def _load_v1():
+def _load_v1() -> ModuleType:
     """Import tools/interop-reference.py (hyphenated filename) as a module."""
     spec = importlib.util.spec_from_file_location("interop_reference", _HERE / "interop-reference.py")
-    assert spec is not None and spec.loader is not None
+    if spec is None or spec.loader is None:
+        msg = "cannot load tools/interop-reference.py"
+        raise ImportError(msg)
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     return mod
@@ -61,9 +65,26 @@ CONTAINER_VERSION = 0x02
 METHOD_NONE = 0
 METHOD_LZ4_BLOCK = 1
 
+_ERR_TRUNCATED_HEADER = "truncated container (magic + version bytes required)"
+
 
 class V2Error(ValueError):
     """Raised for any interop/v2 container the reader algorithm must reject."""
+
+
+def _bad_marker(expected: str, marker: int) -> V2Error:
+    """Reader rejection for a wrong MessagePack marker (diagnostic text, not normative)."""
+    return V2Error(f"expected {expected}, got marker 0x{marker:02x}")
+
+
+class SelfCheckError(Exception):
+    """A vector invariant failed. Unlike `assert`, never disabled by `python -O`."""
+
+
+def _require(cond: object, msg: str) -> None:
+    """Self-check guard: `assert` semantics that survive optimized mode."""
+    if not cond:
+        raise SelfCheckError(msg)
 
 
 # ---------------------------------------------------------------------------
@@ -241,7 +262,7 @@ class _Reader:
             return int.from_bytes(self._take(2), "big")
         if marker == 0xDD:
             return int.from_bytes(self._take(4), "big")
-        raise V2Error(f"container body must be a msgpack array, got marker 0x{marker:02x}")
+        raise _bad_marker("a msgpack array header for the container body", marker)
 
     def read_uint(self) -> int:
         # Unsigned-family markers ONLY (spec: marker-level enforcement). The
@@ -259,7 +280,7 @@ class _Reader:
             return int.from_bytes(self._take(4), "big")
         if marker == 0xCF:
             return int.from_bytes(self._take(8), "big")
-        raise V2Error(f"expected unsigned-family msgpack int marker, got 0x{marker:02x}")
+        raise _bad_marker("an unsigned-family msgpack int marker", marker)
 
     def read_bin(self) -> bytes:
         marker = self._take(1)[0]
@@ -272,7 +293,7 @@ class _Reader:
         else:
             # The explicit non-inheritance of the array-of-ints leniency (and
             # rejection of str-family payloads) lands here.
-            raise V2Error(f"payload must be msgpack bin (0xc4/0xc5/0xc6), got marker 0x{marker:02x}")
+            raise _bad_marker("payload as msgpack bin (0xc4/0xc5/0xc6)", marker)
         if self.pos + n > len(self.buf):  # header-vs-remaining-input rule
             raise V2Error("bin length header exceeds remaining input")
         return self._take(n)
@@ -285,7 +306,7 @@ class _Reader:
 def decode_container(data: bytes) -> bytes:
     """Normative reader algorithm steps 2-5: container bytes -> plain value bytes."""
     if len(data) < 2:
-        raise V2Error("truncated container (magic + version bytes required)")
+        raise V2Error(_ERR_TRUNCATED_HEADER)
     if data[0] != MAGIC:
         raise V2Error("bad container magic (0xC1 expected) — possible interop/v1 value or mode misconfiguration")
     if data[1] != CONTAINER_VERSION:
@@ -469,7 +490,7 @@ def _build_reject_vectors(containers: dict[str, dict]) -> list[dict]:
         },
         {
             "name": "reject_declared_size_bomb",
-            "description": "original_size declares 1 TiB — exceeds the 512 MB cap (checked BEFORE decompression)",
+            "description": "original_size declares 1 TiB — exceeds the 512 MiB cap (checked BEFORE decompression)",
             "container_hex": _hex_container(METHOD_LZ4_BLOCK, 1 << 40, bytes.fromhex("10410000")),
             "error": "original_size exceeds max uncompressed size",
         },
@@ -680,92 +701,108 @@ def _self_check(built: dict) -> None:
         b"\x00" * 100_000,
     ]
     for s in samples:
-        assert lz4_block_decompress(lz4_block_compress(s), len(s)) == s, f"LZ4 roundtrip failed for {len(s)}-byte sample"
+        _require(lz4_block_decompress(lz4_block_compress(s), len(s)) == s, f"LZ4 roundtrip failed for {len(s)}-byte sample")
 
     # Container round-trips + pinned bytes.
     for cv in built["container_vectors"]:
         got = decode_container(bytes.fromhex(cv["container_hex"]))
-        assert got.hex() == cv["value_msgpack_hex"], f"container {cv['name']} does not decode to its value bytes"
+        _require(got.hex() == cv["value_msgpack_hex"], f"container {cv['name']} does not decode to its value bytes")
 
     by_name = {c["name"]: c for c in built["container_vectors"]}
     # The inherited-value-profile claim: identical inner bytes across the two wraps,
     # AND byte-identical to the PUBLISHED v1 value vector in interop-mode.json —
     # cross-file, so drift in either file breaks generation/verify loudly.
-    assert by_name["method0_issue_example"]["value_msgpack_hex"] == by_name["lz4_wraps_v1_value_vector"]["value_msgpack_hex"]
-    v1_doc = json.loads((_HERE.parent / "test-vectors" / "interop-mode.json").read_text(encoding="utf-8"))
+    _require(
+        by_name["method0_issue_example"]["value_msgpack_hex"] == by_name["lz4_wraps_v1_value_vector"]["value_msgpack_hex"],
+        "the two method0/lz4 wraps of the v1 value no longer share inner bytes",
+    )
+    v1_path = _HERE.parent / "test-vectors" / "interop-mode.json"
+    try:
+        v1_doc = json.loads(v1_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as e:
+        msg = f"cannot read the published v1 vectors at {v1_path}: {e}"
+        raise SelfCheckError(msg) from e
     v1_example = next(v for v in v1_doc["value_vectors"] if v["name"] == "issue_example_object")
-    assert by_name["method0_issue_example"]["value_msgpack_hex"] == v1_example["canonical_msgpack_hex"], (
-        "inner value bytes no longer match the published v1 issue_example_object vector"
+    _require(
+        by_name["method0_issue_example"]["value_msgpack_hex"] == v1_example["canonical_msgpack_hex"],
+        "inner value bytes no longer match the published v1 issue_example_object vector",
     )
     v1_enc = v1_doc["encryption_vectors"][0]
-    assert built["crypto_reject_vectors"][1]["ciphertext_hex"] == v1_enc["ciphertext_hex"], (
-        "reject_v1_ciphertext_with_v2_aad no longer pins the published v1 ciphertext"
+    _require(
+        built["crypto_reject_vectors"][1]["ciphertext_hex"] == v1_enc["ciphertext_hex"],
+        "reject_v1_ciphertext_with_v2_aad no longer pins the published v1 ciphertext",
     )
     # The compressible vector must actually compress (real match sequences).
     lz4_cv = by_name["lz4_roundtrip_compressible"]
-    assert len(bytes.fromhex(lz4_cv["payload_hex"])) < lz4_cv["original_size"], (
-        "the 'compressible' vector did not compress — vector loses its point"
+    _require(
+        len(bytes.fromhex(lz4_cv["payload_hex"])) < lz4_cv["original_size"],
+        "the 'compressible' vector did not compress — vector loses its point",
     )
 
     # Every structural reject vector must raise.
     for rv in built["reject_vectors"]:
+        rejected = False
         try:
             decode_container(bytes.fromhex(rv["container_hex"]))
         except V2Error:
-            continue
-        raise AssertionError(f"reject vector {rv['name']} did not raise")
+            rejected = True
+        _require(rejected, f"reject vector {rv['name']} did not raise")
 
     # AAD pair: v2 differs from v1 exactly in the final component.
     aad = built["aad_vectors"][0]
     v2b, v1b = bytes.fromhex(aad["aad_hex"]), bytes.fromhex(aad["v1_aad_hex_for_comparison"])
-    assert v2b[: -len(b"\x00\x00\x00\x04True")] == v1b[: -len(b"\x00\x00\x00\x05False")], "AAD prefixes diverge"
-    assert v2b.endswith(b"\x00\x00\x00\x04True") and v1b.endswith(b"\x00\x00\x00\x05False"), "frozen token suffixes wrong"
+    _require(v2b[: -len(b"\x00\x00\x00\x04True")] == v1b[: -len(b"\x00\x00\x00\x05False")], "AAD prefixes diverge")
+    _require(v2b.endswith(b"\x00\x00\x00\x04True") and v1b.endswith(b"\x00\x00\x00\x05False"), "frozen token suffixes wrong")
 
     # HKDF ground-truth continuity (same chain as v1 / encryption.json).
     key = v1.derive_encryption_key(bytes.fromhex(v1.ENC_MASTER_KEY_HEX), v1.ENC_TENANT_ID)
-    assert v1.key_fingerprint(key) == v1.ENC_KEY_FINGERPRINT_HEX
+    _require(v1.key_fingerprint(key) == v1.ENC_KEY_FINGERPRINT_HEX, "derived-key fingerprint diverges from the published chain")
 
     # Optional: bidirectional conformance with the de-facto C implementation.
     try:
         import lz4.block  # noqa: PLC0415
     except ImportError:
-        print("note: `lz4` not installed — C-implementation conformance check skipped")
+        logging.info("note: `lz4` not installed — C-implementation conformance check skipped")
     else:
         for s in samples:
             ours = lz4_block_compress(s)
-            assert lz4.block.decompress(ours, uncompressed_size=len(s)) == s, "lz4.block rejects our compressor output"
+            _require(lz4.block.decompress(ours, uncompressed_size=len(s)) == s, "lz4.block rejects our compressor output")
             theirs = lz4.block.compress(s, store_size=False)
-            assert lz4_block_decompress(theirs, len(s)) == s, "our decoder rejects lz4.block output"
+            _require(lz4_block_decompress(theirs, len(s)) == s, "our decoder rejects lz4.block output")
         pinned = bytes.fromhex(lz4_cv["payload_hex"])
-        assert lz4.block.decompress(pinned, uncompressed_size=lz4_cv["original_size"]).hex() == lz4_cv["value_msgpack_hex"]
+        _require(
+            lz4.block.decompress(pinned, uncompressed_size=lz4_cv["original_size"]).hex() == lz4_cv["value_msgpack_hex"],
+            "lz4.block does not decompress the pinned payload to the pinned value bytes",
+        )
 
     # Optional: AES-GCM seal + both cross-mode AAD rejections.
     try:
         from cryptography.hazmat.primitives.ciphers.aead import AESGCM  # noqa: PLC0415
         from cryptography.exceptions import InvalidTag  # noqa: PLC0415
     except ImportError:
-        print("note: `cryptography` not installed — AES-GCM checks run only in interop-v2-crosscheck.mjs (WebCrypto)")
+        logging.info("note: `cryptography` not installed — AES-GCM checks run only in interop-v2-crosscheck.mjs (WebCrypto)")
     else:
         ev = built["encryption_vectors"][0]
         ct = bytes.fromhex(ev["ciphertext_hex"])
         pt = AESGCM(key).decrypt(ct[:12], ct[12:], bytes.fromhex(ev["aad_hex"]))
-        assert pt.hex() == ev["plaintext_hex"], "v2 encryption vector does not decrypt to the pinned container"
+        _require(pt.hex() == ev["plaintext_hex"], "v2 encryption vector does not decrypt to the pinned container")
         resealed = ct[:12] + AESGCM(key).encrypt(ct[:12], pt, bytes.fromhex(ev["aad_hex"]))
-        assert resealed.hex() == ev["ciphertext_hex"], "v2 encryption vector seal mismatch"
+        _require(resealed.hex() == ev["ciphertext_hex"], "v2 encryption vector seal mismatch")
         for rv in built["crypto_reject_vectors"]:
             rct = bytes.fromhex(rv["ciphertext_hex"])
+            auth_failed = False
             try:
                 AESGCM(key).decrypt(rct[:12], rct[12:], bytes.fromhex(rv["aad_hex"]))
             except InvalidTag:
-                continue
-            raise AssertionError(f"{rv['name']}: cross-mode decrypt unexpectedly succeeded")
+                auth_failed = True
+            _require(auth_failed, f"{rv['name']}: cross-mode decrypt unexpectedly succeeded")
 
 
 def main() -> int:
     vectors_path = _HERE.parent / "test-vectors" / "interop-v2.json"
     cmd = sys.argv[1] if len(sys.argv) > 1 else "verify"
     if cmd not in ("generate", "verify"):
-        print(f"unknown command {cmd!r} — use 'generate' or 'verify'")
+        logging.error("unknown command %r — use 'generate' or 'verify'", cmd)
         return 2
     if cmd == "generate":
         # Generation (unlike verify) hard-requires `cryptography`: the pinned
@@ -775,7 +812,7 @@ def main() -> int:
         try:
             import cryptography  # noqa: F401, PLC0415
         except ImportError:
-            print("generate requires the `cryptography` package (verify stays stdlib-only): pip install cryptography")
+            logging.error("generate requires the `cryptography` package (verify stays stdlib-only): pip install cryptography")
             return 2
     built = _build()
     _self_check(built)
@@ -787,16 +824,17 @@ def main() -> int:
     )
     if cmd == "generate":
         vectors_path.write_text(json.dumps(built, indent=2, ensure_ascii=True) + "\n", encoding="utf-8")
-        print(f"wrote {vectors_path} ({counts})")
+        logging.info("wrote %s (%s)", vectors_path, counts)
         return 0
 
     on_disk = json.loads(vectors_path.read_text(encoding="utf-8"))
     if on_disk != built:
-        print("MISMATCH: test-vectors/interop-v2.json does not match the reference implementation")
+        logging.error("MISMATCH: test-vectors/interop-v2.json does not match the reference implementation")
         return 1
-    print(f"OK: {counts} all verified")
+    logging.info("OK: %s all verified", counts)
     return 0
 
 
 if __name__ == "__main__":
+    logging.basicConfig(level=logging.INFO, format="%(message)s")
     sys.exit(main())

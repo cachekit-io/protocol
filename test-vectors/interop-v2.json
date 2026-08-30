@@ -167,7 +167,7 @@
     },
     {
       "name": "reject_declared_size_bomb",
-      "description": "original_size declares 1 TiB \u2014 exceeds the 512 MB cap (checked BEFORE decompression)",
+      "description": "original_size declares 1 TiB \u2014 exceeds the 512 MiB cap (checked BEFORE decompression)",
       "container_hex": "c1029301cf0000010000000000c40410410000",
       "error": "original_size exceeds max uncompressed size"
     },

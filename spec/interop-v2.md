@@ -134,7 +134,7 @@ container:
 | :--- | :---: | :--- |
 | Magic | 1 B | `0xC1` — reserved/never-used in MessagePack, so a container is **structurally not** a MessagePack document. MUST be exactly `0xC1`. |
 | Container version | 1 B | `0x02`, matching the mode name. Any other value MUST be rejected (a future interop/v3 container would carry `0x03` and its own spec). |
-| Body | var | One MessagePack document, positional `fixarray(3)`: `[method, original_size, payload]`. The container ends where this document ends; **trailing bytes MUST be rejected** (same exactly-one-document strictness as v1 values). |
+| Body | var | One MessagePack document, a positional 3-element array: `[method, original_size, payload]` — canonically `fixarray(3)`; readers also accept the wider array headers (see Encoding rules). The container ends where this document ends; **trailing bytes MUST be rejected** (same exactly-one-document strictness as v1 values). |
 
 Body elements:
 
@@ -151,10 +151,12 @@ Encoding rules:
   ([decisions/envelope-bin-encoding.md](../decisions/envelope-bin-encoding.md),
   [wire-format.md → Byte Layout](wire-format.md#byte-layout-canonical-encoding))
   applied from birth: no v2 container ever pays the array-of-ints ~1.5× wire tax.
-- **Readers MUST accept any well-formed *unsigned-family* header width** for
-  the two integer elements — positive fixint and uint8/16/32/64
-  (`0xcc`–`0xcf`) are all legal on read, canonical or not (pinned by the
-  `method0_noncanonical_widths` vector) — and any `bin8/16/32` width for the
+- **Readers MUST accept any well-formed header width for each element type**:
+  `fixarray(3)`, `array16(3)` (`0xdc`), or `array32(3)` (`0xdd`) for the body
+  array; any *unsigned-family* width for the two integer elements — positive
+  fixint and uint8/16/32/64 (`0xcc`–`0xcf`) are all legal on read, canonical or
+  not (pinned by the `method0_noncanonical_widths` vector, whose body uses an
+  `array16(3)` header); and any `bin8/16/32` width for the
   payload. Readers **MUST enforce element types at the marker level**:
   signed-family integer markers (negative fixint, int8–int64,
   `0xd0`–`0xd3`) MUST be rejected for `method` and `original_size` **even when
@@ -197,10 +199,10 @@ in [Design Decisions](#design-decisions).
 | `0` | none | The plain-MessagePack value bytes, verbatim. `original_size` MUST equal the payload byte length; readers MUST reject a mismatch. |
 | `1` | lz4-block | Exactly one raw **LZ4 block** ([wire-format.md → Compression](wire-format.md#compression-lz4-block-format)). LZ4 **frame** format (magic `0x184D2204`) is FORBIDDEN. No prepended size word of any kind — `original_size` in the container is the size hint (Python `lz4.block`: `store_size=False`; Rust `lz4_flex`: the plain `block::compress`/`decompress`, never the `_prepend_size` variants). |
 
-New methods (e.g. zstd) require a spec revision to this registry **and** a new
-container version byte is NOT required — the registry is versioned by this spec;
-readers reject unknown method values, which is the safe failure. Writers MUST
-NOT emit unregistered methods.
+New methods (e.g. zstd) require a spec revision to this registry. A new
+container version byte is **not** required: the registry is versioned by this
+spec, and readers reject unknown method values, which is the safe failure.
+Writers MUST NOT emit unregistered methods.
 
 Writer rules:
 
@@ -234,15 +236,15 @@ decompressing (integer arithmetic only — no floating point):
 
 | Limit | Value | Applies to |
 | :--- | ---: | :--- |
-| Max `original_size` | 512 MB | both methods |
-| Max payload size | 512 MB | both methods |
+| Max `original_size` | 512 MiB (536,870,912 B) | both methods |
+| Max payload size | 512 MiB (536,870,912 B) | both methods |
 | Max compression ratio | 1000:1 | `method 1` |
 
 ```text
 // original_size and method are unsigned by construction — signed-family
 // markers were already rejected at parse time (see The v2 Value Container).
-reject if original_size > MAX_UNCOMPRESSED          // 512 MB
-reject if payload.length > MAX_COMPRESSED           // 512 MB
+reject if original_size > MAX_UNCOMPRESSED          // 512 MiB
+reject if payload.length > MAX_COMPRESSED           // 512 MiB
 if method == 1:
     reject if payload.length == 0                   // zero-length compressed = bomb
     max_allowed = 1000 * payload.length             // MUST be computed in >= 64-bit integers
@@ -252,7 +254,7 @@ if method == 0:
 ```
 
 The ratio product MUST be computed in **at least 64-bit unsigned integers**.
-After the two 512 MB caps pass, both operands are < 2³⁰ and the product is
+After the two 512 MiB caps pass, both operands are < 2³⁰ and the product is
 < 2⁴⁰, so it can never overflow a u64 — but it *does* overflow 32-bit `usize`
 arithmetic (a real target: cachekit-ts ships a wasm32 build), where release-mode
 wrapping would silently corrupt the bound in both directions. Do not compute
@@ -452,7 +454,7 @@ An SDK implementation of interop/v2 MUST:
 | **Minimal 3-element container** | Reuse the ByteStorage envelope | The envelope drags xxHash3-64 into every SDK — a second native dependency per language (the PHP-fork class of cost) duplicating integrity the AES-GCM tag already provides when encrypted, and exceeding v1's posture when not. Its `format` field is also dead weight here (the content is always one plain-MessagePack document). What *is* kept from the envelope experience: `bin` payload encoding as normative from birth (protocol 1.1, [decisions/envelope-bin-encoding.md](../decisions/envelope-bin-encoding.md)). |
 | **Array-of-ints payload rejected** | Inherit cachekit-core's permanent dual-read leniency | That leniency serves a deployed installed base and falls out of rmp-serde for free; interop/v2 has no installed base, and hand-written readers in new languages would pay extra code to be lenient. One legal encoding is the lowest implementation bar. Pinned by vector. |
 | **Compressed bytes non-canonical, read-side conformance** | Pin one canonical LZ4 output | LZ4 encoders legally differ (implementation, level, version). Pinning writer bytes would freeze one library's output as protocol law and break on its next release. Keys stay byte-canonical; values never needed to be. |
-| **Bounds reuse wire-format.md constants (512 MB / 1000:1)** | Profile-specific numbers | One set of constants fleet-wide; the guards are already implemented, reviewed, and vector-tested in cachekit-core. Integer arithmetic rule carried over verbatim. |
+| **Bounds reuse wire-format.md constants (512 MiB / 1000:1)** | Profile-specific numbers | One set of constants fleet-wide; the guards are already implemented, reviewed, and vector-tested in cachekit-core. Integer arithmetic rule carried over verbatim. |
 | **No length padding** | Bucketed padding vs CRIME | Quantized leakage at real cost is not elimination; documented guidance plus the `method 0` / stay-v1 escape hatches are honest. Length-hiding from the backend is explicitly out of protocol scope (v1 leaks exact lengths today). |
 
 ---
