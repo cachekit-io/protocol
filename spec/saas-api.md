@@ -59,6 +59,8 @@ The server accepts exactly three key prefixes (`apps/cache/src/cache-auth.ts`); 
 
 The write-space split applies to mutations only (`PUT`, `DELETE`, lock, TTL refresh); reads are open to all key classes within the tenant's namespace grants. Violations return `403 Forbidden`. The API key implicitly scopes all operations to a tenant. Multi-tenancy is enforced server-side.
 
+**CORS preflight exception:** `OPTIONS` requests are handled before authentication (`apps/cache/src/index.ts`) and are exempt from **both** checks above: no `Authorization` header and no `X-CacheKit-L1-Status` header are required or inspected. The server returns `204 No Content` unconditionally for any path. CORS response headers (`Access-Control-Allow-*`) are attached only when the request's `Origin` is on the server's browser-origin allowlist; for any other (or absent) `Origin` the `204` carries no CORS headers, so non-allowlisted browser contexts fail the preflight. `OPTIONS` is the only method exempt from authentication.
+
 ---
 
 ## Content Type
@@ -125,14 +127,19 @@ X-CacheKit-TTL: 3600
 >
 > | Condition | SDK Behavior | Server Behavior |
 > | :--- | :--- | :--- |
-> | TTL omitted | Use client default TTL. If no client default, omit `X-CacheKit-TTL` header. | Store with **no expiry** (`expiresAt = null`) — the entry lives until deleted or evicted. There is no tenant-default TTL mechanism. |
+> | TTL omitted | Use client default TTL. If no client default, omit `X-CacheKit-TTL` header. | Store with **no expiry** (`expiresAt = null`) — the entry lives until deleted or evicted. There is no tenant-default TTL mechanism. See **No-expiry contract** below. |
 > | TTL = 0 | **Reject** — return error to caller. Zero is not a valid TTL. | **Reject** — return `400 Bad Request`. |
 > | TTL < 1 second | **Round up to 1.** Sub-second durations MUST be ceiled, never truncated to 0. | N/A (header is integer seconds). |
 > | TTL > 2,592,000 | **Reject** — return error to caller. | **Reject** — return `400 Bad Request`. |
 > | TTL negative | **Reject** — return error to caller. | **Reject** — return `400 Bad Request`. |
 > | TTL non-integer | N/A (SDK converts duration to integer seconds). | **Reject** — return `400 Bad Request`. |
 >
-> **Rationale:** TTL=0 is ambiguous across cache systems (Redis rejects it, Memcached treats it as "never expire", HTTP treats it as "immediately stale"). CacheKit defines TTL=0 as an error to prevent silent data loss or unbounded storage. Sub-second durations are ceiled to 1 rather than truncated to 0 to avoid the same ambiguity. The 30-day maximum prevents unbounded storage accumulation; longer-lived entries should use explicit renewal patterns via `PATCH /v1/cache/{key}/ttl`.
+> **No-expiry contract** (`expiresAt = null`, from `durable-object.ts`):
+> - **Reads:** a no-expiry entry is permanently **fresh** — `GET` and `HEAD` return `200 OK` with `X-CacheKit-Freshness: fresh` indefinitely. It never enters a stale window and is never age-evicted.
+> - **`GET /v1/cache/{key}/ttl`:** returns `404 Not Found` — the server reports remaining lifetime only for expiring entries, so on this endpoint a no-expiry key is indistinguishable from an absent key. The `ttl` field is never `null` and never omitted: the only success shape is `200 {"ttl": <positive integer>}`.
+> - **`PATCH /v1/cache/{key}/ttl`:** succeeds (`200`) and gives the entry its first expiry (`fresh_until = now + ttl`) — the one way to bound an existing no-expiry entry without rewriting it.
+>
+> **Rationale:** TTL=0 is ambiguous across cache systems (Redis rejects it, Memcached treats it as "never expire", HTTP treats it as "immediately stale"). CacheKit defines TTL=0 as an error to prevent silent data loss. Sub-second durations are ceiled to 1 rather than truncated to 0 to avoid the same ambiguity. The 30-day maximum bounds the lifetime of **expiring** entries; longer-lived entries should use explicit renewal patterns via `PATCH /v1/cache/{key}/ttl`. It does **not** bound no-expiry entries — an entry stored without `X-CacheKit-TTL` persists until an explicit `DELETE` or server-side eviction, and callers own that storage-growth trade-off.
 >
 > **Migration:** The `X-TTL` header is deprecated. The server MUST accept both `X-CacheKit-TTL` and `X-TTL` during the transition period, preferring `X-CacheKit-TTL` when both are present. SDKs MUST send `X-CacheKit-TTL` only. The `X-TTL` header will be removed in protocol version 2.0 (targeted at SDK 1.0 milestone).
 
@@ -160,7 +167,7 @@ Authorization: Bearer ck_live_xxx
 | :---: | :--- | :--- |
 | `200 OK` | Delete processed | Return `true` |
 
-Delete is **idempotent and unconditional**: the server performs no existence check and always returns `200` with body `{"success": true}`, whether or not the key existed. There is no `404` path on this endpoint.
+Delete is **idempotent and unconditional with respect to key existence**: once authentication and authorisation succeed, the server performs no existence check and returns `200` with body `{"success": true}` whether or not the key existed. There is no `404` path on this endpoint. The ordinary request-level errors still apply before that point — `401` (invalid/missing key), `403` (write-space violation), `400` (invalid key format) — see [Error Handling](#error-handling).
 
 ---
 
@@ -194,8 +201,9 @@ An entry stored with `X-CacheKit-TTL: ttl` and `X-CacheKit-Stale-TTL: stale_ttl`
 
 ```
 stored_at ──────────── fresh_until ──────────────── evict_at
-          FRESH                       STALE
-          (200, fresh)                (200, stale)   404
+          FRESH                       STALE          GET:  404
+          (200, fresh)                (200, stale)   HEAD: 200, no
+                                                     freshness header
 
 fresh_until = stored_at + ttl
 evict_at    = fresh_until + stale_ttl
@@ -338,8 +346,10 @@ Get remaining TTL for a key. The returned `ttl` is the remaining seconds until *
 
 | Status | Meaning | Response Body |
 | :---: | :--- | :--- |
-| `200 OK` | TTL returned | `{"ttl": 3542}` |
-| `404 Not Found` | Key does not exist | — |
+| `200 OK` | TTL returned | `{"ttl": 3542}` — always a positive integer, never `null` or omitted |
+| `404 Not Found` | Key does not exist, **or** the entry has [no expiry](#put-v1cachekey), or is past `evict_at` | — |
+
+A `404` here does **not** imply the key is absent: no-expiry entries (stored without `X-CacheKit-TTL`) also return `404` on this endpoint while remaining readable via `GET`/`HEAD`. Use `HEAD /v1/cache/{key}` for existence.
 
 ---
 
@@ -422,7 +432,7 @@ SDKs SHOULD send cache metrics headers for rate limiting and observability:
 | `400` | Bad Request | Client error (invalid key format, missing headers) |
 | `401` | Unauthorized | Invalid or missing API key |
 | `403` | Forbidden | API key lacks permission for this operation/namespace |
-| `404` | Not Found | Cache miss (`GET /v1/cache/{key}`, `GET /v1/cache/{key}/ttl`). Never emitted by `HEAD` or `DELETE` — see those endpoints. |
+| `404` | Not Found | Cache miss (`GET /v1/cache/{key}`). On `GET /v1/cache/{key}/ttl` also emitted for [no-expiry](#put-v1cachekey) or evicted entries, not only absent keys. Never emitted by `HEAD` or `DELETE` — see those endpoints. |
 | `409` | Conflict | `PATCH /v1/cache/{key}/ttl` on a stale entry past `fresh_until`; refresh requires a `PUT` of recomputed bytes ([SWR write semantics](#write-semantics)) |
 | `413` | Payload Too Large | Value exceeds max stored value size (25 MB). Permanent — do not retry; surface "value too large" |
 | `429` | Too Many Requests | Rate limited |
