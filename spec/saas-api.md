@@ -49,7 +49,15 @@ All requests require a Bearer token in the `Authorization` header:
 Authorization: Bearer ck_live_xxxxxxxxxxxxxxxxxxxxxxxxx
 ```
 
-API keys follow the format `ck_live_...` (production) or `ck_test_...` (staging). The API key implicitly scopes all operations to a tenant. Multi-tenancy is enforced server-side.
+The server accepts exactly three key prefixes (`apps/cache/src/cache-auth.ts`); any other prefix fails authentication:
+
+| Prefix | Class | Semantics |
+| :--- | :--- | :--- |
+| `ck_sdk_` | SDK key | MUST send `X-CacheKit-L1-Status` (`hit`\|`miss`\|`disabled`) on every request — rejected with `400` otherwise. May mutate `ns:`-prefixed cache keys only. |
+| `ck_api_` | Direct-API key | May mutate `nsapi:`-prefixed cache keys only. |
+| `ck_live_` | Legacy | Predates the sdk/api write-space split; exempt from it (may mutate both key classes). |
+
+The write-space split applies to mutations only (`PUT`, `DELETE`, lock, TTL refresh); reads are open to all key classes within the tenant's namespace grants. Violations return `403 Forbidden`. The API key implicitly scopes all operations to a tenant. Multi-tenancy is enforced server-side.
 
 ---
 
@@ -109,7 +117,7 @@ X-CacheKit-TTL: 3600
 
 | Header | Required | Description |
 | :--- | :---: | :--- |
-| `X-CacheKit-TTL` | No | Time-to-live in seconds. Positive integer, minimum 1, maximum 2,592,000 (30 days). Omit to use server default. |
+| `X-CacheKit-TTL` | No | Time-to-live in seconds. Positive integer, minimum 1, maximum 2,592,000 (30 days). Omit to store the entry with no expiry (see TTL Validation Rules). |
 | `X-CacheKit-Stale-TTL` | No | Stale-grace window in seconds after freshness expiry. Requires an explicit `X-CacheKit-TTL` on the same request. Validation and semantics: [Stale-While-Revalidate](#stale-while-revalidate). Pre-SWR servers ignore this header. |
 
 > [!IMPORTANT]
@@ -117,7 +125,7 @@ X-CacheKit-TTL: 3600
 >
 > | Condition | SDK Behavior | Server Behavior |
 > | :--- | :--- | :--- |
-> | TTL omitted | Use client default TTL. If no client default, omit `X-CacheKit-TTL` header. | Apply tenant default TTL. |
+> | TTL omitted | Use client default TTL. If no client default, omit `X-CacheKit-TTL` header. | Store with **no expiry** (`expiresAt = null`) — the entry lives until deleted or evicted. There is no tenant-default TTL mechanism. |
 > | TTL = 0 | **Reject** — return error to caller. Zero is not a valid TTL. | **Reject** — return `400 Bad Request`. |
 > | TTL < 1 second | **Round up to 1.** Sub-second durations MUST be ceiled, never truncated to 0. | N/A (header is integer seconds). |
 > | TTL > 2,592,000 | **Reject** — return error to caller. | **Reject** — return `400 Bad Request`. |
@@ -150,8 +158,9 @@ Authorization: Bearer ck_live_xxx
 
 | Status | Meaning | SDK Behavior |
 | :---: | :--- | :--- |
-| `200 OK` | Key deleted | Return `true` |
-| `404 Not Found` | Key did not exist | Return `false` (not an error) |
+| `200 OK` | Delete processed | Return `true` |
+
+Delete is **idempotent and unconditional**: the server performs no existence check and always returns `200` with body `{"success": true}`, whether or not the key existed. There is no `404` path on this endpoint.
 
 ---
 
@@ -167,10 +176,9 @@ Authorization: Bearer ck_live_xxx
 
 | Status | Meaning |
 | :---: | :--- |
-| `200 OK` | Key exists |
-| `404 Not Found` | Key does not exist |
+| `200 OK` | Always returned for an authenticated, valid request — whether or not the key exists |
 
-Servers implementing [stale-while-revalidate](#stale-while-revalidate) emit the same `X-CacheKit-Freshness` response header as `GET`.
+Existence is signalled **entirely by the `X-CacheKit-Freshness` response header**: it is set (`fresh` or `stale`, same semantics as `GET` — see [stale-while-revalidate](#stale-while-revalidate)) only when the key exists, and absent when it does not. There is no `404` path. The server constructs a `{"exists": <bool>}` JSON body internally, but HTTP forbids response bodies on `HEAD`, so the body is never transmitted — SDKs MUST key on the header, not the body or status code.
 
 ---
 
@@ -197,7 +205,7 @@ evict_at    = fresh_until + stale_ttl
 | :--- | :--- |
 | `now < fresh_until` | `200 OK`, `X-CacheKit-Freshness: fresh` |
 | `fresh_until ≤ now < evict_at` | `200 OK` **with the stored bytes**, `X-CacheKit-Freshness: stale` |
-| `now ≥ evict_at` | `404 Not Found`. The server MUST NOT serve an entry past `evict_at`. |
+| `now ≥ evict_at` | `GET`: `404 Not Found`. `HEAD`: `200` with **no** `X-CacheKit-Freshness` header (see [HEAD](#head-v1cachekey) — nonexistence is signalled by header absence, never by status). The server MUST NOT serve an entry past `evict_at`. |
 
 All lifecycle times are computed against the **server's clock**; SDKs MUST NOT derive freshness for backed entries from their own clocks.
 
@@ -368,9 +376,9 @@ Host: api.cachekit.io
 Authorization: Bearer ck_live_xxx
 ```
 
-**Response (200 OK)**:
+**Response (200 OK)** (from `TenantCacheStore.health()`):
 ```json
-{"version": "1.0.0"}
+{"status": "ok", "cache_entries": <n>, "active_locks": <n>}
 ```
 
 ---
@@ -410,12 +418,11 @@ SDKs SHOULD send cache metrics headers for rate limiting and observability:
 | Status | Meaning | SDK Behavior |
 | :---: | :--- | :--- |
 | `200` | Success | Return data |
-| `201` | Created | Value stored |
-| `204` | No Content | Deleted successfully |
+| `204` | No Content | CORS preflight (`OPTIONS`) only — writes and deletes return `200` |
 | `400` | Bad Request | Client error (invalid key format, missing headers) |
 | `401` | Unauthorized | Invalid or missing API key |
 | `403` | Forbidden | API key lacks permission for this operation/namespace |
-| `404` | Not Found | Cache miss (GET/HEAD) or key not found (DELETE) |
+| `404` | Not Found | Cache miss (`GET /v1/cache/{key}`, `GET /v1/cache/{key}/ttl`). Never emitted by `HEAD` or `DELETE` — see those endpoints. |
 | `409` | Conflict | `PATCH /v1/cache/{key}/ttl` on a stale entry past `fresh_until`; refresh requires a `PUT` of recomputed bytes ([SWR write semantics](#write-semantics)) |
 | `413` | Payload Too Large | Value exceeds max stored value size (25 MB). Permanent — do not retry; surface "value too large" |
 | `429` | Too Many Requests | Rate limited |
@@ -431,7 +438,7 @@ SDKs should classify errors for circuit breaker integration:
 | :--- | :--- | :--- |
 | **Transient** | `429`, `500`, `502`, `503`, network timeouts | Retry with backoff |
 | **Permanent** | `400`, `401`, `403`, `409`, `413` | Do not retry, surface to caller. For `409` (`PATCH /ttl` past `fresh_until`): do not re-`PATCH` — recompute and `PUT` ([write semantics](#write-semantics)) |
-| **Cache miss** | `404` on GET/HEAD/DELETE | Not an error — return `None`/`false` |
+| **Cache miss** | `404` on GET | Not an error — return `None`/`null` |
 
 ---
 
