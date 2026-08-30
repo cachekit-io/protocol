@@ -14,6 +14,10 @@
 > Design discussion: [Issue #1](https://github.com/cachekit-io/protocol/issues/1) ·
 > Test vectors: [`test-vectors/interop-mode.json`](../test-vectors/interop-mode.json) ·
 > Reference implementation: [`tools/interop-reference.py`](../tools/interop-reference.py)
+>
+> Compressed values: this mode deliberately has none. An opt-in successor
+> profile, **[interop/v2](interop-v2.md)** (DRAFT), adds an LZ4-compressed
+> value container as a distinct mode — nothing in v1 changes.
 
 </div>
 
