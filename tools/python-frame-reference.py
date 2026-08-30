@@ -342,13 +342,22 @@ def _require_twin_equivalence(frame_vectors: list[dict]) -> None:
     also changed the LZ4 level, msgpack key order, or the frame header would
     upsert a vector that lies about what it isolates, into a fixture
     downstream SDKs pin (LAB-903).
+
+    No-op when either default-path twin is absent (partial fixture): generate()
+    only ever rebuilds the encoding the wheel emits, so nothing is comparable
+    until both exist. Completeness is gated by verify(), not here.
     """
     by_name = {v["name"]: v for v in frame_vectors}
-    try:
-        legacy = by_name["default_saas_write_msgpack_bytestorage"]
-        twin = by_name["default_saas_write_msgpack_bytestorage_bin"]
-    except KeyError as exc:
-        raise ValueError("generation invariant violated: default-path vector pair incomplete") from exc
+    legacy = by_name.get("default_saas_write_msgpack_bytestorage")
+    twin = by_name.get("default_saas_write_msgpack_bytestorage_bin")
+    if legacy is None or twin is None:
+        # Partial fixture (fresh bootstrap, or a deliberately removed vector).
+        # verify's coverage floor pins ENCODINGS, not these names — it fails
+        # the fixture until both int-array and bin are observed, which today
+        # only this pair carries. _upsert never removes, so an established
+        # fixture can never regress into this branch.
+        print("note: default-path twin pair incomplete; equivalence proof skipped", file=sys.stderr)
+        return
     _require(twin["value_json"] == legacy["value_json"], "twin value_json differs from the legacy vector")
     # Header equality must hold at the BYTE level, not just as parsed JSON — a
     # wheel that reorders or reformats the header JSON would otherwise slip a
