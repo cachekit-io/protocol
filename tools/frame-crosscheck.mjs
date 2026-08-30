@@ -145,7 +145,27 @@ function decodeDocument(b) {
 
 // ------------------------------------------------------- LZ4 block decompress
 
+// Validate-before-allocate (LAB-1202). `expectedSize` is original_size —
+// element 2 of the ByteStorage envelope, a value read off the wire. In this
+// tool the driver has already matched it against the committed vector, so the
+// guard is not load-bearing HERE — but this reader is the porting template for
+// SDK envelope readers that will face attacker-controlled envelopes, so it
+// must demonstrate the ratified rule: refuse an implausible declared size
+// BEFORE allocating for it. The ceiling is derived from the LZ4 block format,
+// not guessed: a match sequence costs at least 3 input bytes (token + 2-byte
+// offset) and each match-length extension byte adds at most 255 output bytes,
+// so per sequence output <= L+19+255b against input 3+a+L+b — no well-formed
+// block expands more than 255x (the lz4 project's documented maximum
+// compression ratio). The overrun checks further down bound writes INTO `out`;
+// this bounds the size of `out` itself.
+const LZ4_MAX_EXPANSION = 255;
+
 function lz4BlockDecompress(src, expectedSize) {
+  if (!Number.isSafeInteger(expectedSize) || expectedSize < 0 || expectedSize > src.length * LZ4_MAX_EXPANSION) {
+    throw new Error(
+      `LZ4 declared original_size ${expectedSize} exceeds max expansion ceiling (${src.length} compressed bytes x ${LZ4_MAX_EXPANSION})`
+    );
+  }
   const out = new Uint8Array(expectedSize);
   let sp = 0;
   let op = 0;
