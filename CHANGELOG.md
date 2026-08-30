@@ -4,6 +4,22 @@ All notable changes to the CacheKit Protocol Specification.
 
 ## [Unreleased]
 
+### SaaS API
+
+- **`X-CacheKit-Fresh-For` remaining-freshness response header (LAB-557).**
+  `GET /v1/cache/{key}` `200 OK` responses now carry the entry's remaining
+  freshness in whole seconds (server-clock delta; `0` on stale-window
+  responses; omitted for entries with no expiry and by pre-signal servers), so
+  SDK local caches (L1) can bound backfill to `min(local_ttl, fresh_for)`
+  instead of restarting the freshness clock at time-of-read — an entry read
+  near the end of its server-side window could previously be served fresh from
+  L1 for up to another full TTL, past `fresh_until` (and, with a stale-grace
+  window, past `evict_at`). Additive and backward compatible: absent header =
+  legacy behavior on both sides. Not emitted on `HEAD`. Spec:
+  [saas-api.md → Remaining Freshness](spec/saas-api.md#remaining-freshness).
+  Origin: CodeRabbit outside-diff finding on
+  [cachekit-py#233](https://github.com/cachekit-io/cachekit-py/pull/233).
+
 ### SDK Feature Matrix
 
 - Consolidated ten conflicting open matrix PRs into one code-verified end-state

@@ -90,6 +90,28 @@ Authorization: Bearer ck_live_xxx
 | Header | Description |
 | :--- | :--- |
 | `X-CacheKit-Freshness` | `fresh` or `stale` — lowercase, case-sensitive tokens. Emitted on every `200 OK` by servers implementing [stale-while-revalidate](#stale-while-revalidate). SDKs MUST treat an absent header as `fresh` (pre-SWR servers do not emit it) and an unrecognized value as `stale` (revalidation is the conservative action). Read behavior is specified in [Stale-While-Revalidate](#stale-while-revalidate). |
+| `X-CacheKit-Fresh-For` | Remaining freshness in whole seconds. Semantics: [Remaining Freshness](#remaining-freshness). |
+
+#### Remaining Freshness
+
+> Status: **specified** (LAB-557). Origin: without a remaining-freshness signal, an SDK that backfills a local cache (L1) from a read assigns its full configured TTL from time-of-read — an entry read near the end of its server-side freshness window is then served locally as fresh for up to another full TTL, past the server's `fresh_until` (and, with a [stale-grace window](#stale-while-revalidate), potentially past `evict_at`).
+
+`X-CacheKit-Fresh-For` tells the reader how long the served value remains fresh, so local caches can bound their own service window to the server's.
+
+**Server (emission):**
+
+- Emitted on `GET` `200 OK` responses for entries with a freshness bound. The value is a non-negative integer: `max(0, floor(fresh_until − now))`, computed against the **server's clock** at response time — the client never compares server timestamps against its own clock.
+- Stale-window responses (`X-CacheKit-Freshness: stale`) carry `X-CacheKit-Fresh-For: 0` — freshness is already exhausted.
+- Omitted for entries with no expiry (no freshness bound exists) and by pre-signal servers.
+- A serving tier that re-serves a value it read earlier (e.g. an edge cache in front of the store) MUST either decay the value by the time already elapsed or omit the header when the remaining freshness is unknown. It MUST NOT replay an undecayed value beyond its documented coherence window (CacheKit's edge tiers: ≤5 seconds).
+- `HEAD` does **not** carry this header — an existence check returns no payload, so there is nothing to backfill locally (the `X-CacheKit-Freshness` label on `HEAD` remains informational, per [Stale-While-Revalidate](#stale-while-revalidate)).
+
+**SDK (consumption):**
+
+- On a `200 OK` with the header present, a local cache (L1) backfill MUST bound the entry's local lifetime to at most the header value: `min(local_ttl, fresh_for)`. A value of `0` means the entry MUST NOT be backfilled as fresh.
+- Absent header = pre-signal server: legacy behavior (the SDK's configured local TTL applies unchanged). This makes the header purely additive — old SDKs ignore it, and new SDKs against old servers behave exactly as before.
+- An unparseable or negative value MUST be treated as `0` (do not extend local service — the conservative action, mirroring the unrecognized-`X-CacheKit-Freshness` → `stale` rule).
+- Network transit slightly overstates remaining freshness at the client (the value was computed at response time). This is accepted: the error is bounded by transit latency, the same class HTTP `Age` handling tolerates, and is negligible against whole-second granularity.
 
 ---
 
@@ -170,7 +192,7 @@ Authorization: Bearer ck_live_xxx
 | `200 OK` | Key exists |
 | `404 Not Found` | Key does not exist |
 
-Servers implementing [stale-while-revalidate](#stale-while-revalidate) emit the same `X-CacheKit-Freshness` response header as `GET`.
+Servers implementing [stale-while-revalidate](#stale-while-revalidate) emit the same `X-CacheKit-Freshness` response header as `GET`. `X-CacheKit-Fresh-For` is **not** emitted on `HEAD` ([Remaining Freshness](#remaining-freshness) — no payload, nothing to backfill).
 
 ---
 
@@ -228,7 +250,7 @@ On a `200` with `X-CacheKit-Freshness: stale`:
 - An SDK MUST NOT treat the response as a protocol error.
 - By default it SHOULD return the bytes to the caller immediately — a stale response is never a blocking miss.
 - An SDK MAY instead treat a stale hit as a **miss** by local policy (e.g. security-sensitive caches where TTL is a revocation boundary) and take the ordinary synchronous miss path. Such caches SHOULD NOT set `X-CacheKit-Stale-TTL` on write in the first place.
-- Local caches (L1) MUST NOT record a stale-flagged response as fresh, and local caching MUST NOT extend service of an entry past the server's `evict_at`.
+- Local caches (L1) MUST NOT record a stale-flagged response as fresh, and local caching MUST NOT extend service of an entry past the server's `evict_at`. For *fresh*-labelled reads near the freshness boundary, the [`X-CacheKit-Fresh-For`](#remaining-freshness) header is the mechanism that lets local caches honor this bound (LAB-557).
 - Revalidation is triggered only by `GET`. `HEAD` freshness is informational; an existence check MUST NOT fire a background recompute.
 
 ### Revalidation flow (SDK)
