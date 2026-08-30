@@ -77,7 +77,8 @@ function lz4BlockDecompress(block, originalSize) {
 // input), one bin. Anything else is a hard error, including the legacy
 // array-of-ints payload shape.
 function parseContainer(data) {
-  if (data.length < 2 || data[0] !== 0xc1) {
+  if (data.length < 2) throw new Error("truncated container (magic + version bytes required)");
+  if (data[0] !== 0xc1) {
     throw new Error("bad container magic (0xC1 expected) — possible interop/v1 value");
   }
   if (data[1] !== 0x02) throw new Error(`unsupported container version 0x${data[1].toString(16)}`);

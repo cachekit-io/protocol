@@ -19,8 +19,9 @@ All notable changes to the CacheKit Protocol Specification.
   including a pure-Python LZ4 block codec), a zero-dependency independent
   JS cross-check ([`tools/interop-v2-crosscheck.mjs`](tools/interop-v2-crosscheck.mjs)),
   and [`test-vectors/interop-v2.json`](test-vectors/interop-v2.json)
-  (compressed and uncompressed round-trips, compressed+encrypted round-trip,
-  13 structural + 2 cryptographic must-reject vectors). Security limits
+  (compressed, uncompressed, and non-canonical-widths round-trips,
+  compressed+encrypted round-trip, 16 structural + 2 cryptographic
+  must-reject vectors). Security limits
   reuse the wire-format constants (512 MB / 1000:1, enforced before
   decompression); the CRIME/BREACH verdict is recorded in-spec (in threat
   model, accepted with normative mitigations); the legacy array-of-ints

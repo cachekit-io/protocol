@@ -214,15 +214,6 @@ def encode_container(method: int, original_size: int, payload: bytes) -> bytes:
     return bytes([MAGIC, CONTAINER_VERSION]) + body
 
 
-def wrap_value(value_bytes: bytes, *, method: int) -> bytes:
-    """Writer path: wrap plain-MessagePack value bytes in a v2 container."""
-    if method == METHOD_NONE:
-        return encode_container(METHOD_NONE, len(value_bytes), value_bytes)
-    if method == METHOD_LZ4_BLOCK:
-        return encode_container(METHOD_LZ4_BLOCK, len(value_bytes), lz4_block_compress(value_bytes))
-    raise V2Error(f"unknown compression method {method}")
-
-
 class _Reader:
     """Minimal strict MessagePack reader for the container body only.
 
@@ -253,6 +244,10 @@ class _Reader:
         raise V2Error(f"container body must be a msgpack array, got marker 0x{marker:02x}")
 
     def read_uint(self) -> int:
+        # Unsigned-family markers ONLY (spec: marker-level enforcement). The
+        # signed family (negative fixint, 0xd0-0xd3) is rejected even when the
+        # carried value is non-negative — which makes a negative original_size
+        # structurally unrepresentable.
         marker = self._take(1)[0]
         if marker <= 0x7F:
             return marker
@@ -264,7 +259,7 @@ class _Reader:
             return int.from_bytes(self._take(4), "big")
         if marker == 0xCF:
             return int.from_bytes(self._take(8), "big")
-        raise V2Error(f"expected non-negative msgpack int, got marker 0x{marker:02x}")
+        raise V2Error(f"expected unsigned-family msgpack int marker, got 0x{marker:02x}")
 
     def read_bin(self) -> bytes:
         marker = self._take(1)[0]
@@ -289,7 +284,9 @@ class _Reader:
 
 def decode_container(data: bytes) -> bytes:
     """Normative reader algorithm steps 2-5: container bytes -> plain value bytes."""
-    if len(data) < 2 or data[0] != MAGIC:
+    if len(data) < 2:
+        raise V2Error("truncated container (magic + version bytes required)")
+    if data[0] != MAGIC:
         raise V2Error("bad container magic (0xC1 expected) — possible interop/v1 value or mode misconfiguration")
     if data[1] != CONTAINER_VERSION:
         raise V2Error(f"unsupported container version 0x{data[1]:02x}")
@@ -425,6 +422,34 @@ def _build_reject_vectors(containers: dict[str, dict]) -> list[dict]:
             "error": "payload must be msgpack bin",
         },
         {
+            "name": "reject_method_signed_marker",
+            "description": (
+                "method encoded with a signed-family marker (int8 0xd0 carrying value 0) — "
+                "marker-level enforcement rejects the signed family even for non-negative values"
+            ),
+            "container_hex": (bytes([MAGIC, CONTAINER_VERSION, 0x93, 0xD0, 0x00, len(value_bytes), 0xC4, len(value_bytes)]) + value_bytes).hex(),
+            "error": "signed-family int marker for method",
+        },
+        {
+            "name": "reject_negative_original_size",
+            "description": (
+                "original_size encoded as negative fixint -1 (0xff) — negative sizes are "
+                "structurally unrepresentable once signed-family markers are rejected; a "
+                "value-level reader that accepts -1 here bypasses every upper-bound check"
+            ),
+            "container_hex": (bytes([MAGIC, CONTAINER_VERSION, 0x93, 0x01, 0xFF, 0xC4, 0x04]) + bytes.fromhex("10410000")).hex(),
+            "error": "signed-family int marker for original_size",
+        },
+        {
+            "name": "reject_forged_bin32_length",
+            "description": (
+                "bin32 payload header declaring 4 GiB (0xffffffff) with no data following — "
+                "readers MUST validate the length header against remaining input BEFORE allocating"
+            ),
+            "container_hex": bytes([MAGIC, CONTAINER_VERSION, 0x93, 0x00, 0x05, 0xC6, 0xFF, 0xFF, 0xFF, 0xFF]).hex(),
+            "error": "bin length header exceeds remaining input",
+        },
+        {
             "name": "reject_payload_str",
             "description": "Payload encoded as the msgpack str family instead of bin",
             "container_hex": (bytes([MAGIC, CONTAINER_VERSION]) + v1.encode_canonical([0, 3, "abc"], collapse_floats=False)).hex(),
@@ -508,6 +533,36 @@ def _build() -> dict:
         }
         container_vectors.append(entry)
         by_name[d["name"]] = entry
+
+    # Hand-built NON-canonical container: array16 header, uint8/uint32 ints,
+    # bin16 payload. Pins the reader MUST for non-canonical unsigned-family
+    # widths (writers MUST NOT emit this; readers MUST accept it).
+    nc_value = by_name["method0_issue_example"]
+    nc_bytes = bytes.fromhex(nc_value["value_msgpack_hex"])
+    nc_container = (
+        bytes([MAGIC, CONTAINER_VERSION])
+        + b"\xdc\x00\x03"  # array16(3)
+        + b"\xcc\x00"  # method 0 as uint8
+        + b"\xce" + len(nc_bytes).to_bytes(4, "big")  # original_size as uint32
+        + b"\xc5" + len(nc_bytes).to_bytes(2, "big")  # payload as bin16
+        + nc_bytes
+    )
+    nc_entry = {
+        "name": "method0_noncanonical_widths",
+        "description": (
+            "Same value as method0_issue_example, but with deliberately NON-canonical "
+            "header widths (array16, uint8 method, uint32 original_size, bin16 payload). "
+            "Readers MUST accept any unsigned-family width; writers MUST NOT emit this."
+        ),
+        "value": nc_value["value"],
+        "value_msgpack_hex": nc_value["value_msgpack_hex"],
+        "method": METHOD_NONE,
+        "original_size": len(nc_bytes),
+        "payload_hex": nc_bytes.hex(),
+        "container_hex": nc_container.hex(),
+    }
+    container_vectors.append(nc_entry)
+    by_name[nc_entry["name"]] = nc_entry
 
     enc_container_hex = by_name["lz4_roundtrip_compressible"]["container_hex"]
 
@@ -633,8 +688,19 @@ def _self_check(built: dict) -> None:
         assert got.hex() == cv["value_msgpack_hex"], f"container {cv['name']} does not decode to its value bytes"
 
     by_name = {c["name"]: c for c in built["container_vectors"]}
-    # The inherited-value-profile claim: identical inner bytes across the two wraps.
+    # The inherited-value-profile claim: identical inner bytes across the two wraps,
+    # AND byte-identical to the PUBLISHED v1 value vector in interop-mode.json —
+    # cross-file, so drift in either file breaks generation/verify loudly.
     assert by_name["method0_issue_example"]["value_msgpack_hex"] == by_name["lz4_wraps_v1_value_vector"]["value_msgpack_hex"]
+    v1_doc = json.loads((_HERE.parent / "test-vectors" / "interop-mode.json").read_text(encoding="utf-8"))
+    v1_example = next(v for v in v1_doc["value_vectors"] if v["name"] == "issue_example_object")
+    assert by_name["method0_issue_example"]["value_msgpack_hex"] == v1_example["canonical_msgpack_hex"], (
+        "inner value bytes no longer match the published v1 issue_example_object vector"
+    )
+    v1_enc = v1_doc["encryption_vectors"][0]
+    assert built["crypto_reject_vectors"][1]["ciphertext_hex"] == v1_enc["ciphertext_hex"], (
+        "reject_v1_ciphertext_with_v2_aad no longer pins the published v1 ciphertext"
+    )
     # The compressible vector must actually compress (real match sequences).
     lz4_cv = by_name["lz4_roundtrip_compressible"]
     assert len(bytes.fromhex(lz4_cv["payload_hex"])) < lz4_cv["original_size"], (
@@ -701,6 +767,16 @@ def main() -> int:
     if cmd not in ("generate", "verify"):
         print(f"unknown command {cmd!r} — use 'generate' or 'verify'")
         return 2
+    if cmd == "generate":
+        # Generation (unlike verify) hard-requires `cryptography`: the pinned
+        # ciphertext constant is coupled to the compressor's exact container
+        # bytes, and without an AES-GCM reseal check a compressor change would
+        # silently write vectors whose ciphertext no longer decrypts.
+        try:
+            import cryptography  # noqa: F401, PLC0415
+        except ImportError:
+            print("generate requires the `cryptography` package (verify stays stdlib-only): pip install cryptography")
+            return 2
     built = _build()
     _self_check(built)
 

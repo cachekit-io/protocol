@@ -60,6 +60,19 @@
       "original_size": 17,
       "payload_hex": "f00282a36167651ea46e616d65a5616c696365",
       "container_hex": "c102930111c413f00282a36167651ea46e616d65a5616c696365"
+    },
+    {
+      "name": "method0_noncanonical_widths",
+      "description": "Same value as method0_issue_example, but with deliberately NON-canonical header widths (array16, uint8 method, uint32 original_size, bin16 payload). Readers MUST accept any unsigned-family width; writers MUST NOT emit this.",
+      "value": {
+        "name": "alice",
+        "age": 30
+      },
+      "value_msgpack_hex": "82a36167651ea46e616d65a5616c696365",
+      "method": 0,
+      "original_size": 17,
+      "payload_hex": "82a36167651ea46e616d65a5616c696365",
+      "container_hex": "c102dc0003cc00ce00000011c5001182a36167651ea46e616d65a5616c696365"
     }
   ],
   "aad_vectors": [
@@ -115,6 +128,24 @@
       "description": "Payload encoded as a msgpack array of integers instead of bin \u2014 the legacy ByteStorage leniency is explicitly NOT inherited by interop/v2",
       "container_hex": "c10293000393010203",
       "error": "payload must be msgpack bin"
+    },
+    {
+      "name": "reject_method_signed_marker",
+      "description": "method encoded with a signed-family marker (int8 0xd0 carrying value 0) \u2014 marker-level enforcement rejects the signed family even for non-negative values",
+      "container_hex": "c10293d00011c41182a36167651ea46e616d65a5616c696365",
+      "error": "signed-family int marker for method"
+    },
+    {
+      "name": "reject_negative_original_size",
+      "description": "original_size encoded as negative fixint -1 (0xff) \u2014 negative sizes are structurally unrepresentable once signed-family markers are rejected; a value-level reader that accepts -1 here bypasses every upper-bound check",
+      "container_hex": "c1029301ffc40410410000",
+      "error": "signed-family int marker for original_size"
+    },
+    {
+      "name": "reject_forged_bin32_length",
+      "description": "bin32 payload header declaring 4 GiB (0xffffffff) with no data following \u2014 readers MUST validate the length header against remaining input BEFORE allocating",
+      "container_hex": "c102930005c6ffffffff",
+      "error": "bin length header exceeds remaining input"
     },
     {
       "name": "reject_payload_str",

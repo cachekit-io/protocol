@@ -92,9 +92,11 @@ mode-level configuration is deterministic. (See [Design Decisions](#design-decis
 accidentally pointed at the same namespace:
 
 - *Unencrypted*: a v2 container begins `0xC1`, the one byte the MessagePack
-  specification reserves as **never used** — it cannot begin (or appear anywhere
-  in) a well-formed MessagePack document. A v1 reader MUST already reject it as
-  malformed MessagePack. Conversely, a v2 reader reading a bare v1 value fails
+  specification reserves as a **never-used marker** — it cannot be the *first
+  byte* of a well-formed MessagePack document (it can, of course, appear inside
+  payload bytes or multi-byte integer bodies; only the leading-byte property is
+  load-bearing, and nothing in this profile scans past byte 0). A v1 reader
+  MUST already reject it as malformed MessagePack. Conversely, a v2 reader reading a bare v1 value fails
   the magic check below. Both directions error; neither silently decodes wrong
   data.
 - *Encrypted*: the v1 and v2 AADs differ in the `compressed` component, so
@@ -138,8 +140,8 @@ Body elements:
 
 | Element | MessagePack type | Rule |
 | :--- | :--- | :--- |
-| `[0] method` | int | Compression method — see the [registry](#compression-method-registry). Unknown values MUST be rejected. |
-| `[1] original_size` | non-negative int | Exact byte length of the plain-MessagePack value document. Load-bearing twice: it is the LZ4-block decompression size hint **and** the first decompression-bomb bound. Bounds in [Security Limits](#security-limits-decompression-bounds). |
+| `[0] method` | **unsigned-family** int | Compression method — see the [registry](#compression-method-registry). Unknown values MUST be rejected. |
+| `[1] original_size` | **unsigned-family** int | Exact byte length of the plain-MessagePack value document. Load-bearing twice: it is the LZ4-block decompression size hint **and** the first decompression-bomb bound. Bounds in [Security Limits](#security-limits-decompression-bounds). |
 | `[2] payload` | **bin** (`0xc4`/`0xc5`/`0xc6`) | `method = 0`: the plain-MessagePack value bytes verbatim. `method = 1`: one raw LZ4 block. MUST be the msgpack `bin` family — see the encoding rules below. |
 
 Encoding rules:
@@ -149,11 +151,25 @@ Encoding rules:
   ([decisions/envelope-bin-encoding.md](../decisions/envelope-bin-encoding.md),
   [wire-format.md → Byte Layout](wire-format.md#byte-layout-canonical-encoding))
   applied from birth: no v2 container ever pays the array-of-ints ~1.5× wire tax.
-- **Readers MUST accept any well-formed header width** (a standard MessagePack
-  decoder does this for free) but **MUST enforce element types strictly**: a
-  non-int `method` or `original_size`, or a payload that is *anything other than
-  `bin`* — including the msgpack `str` family and the legacy **array-of-ints**
-  shape — MUST be rejected.
+- **Readers MUST accept any well-formed *unsigned-family* header width** for
+  the two integer elements — positive fixint and uint8/16/32/64
+  (`0xcc`–`0xcf`) are all legal on read, canonical or not (pinned by the
+  `method0_noncanonical_widths` vector) — and any `bin8/16/32` width for the
+  payload. Readers **MUST enforce element types at the marker level**:
+  signed-family integer markers (negative fixint, int8–int64,
+  `0xd0`–`0xd3`) MUST be rejected for `method` and `original_size` **even when
+  the carried value is non-negative**, and a payload that is *anything other
+  than `bin`* — including the msgpack `str` family and the legacy
+  **array-of-ints** shape — MUST be rejected. Marker-level enforcement makes a
+  negative `original_size` *structurally unrepresentable* (a negative int can
+  only be carried by a signed-family marker), closing the signed-size bounds
+  bypass class outright; conformant writers can never emit signed-family
+  markers here anyway (canonical encoding of a non-negative int is always
+  unsigned-family). Note the implementation consequence: a generic MessagePack
+  decoder surfaces values, not markers, so SDKs SHOULD hand-parse the body —
+  it is a three-field grammar, and both reference tools demonstrate the
+  ~50-line parser. Pinned by the `reject_method_signed_marker` and
+  `reject_negative_original_size` vectors.
 - **The legacy array-of-ints leniency is explicitly NOT inherited.** The
   ByteStorage envelope permanently dual-reads array-of-ints because a deployed
   installed base wrote it, and because rmp-serde happens to decode both shapes
@@ -223,15 +239,24 @@ decompressing (integer arithmetic only — no floating point):
 | Max compression ratio | 1000:1 | `method 1` |
 
 ```text
+// original_size and method are unsigned by construction — signed-family
+// markers were already rejected at parse time (see The v2 Value Container).
 reject if original_size > MAX_UNCOMPRESSED          // 512 MB
 reject if payload.length > MAX_COMPRESSED           // 512 MB
 if method == 1:
     reject if payload.length == 0                   // zero-length compressed = bomb
-    max_allowed = 1000 * payload.length             // reject on integer overflow
+    max_allowed = 1000 * payload.length             // MUST be computed in >= 64-bit integers
     reject if original_size > max_allowed
 if method == 0:
     reject if original_size != payload.length
 ```
+
+The ratio product MUST be computed in **at least 64-bit unsigned integers**.
+After the two 512 MB caps pass, both operands are < 2³⁰ and the product is
+< 2⁴⁰, so it can never overflow a u64 — but it *does* overflow 32-bit `usize`
+arithmetic (a real target: cachekit-ts ships a wasm32 build), where release-mode
+wrapping would silently corrupt the bound in both directions. Do not compute
+this in pointer-width arithmetic.
 
 After `method 1` decompression, the output length MUST equal `original_size`
 exactly — shorter or longer output is a hard error (the
@@ -436,13 +461,13 @@ An SDK implementation of interop/v2 MUST:
 
 [`test-vectors/interop-v2.json`](../test-vectors/interop-v2.json) contains:
 
-| Group | Verifies |
+| Group (JSON key) | Verifies |
 | :--- | :--- |
-| `container_vectors` | Byte-exact containers: `method 0` wrap of the v1 `issue_example_object` value; `method 1` compressed round-trip of a compressible value (reference LZ4 bytes pinned; readers must decompress them to the pinned value bytes); a `method 1` container whose inner value is byte-identical to a published v1 value vector (proving the content profile is inherited unchanged). |
+| `container_vectors` | Byte-exact containers: `method 0` wrap of the v1 `issue_example_object` value; `method 1` compressed round-trip of a compressible value (reference LZ4 bytes pinned; readers must decompress them to the pinned value bytes); a `method 1` container whose inner value is byte-identical to the published v1 `issue_example_object` value vector (asserted against `interop-mode.json` at generation time — the content profile is inherited unchanged); and a hand-built non-canonical-widths container (uint8/uint32 ints, `bin16` payload, `array16` header) that readers MUST accept. |
 | `aad_vectors` | The v2 AAD (`compressed = "True"`) over the same tenant and cache key as v1's `interop_key_aad` — the two AAD hex strings differ only in the final component (`"True"` vs `"False"`), pinned side-by-side. |
 | `encryption_vectors` | Full compressed+encrypted round-trip: HKDF-SHA256 (same master key and tenant as v1 / `encryption.json`, so the derived-key fingerprint `96179a9b…` is the published one), AES-256-GCM over the v2 container with the v2 AAD and a fixed nonce; decrypt-verified on every cross-check run. |
-| `reject_vectors` (structural) | Bad magic (a bare v1 value fed to a v2 reader), bad container version, unknown method, non-`bin` payload (array-of-ints — the leniency decision, pinned), `method 0` size mismatch, trailing bytes, declared-size bomb, ratio bomb (1000:1), zero-length compressed payload, malformed LZ4 (zero offset), truncated LZ4, decompressed-length mismatch. All MUST error before or during step 5 of the reader algorithm; the `error` text is a maintainer note, not normative. |
-| `reject_vectors` (cryptographic) | `reject_v2_ciphertext_with_v1_aad` and `reject_v1_ciphertext_with_v2_aad` — both cross-mode AAD combinations MUST fail AES-GCM authentication (mode separation), pinned against real ciphertexts from this file and the v1 file. |
+| `reject_vectors` | Structural must-rejects, including: bad magic (a bare v1 value fed to a v2 reader), bad container version, unknown method, signed-family integer markers (incl. a negative `original_size`), non-`bin` payloads (the array-of-ints leniency decision, pinned, and a `str` payload), forged `bin32` length header (4 GiB declared, input ends), `method 0` size mismatch, trailing bytes, declared-size bomb, ratio bomb (1000:1), zero-length compressed payload, malformed LZ4 (zero offset), truncated LZ4, and decompressed-length mismatch. All MUST error before or during step 5 of the reader algorithm; the `error` text is a maintainer note, not normative. |
+| `crypto_reject_vectors` | `reject_v2_ciphertext_with_v1_aad` and `reject_v1_ciphertext_with_v2_aad` — both cross-mode AAD combinations MUST fail AES-GCM authentication (mode separation), pinned against real ciphertexts from this file and the v1 file. |
 
 Regenerate / verify:
 
