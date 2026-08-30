@@ -686,6 +686,15 @@ def _deterministic_junk(n: int) -> bytes:
     return bytes(out[:n])
 
 
+def _expect_structural_reject(rv: dict) -> None:
+    try:
+        decode_container(bytes.fromhex(rv["container_hex"]))
+    except V2Error:
+        return
+    msg = f"reject vector {rv['name']} did not raise"
+    raise SelfCheckError(msg)
+
+
 def _self_check(built: dict) -> None:
     # LZ4 codec round-trips: repetitive, incompressible, and boundary sizes.
     samples = [
@@ -740,13 +749,7 @@ def _self_check(built: dict) -> None:
 
     # Every structural reject vector must raise.
     for rv in built["reject_vectors"]:
-        try:
-            decode_container(bytes.fromhex(rv["container_hex"]))
-        except V2Error:
-            pass
-        else:
-            msg = f"reject vector {rv['name']} did not raise"
-            raise SelfCheckError(msg)
+        _expect_structural_reject(rv)
 
     # AAD pair: v2 differs from v1 exactly in the final component.
     aad = built["aad_vectors"][0]
