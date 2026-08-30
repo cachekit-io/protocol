@@ -4,6 +4,30 @@ All notable changes to the CacheKit Protocol Specification.
 
 ## [Unreleased]
 
+### Interop v2 — compressed-values profile (DRAFT)
+
+- New [`spec/interop-v2.md`](spec/interop-v2.md) (LAB-1135, protocol#52):
+  opt-in successor mode restoring the 2025-11-14 RFC's descoped
+  compressed+encrypted cross-SDK values. Values wrap in a `0xC1 0x02` +
+  msgpack `[method, original_size, payload:bin]` container (LZ4 block or
+  uncompressed), carried **inside** AES-256-GCM with a constant
+  four-component AAD reusing the frozen `"True"` token — deterministic
+  pre-AAD mode discrimination by configuration, no sniff-and-retry, and
+  cryptographic v1/v2 separation (cross-mode reads fail authentication).
+  Ships with a stdlib-only reference generator
+  ([`tools/interop-v2-reference.py`](tools/interop-v2-reference.py),
+  including a pure-Python LZ4 block codec), a zero-dependency independent
+  JS cross-check ([`tools/interop-v2-crosscheck.mjs`](tools/interop-v2-crosscheck.mjs)),
+  and [`test-vectors/interop-v2.json`](test-vectors/interop-v2.json)
+  (compressed and uncompressed round-trips, compressed+encrypted round-trip,
+  13 structural + 2 cryptographic must-reject vectors). Security limits
+  reuse the wire-format constants (512 MB / 1000:1, enforced before
+  decompression); the CRIME/BREACH verdict is recorded in-spec (in threat
+  model, accepted with normative mitigations); the legacy array-of-ints
+  payload leniency is explicitly **not** inherited. Interop/v1 is
+  byte-for-byte untouched — its vectors and tools run unchanged beside the
+  new ones in CI. Status DRAFT until the vectors run in cachekit-py/ts/rs CI.
+
 ### SDK Feature Matrix
 
 - Consolidated ten conflicting open matrix PRs into one code-verified end-state
