@@ -65,16 +65,14 @@ CONTAINER_VERSION = 0x02
 METHOD_NONE = 0
 METHOD_LZ4_BLOCK = 1
 
-_ERR_TRUNCATED_HEADER = "truncated container (magic + version bytes required)"
-
 
 class V2Error(ValueError):
     """Raised for any interop/v2 container the reader algorithm must reject."""
 
 
-def _bad_marker(expected: str, marker: int) -> V2Error:
+def _bad_marker(clause: str, marker: int) -> V2Error:
     """Reader rejection for a wrong MessagePack marker (diagnostic text, not normative)."""
-    return V2Error(f"expected {expected}, got marker 0x{marker:02x}")
+    return V2Error(f"{clause}, got marker 0x{marker:02x}")
 
 
 class SelfCheckError(Exception):
@@ -262,7 +260,7 @@ class _Reader:
             return int.from_bytes(self._take(2), "big")
         if marker == 0xDD:
             return int.from_bytes(self._take(4), "big")
-        raise _bad_marker("a msgpack array header for the container body", marker)
+        raise _bad_marker("container body must be a msgpack array", marker)
 
     def read_uint(self) -> int:
         # Unsigned-family markers ONLY (spec: marker-level enforcement). The
@@ -280,7 +278,7 @@ class _Reader:
             return int.from_bytes(self._take(4), "big")
         if marker == 0xCF:
             return int.from_bytes(self._take(8), "big")
-        raise _bad_marker("an unsigned-family msgpack int marker", marker)
+        raise _bad_marker("expected an unsigned-family msgpack int marker", marker)
 
     def read_bin(self) -> bytes:
         marker = self._take(1)[0]
@@ -293,7 +291,7 @@ class _Reader:
         else:
             # The explicit non-inheritance of the array-of-ints leniency (and
             # rejection of str-family payloads) lands here.
-            raise _bad_marker("payload as msgpack bin (0xc4/0xc5/0xc6)", marker)
+            raise _bad_marker("payload must be msgpack bin (0xc4/0xc5/0xc6)", marker)
         if self.pos + n > len(self.buf):  # header-vs-remaining-input rule
             raise V2Error("bin length header exceeds remaining input")
         return self._take(n)
@@ -306,7 +304,8 @@ class _Reader:
 def decode_container(data: bytes) -> bytes:
     """Normative reader algorithm steps 2-5: container bytes -> plain value bytes."""
     if len(data) < 2:
-        raise V2Error(_ERR_TRUNCATED_HEADER)
+        msg = "truncated container (magic + version bytes required)"
+        raise V2Error(msg)
     if data[0] != MAGIC:
         raise V2Error("bad container magic (0xC1 expected) — possible interop/v1 value or mode misconfiguration")
     if data[1] != CONTAINER_VERSION:
@@ -741,12 +740,13 @@ def _self_check(built: dict) -> None:
 
     # Every structural reject vector must raise.
     for rv in built["reject_vectors"]:
-        rejected = False
         try:
             decode_container(bytes.fromhex(rv["container_hex"]))
         except V2Error:
-            rejected = True
-        _require(rejected, f"reject vector {rv['name']} did not raise")
+            pass
+        else:
+            msg = f"reject vector {rv['name']} did not raise"
+            raise SelfCheckError(msg)
 
     # AAD pair: v2 differs from v1 exactly in the final component.
     aad = built["aad_vectors"][0]
@@ -762,7 +762,7 @@ def _self_check(built: dict) -> None:
     try:
         import lz4.block  # noqa: PLC0415
     except ImportError:
-        logging.info("note: `lz4` not installed — C-implementation conformance check skipped")
+        logging.warning("note: `lz4` not installed — C-implementation conformance check skipped")
     else:
         for s in samples:
             ours = lz4_block_compress(s)
@@ -780,7 +780,7 @@ def _self_check(built: dict) -> None:
         from cryptography.hazmat.primitives.ciphers.aead import AESGCM  # noqa: PLC0415
         from cryptography.exceptions import InvalidTag  # noqa: PLC0415
     except ImportError:
-        logging.info("note: `cryptography` not installed — AES-GCM checks run only in interop-v2-crosscheck.mjs (WebCrypto)")
+        logging.warning("note: `cryptography` not installed — AES-GCM checks run only in interop-v2-crosscheck.mjs (WebCrypto)")
     else:
         ev = built["encryption_vectors"][0]
         ct = bytes.fromhex(ev["ciphertext_hex"])
@@ -790,12 +790,13 @@ def _self_check(built: dict) -> None:
         _require(resealed.hex() == ev["ciphertext_hex"], "v2 encryption vector seal mismatch")
         for rv in built["crypto_reject_vectors"]:
             rct = bytes.fromhex(rv["ciphertext_hex"])
-            auth_failed = False
             try:
                 AESGCM(key).decrypt(rct[:12], rct[12:], bytes.fromhex(rv["aad_hex"]))
             except InvalidTag:
-                auth_failed = True
-            _require(auth_failed, f"{rv['name']}: cross-mode decrypt unexpectedly succeeded")
+                pass
+            else:
+                msg = f"{rv['name']}: cross-mode decrypt unexpectedly succeeded"
+                raise SelfCheckError(msg)
 
 
 def main() -> int:
@@ -836,5 +837,6 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO, format="%(message)s")
+    # stdout, matching the pre-logging behaviour and the twin JS cross-check.
+    logging.basicConfig(level=logging.INFO, format="%(message)s", stream=sys.stdout)
     sys.exit(main())

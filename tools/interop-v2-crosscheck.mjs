@@ -320,7 +320,7 @@ for (const v of doc.reject_vectors) {
   } catch (err) {
     // Expected — but only a deliberate reader rejection (a plain Error thrown
     // by the parser/decoder), never an unrelated crash such as a TypeError.
-    if (!(err instanceof Error) || err.constructor !== Error) {
+    if (err?.constructor !== Error) {
       failures++;
       console.error(`FAIL ${v.name}: rejected by unexpected error type ${err?.constructor?.name}: ${err?.message ?? err}`);
     }
