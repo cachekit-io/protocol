@@ -14,7 +14,11 @@ All notable changes to the CacheKit Protocol Specification.
   instead of restarting the freshness clock at time-of-read — an entry read
   near the end of its server-side window could previously be served fresh from
   L1 for up to another full TTL, past `fresh_until` (and, with a stale-grace
-  window, past `evict_at`). Additive and backward compatible: absent header =
+  window, past `evict_at`). The header value is a hard local service bound:
+  once elapsed (or `0`), the local copy MUST NOT be served in any form —
+  client-side stale service is prohibited for header-bounded backfills, since
+  the client has no remaining-eviction signal; the server owns the stale
+  window through `evict_at`. Additive and backward compatible: absent header =
   legacy behavior on both sides. Not emitted on `HEAD`. Spec:
   [saas-api.md → Remaining Freshness](spec/saas-api.md#remaining-freshness).
   Origin: CodeRabbit outside-diff finding on
