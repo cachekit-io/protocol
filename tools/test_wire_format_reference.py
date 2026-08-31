@@ -57,6 +57,15 @@ FIXTURE = HERE.parent / "test-vectors" / "wire-format.json"
 # A vector whose legacy base is dropped by a bad merge, leaving an orphan twin.
 # LAB-868's width-boundary vector: the only bin16 coverage in the fleet.
 ORPHANED_BASE = "width_boundary_bin16"
+
+
+class _ModuleLoadError(RuntimeError):
+    """The reference tool could not be loaded as a module (message lives here per TRY003)."""
+
+    def __init__(self, tool: Path) -> None:
+        super().__init__(f"cannot load {tool} as a module")
+
+
 # The realistic bad-merge shape the orphan case does NOT cover: base and twin go
 # together, so the append-only diff is empty.
 DROPPED_PAIR = "large_compressible"
@@ -206,7 +215,7 @@ def check_whole_file_properties() -> list[str]:
 
         spec = u.spec_from_file_location("_wfr", TOOL)
         if spec is None or spec.loader is None:
-            raise RuntimeError(f"cannot load {TOOL} as a module")
+            raise _ModuleLoadError(TOOL)
         mod = u.module_from_spec(spec)
         spec.loader.exec_module(mod)
         _d, checksum, size, fmt, _e = mod.decode_envelope(bytes.fromhex(base["envelope_hex"]))
