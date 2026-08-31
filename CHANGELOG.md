@@ -9,8 +9,9 @@ All notable changes to the CacheKit Protocol Specification.
 - LZ4 compressed bytes are **not canonical** across conforming block encoders.
   [`spec/wire-format.md`](spec/wire-format.md) now states this explicitly
   (new "Compressed-byte reproducibility" section, mirroring interop v2's
-  doctrine): `compressed_data` conformance is read-side only, writers are
-  never validated by byte-comparing compressor output against fixtures, and
+  doctrine): `compressed_data` conformance is read-side only, a **non-canonical**
+  writer is never judged non-conforming for differing from the pinned bytes
+  (byte-comparison as a declared-divergence tripwire remains allowed), and
   only the canonical writer (`lz4_flex` via `cachekit-core`) has enforced
   byte-reproducibility. The `large_compressible` / `large_compressible_bin`
   pair is marked **known encode-divergent, decode-verified only** under the
@@ -20,14 +21,14 @@ All notable changes to the CacheKit Protocol Specification.
   fixture implying a reproducibility property the reference toolchain cannot
   produce. Regeneration was rejected: every envelope-using SDK compresses
   through `cachekit-core`'s `lz4_flex` (`cachekit-rs` writes plain MessagePack
-  with no envelope — spec 'Per-SDK'), whose CI asserts re-encode byte-identity, so
+  with no envelope — spec 'SDK Storage Containers (auto mode)'), whose CI asserts re-encode byte-identity, so
   re-pinning to liblz4 output would break the canonical writer and merely swap
   which compressor diverges.
 - [`tools/wire-format-reference.py`](tools/wire-format-reference.py) `verify`
   gains an optional `lz4` leg (the dependency was already installed in CI's
   optional-deps step): liblz4 MUST decompress every pinned `compressed_data`
-  to the pinned input; encoder agreement with the pin is reported per vector
-  but never asserted. The CI invocation now passes `--require-extras`
+  to the pinned input; encoder agreement is asserted only as a set-level drift
+  tripwire against `LZ4_ENCODE_DIVERGENT`, never as a per-vector conformance rule. The CI invocation now passes `--require-extras`
   (precedent: `encryption-verify.py --require-seal`) so a dependency drift
   cannot silently turn the deeper checks off. Fixture bytes untouched
   (version stays 1.1.1) — no downstream SDK re-vendors required.
@@ -40,17 +41,28 @@ All notable changes to the CacheKit Protocol Specification.
     verified green, and liblz4 did not catch it because
     `decompress(uncompressed_size=…)` sizes the output buffer rather than
     asserting the length. Runs on both CI legs (stdlib and optional-deps).
-  - `verify` refuses to run under `-O`/`PYTHONOPTIMIZE`: every conformance check
-    is an `assert`, so an optimised run reported "all 7 vector pairs verified"
-    against a poisoned fixture.
+  - **Both** commands refuse to run under `-O`/`PYTHONOPTIMIZE`: every conformance
+    check is an `assert`, so an optimised `verify` reported "all 7 vector pairs
+    verified" against a poisoned fixture, and an optimised `generate` rewrote the
+    fixture with its input checks stripped. The guard is at module scope, not in
+    `main()`, because importing the module (sibling tools reuse this envelope
+    codec) walked straight past a CLI-only guard.
+  - `generate` is now **append-only**: it refuses to write when the rebuild would
+    drop a committed vector. It previously rebuilt `vectors` from the legacy set
+    alone, so a bin vector with no legacy base was erased silently — and because
+    `verify`'s orphan FAIL names `generate` as the remedy, the documented repair
+    step completed the data loss. Reproduced end to end: dropping legacy
+    `width_boundary_bin16` (the fleet's only bin16 coverage) left `generate`
+    reporting success on a fixture two vectors smaller, with CI green.
+  - `--require-extras` is rejected outside `verify` (exit 2). It was accepted and
+    silently ignored on `generate`, the fixture-writing path — the same
+    accepted-and-dropped fail-open the unrecognised-argument check closes.
   - Unrecognised arguments now exit 2 instead of being dropped, closing a
     fail-open in the new flag itself: `verify --require-extra` (one character
     short) exited 0 with the extras legs silently off.
   - The set of vectors liblz4 fails to reproduce on encode is pinned in
     `LZ4_ENCODE_DIVERGENT` and asserted, so a toolchain bump that changes it
     fails CI instead of quietly making the new spec section's prose wrong.
-  - `MemoryError` is no longer caught as a per-vector conformance failure (it is
-    a host signal, and relabelling it would hide an OOM).
 - [`spec/wire-format.md`](spec/wire-format.md) corrections from the same panel:
   the "MUST NOT byte-compare a writer's compressor output" rule is scoped to
   **non-canonical** writers — unscoped, it forbade the `cachekit-core` re-encode

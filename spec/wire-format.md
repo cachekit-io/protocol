@@ -40,7 +40,10 @@ This document specifies two layers:
    vendors the file sha256-pinned in `tests/wire_format_vectors.rs`, asserting
    decode byte-identity for every vector and re-encode byte-identity for the
    canonical `*_bin` vectors only — legacy array-of-integers vectors are
-   decode-only, retained as legacy-read proof. Byte-canonicity scopes to the
+   decode-only, retained as legacy-read proof. That re-encode assertion covers
+   only the vectors the pinned file contains (core currently vendors 1.1.0; see
+   [Compressed-byte reproducibility](#compressed-byte-reproducibility-per-vector-scoping)
+   for the resulting gap). Byte-canonicity scopes to the
    envelope's MessagePack encoding and to the **canonical writer's** output:
    the LZ4 bytes inside `compressed_data` are not reproducible across
    conforming compressors — see
@@ -263,20 +266,23 @@ bytes are therefore
 - A conforming reader MUST decompress every pinned vector's `compressed_data`
   to its pinned input.
 - A writer **other than the canonical `lz4_flex` writer** is NOT required to
-  reproduce the pinned compressed bytes, and MUST NOT be conformance-tested by
-  byte-comparing its compressor output against the fixture — validate such a
+  reproduce the pinned compressed bytes, and MUST NOT be judged non-conforming
+  because its compressor output differs from the fixture — validate such a
   writer by decoding its envelopes per the
   [Retrieve Flow](#retrieve-flow) and checking its MessagePack encoding against
-  [Byte Layout](#byte-layout-canonical-encoding). The carve-out below is
-  deliberate: byte-comparing the *canonical* writer is the fleet's only
-  detector for an unintended `lz4_flex` behaviour change, so it stays.
+  [Byte Layout](#byte-layout-canonical-encoding).
+- A writer MAY still byte-compare its compressor output against the pins as a
+  **drift tripwire**, provided the expected divergences are declared per vector
+  rather than treated as failures. This repo's own verifier does exactly that
+  (`LZ4_ENCODE_DIVERGENT` in `tools/wire-format-reference.py`), and it is how
+  the *canonical* writer's byte-reproducibility stays enforced — the fleet's
+  only detector for an unintended `lz4_flex` behaviour change.
 
 This is the same doctrine [interop v2](interop-v2.md) records for its
-compressed-values profile. The pinned bytes are the **canonical implementation's** output
-(`lz4_flex` via `cachekit-core`), and only that writer's reproducibility is
-enforced — by the re-encode byte-identity assertions in
-`cachekit-core/tests/wire_format_vectors.rs`, **for the vectors present in the
-fixture that repo vendors**. That matters today: cachekit-core vendors 1.1.0
+compressed-values profile. The pinned bytes are the **canonical implementation's**
+output (`lz4_flex` via `cachekit-core`), enforced by the re-encode byte-identity
+assertions in `cachekit-core/tests/wire_format_vectors.rs` — **but only for the
+vectors present in the fixture that repo vendors**. That matters today: cachekit-core vendors 1.1.0
 and pins `version == "1.1.0"`, so `width_boundary_bin16` (added at 1.1.1) is
 not yet covered by any encode-side check anywhere — re-vendoring 1.1.1 into
 cachekit-core closes that gap. The reference liblz4 mapping
