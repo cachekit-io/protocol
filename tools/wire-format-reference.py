@@ -43,8 +43,8 @@ Two optional-dependency checks deepen `verify` when importable (both run in CI):
 Both commands refuse to run under -O/PYTHONOPTIMIZE: every check in this file
 is an `assert`, so an optimised `verify` would report a pass having tested
 nothing, and an optimised `generate` would rewrite the fixture with its input
-checks stripped. Guarded in `main()`; regression-tested by
-tools/test_wire_format_reference.py.
+checks stripped. The guard is at module scope, so `import` cannot skip it
+either; regression-tested by tools/test_wire_format_reference.py.
 """
 
 from __future__ import annotations
@@ -276,7 +276,7 @@ def _bin_twin(base: dict) -> dict:
 
 def generate() -> int:
     fixture = _load()
-    legacy, bins = _split_vectors(fixture)
+    legacy, _ = _split_vectors(fixture)
     rebuilt = legacy + [_bin_twin(v) for v in legacy]
     # Append-only, as the fixture's own contract requires (LAB-783) and as the sibling
     # python-frame-reference.py already enforces by upsert (LAB-1203). Rebuilding from

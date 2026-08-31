@@ -274,9 +274,11 @@ bytes are therefore
 - A writer MAY still byte-compare its compressor output against the pins as a
   **drift tripwire**, provided the expected divergences are declared per vector
   rather than treated as failures. This repo's own verifier does exactly that
-  (`LZ4_ENCODE_DIVERGENT` in `tools/wire-format-reference.py`), and it is how
-  the *canonical* writer's byte-reproducibility stays enforced — the fleet's
-  only detector for an unintended `lz4_flex` behaviour change.
+  (`LZ4_ENCODE_DIVERGENT` in `tools/wire-format-reference.py`) — which watches
+  the reference **liblz4** mapping for divergence-set drift, and cannot observe
+  `lz4_flex` at all. Canonical-writer byte-reproducibility is a separate
+  mechanism, enforced only by the re-encode assertions in `cachekit-core`
+  described below.
 
 This is the same doctrine [interop v2](interop-v2.md) records for its
 compressed-values profile. The pinned bytes are the **canonical implementation's**
