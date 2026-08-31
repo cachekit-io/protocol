@@ -98,8 +98,10 @@ All notable changes to the CacheKit Protocol Specification.
   a committed vector is structurally impossible — which deletes the LAB-903
   drop-refusal guard and both wheel-direction refusals, and folds the
   append-only `generate-bin-twin` mode into `generate` (a protocol 1.1 wheel
-  rebuilds the `_bin` twin, a legacy wheel the legacy original; the default-path
-  pair is still proven to differ only in envelope encoding before writing).
+  rebuilds the `_bin` twin, a legacy wheel the legacy original; whenever both
+  default-path vectors are present the pair is still proven to differ only in
+  envelope encoding before writing, and a partial fixture missing either twin
+  skips that proof with a stderr note rather than aborting).
   The ByteStorage envelope codec is no longer reimplemented there: encode/decode
   come from `tools/wire-format-reference.py`, the one shared implementation of
   the encoding these fixtures pin. Rewritten vectors carry per-vector

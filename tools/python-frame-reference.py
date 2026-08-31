@@ -46,6 +46,7 @@ import importlib.util
 import json
 import sys
 from pathlib import Path
+from types import ModuleType
 
 VECTOR_PATH = Path(__file__).resolve().parent.parent / "test-vectors" / "python-frame.json"
 
@@ -54,7 +55,7 @@ FRAME_VERSION = 3
 PREFIX_LEN = 7  # magic(2) + version(1) + header_len(4)
 
 
-def _load_wire_format_codec():
+def _load_wire_format_codec() -> ModuleType:
     """Load tools/wire-format-reference.py as a module (hyphenated filename)."""
     path = Path(__file__).resolve().parent / "wire-format-reference.py"
     spec = importlib.util.spec_from_file_location("wire_format_reference", path)
@@ -373,6 +374,59 @@ def _require_twin_equivalence(frame_vectors: list[dict]) -> None:
         )
 
 
+def _build_error_vectors(raw_frame: bytes, msgpack: ModuleType, wrapper: type) -> list[dict]:
+    """Build the error vectors, each checked against the REAL implementation.
+
+    Split out of generate() so the frame-vector flow and the error-vector flow
+    read independently (PLR0915). Behaviour is unchanged: every vector here is
+    proven to be rejected by cachekit-py before it can be written, and the
+    interop vector is proven to be rejected by a strict msgpack reader.
+    """
+    built_errors = [
+        {
+            "name": "truncated_frame",
+            "frame_hex": "434b03",
+            "error": "shorter than the 7-byte fixed prefix (magic + version + header length)",
+        },
+        {
+            "name": "unsupported_frame_version",
+            "frame_hex": "434b04000000027b7d",
+            "error": "frame version 4 (only version 3 is defined)",
+        },
+        {
+            "name": "header_overrun",
+            "frame_hex": "434b03000000ff7b7d",
+            "error": "declared header length (255) exceeds the bytes present in the frame",
+        },
+    ]
+    for vec in built_errors:
+        try:
+            wrapper.unwrap(bytes.fromhex(vec["frame_hex"]))
+        except ValueError:
+            pass
+        else:  # pragma: no cover - generation-time invariant
+            raise AssertionError(f"cachekit-py accepted error vector {vec['name']}")
+    try:
+        msgpack.unpackb(raw_frame)
+    except msgpack.exceptions.ExtraData:
+        pass  # exactly the trailing-bytes rejection the spec requires
+    else:  # pragma: no cover - generation-time invariant
+        raise AssertionError("strict msgpack reader accepted a CK frame as one document")
+    built_errors.append(
+        {
+            "name": "ck_frame_fed_to_interop_reader",
+            "frame_hex": raw_frame.hex(),
+            "error": (
+                "not a single well-formed MessagePack document: 0x43 is fixint 67, so the frame is one "
+                "1-byte document plus trailing bytes. Interop readers MUST consume exactly one document "
+                "and reject trailing bytes; on failure, a 0x43 0x4B prefix SHOULD be reported as "
+                "'Python-SDK-internal auto-mode entry — not an interop value'"
+            ),
+        }
+    )
+    return built_errors
+
+
 def generate() -> int:
     import msgpack  # third-party; generation only
 
@@ -449,49 +503,7 @@ def generate() -> int:
             }
         )
 
-    # Error vectors, verified against the REAL implementation as we build them.
-    built_errors = [
-        {
-            "name": "truncated_frame",
-            "frame_hex": "434b03",
-            "error": "shorter than the 7-byte fixed prefix (magic + version + header length)",
-        },
-        {
-            "name": "unsupported_frame_version",
-            "frame_hex": "434b04000000027b7d",
-            "error": "frame version 4 (only version 3 is defined)",
-        },
-        {
-            "name": "header_overrun",
-            "frame_hex": "434b03000000ff7b7d",
-            "error": "declared header length (255) exceeds the bytes present in the frame",
-        },
-    ]
-    for vec in built_errors:
-        try:
-            SerializationWrapper.unwrap(bytes.fromhex(vec["frame_hex"]))
-        except ValueError:
-            pass
-        else:  # pragma: no cover - generation-time invariant
-            raise AssertionError(f"cachekit-py accepted error vector {vec['name']}")
-    try:
-        msgpack.unpackb(raw_frame)
-    except msgpack.exceptions.ExtraData:
-        pass  # exactly the trailing-bytes rejection the spec requires
-    else:  # pragma: no cover - generation-time invariant
-        raise AssertionError("strict msgpack reader accepted a CK frame as one document")
-    built_errors.append(
-        {
-            "name": "ck_frame_fed_to_interop_reader",
-            "frame_hex": raw_frame.hex(),
-            "error": (
-                "not a single well-formed MessagePack document: 0x43 is fixint 67, so the frame is one "
-                "1-byte document plus trailing bytes. Interop readers MUST consume exactly one document "
-                "and reject trailing bytes; on failure, a 0x43 0x4B prefix SHOULD be reported as "
-                "'Python-SDK-internal auto-mode entry — not an interop value'"
-            ),
-        }
-    )
+    built_errors = _build_error_vectors(raw_frame, msgpack, SerializationWrapper)
 
     # Upsert by name. The top-level 'generator' (the legacy-vector provenance)
     # is never rewritten; every vector this run rewrites or adds carries its
