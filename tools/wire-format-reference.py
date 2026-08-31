@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """Reference encoder/verifier for the ByteStorage envelope (spec/wire-format.md).
 
-Stdlib-only (one optional extra, see below). Scope: the **MessagePack encoding**
+Stdlib-only (optional extras, see below). Scope: the **MessagePack encoding**
 of the StorageEnvelope positional array — both the legacy element[0] encoding
 (array of integers, pre-1.1 writers) and the canonical one (msgpack `bin`,
-protocol 1.1+ writers). LZ4 decompression and xxHash3-64 recomputation are NOT
-verified here (neither is stdlib); that enforcement lives in cachekit-core's CI
-(`tests/wire_format_vectors.rs`, LAB-423).
+protocol 1.1+ writers). xxHash3-64 recomputation is NOT verified here (not
+stdlib); byte-level enforcement for the canonical writer lives in
+cachekit-core's CI (`tests/wire_format_vectors.rs`, LAB-423).
 
 What `verify` proves, for every vector pair in ../test-vectors/wire-format.json:
   1. Codec fidelity — decoding a legacy vector and re-encoding it in legacy form
@@ -20,14 +20,38 @@ What `verify` proves, for every vector pair in ../test-vectors/wire-format.json:
      bin form reproduces the `*_bin` bytes exactly.
   3. Documented size bound — a bin envelope is never more than 1 byte larger
      than its legacy twin (the header-arithmetic bound stated in the spec).
+  4. Declared sizes match ground truth — `original_size` equals the real length
+     of `input_hex`, not merely the co-located `input_size` field (both declared
+     sizes live in the file under test, so they drift together).
+  5. The base-vector set is exactly EXPECTED_BASE_VECTORS, and the fixture's own
+     declared `limits` block matches the spec's Security Limits table. Both are
+     whole-file properties: checks 1-4 iterate the fixture's vector list and so
+     are structurally blind to a vector that is simply absent, or to a bound the
+     fixture misdeclares to every SDK that reads it.
 
 Usage:
     python3 tools/wire-format-reference.py verify     # default
+    python3 tools/wire-format-reference.py verify --require-extras
+                                                      # fail if optional deps are
+                                                      # missing (CI optional-deps leg)
     python3 tools/wire-format-reference.py generate   # (re)derive *_bin vectors
 
-One optional-dependency check deepens `verify` when importable (runs in CI):
+Two optional-dependency checks deepen `verify` when importable (both run in CI):
   - `msgpack`: third-encoder conformance — msgpack-python re-encodes both forms
     from decoded fields and must reproduce the pinned bytes byte-identically.
+  - `lz4`: C-implementation (liblz4) decode conformance — liblz4 must decompress
+    every vector's pinned compressed_data to the pinned input. Encoder agreement
+    is a drift tripwire against LZ4_ENCODE_DIVERGENT, never a per-vector
+    conformance rule (spec 'Compressed-byte reproducibility', LAB-1751): a vector
+    liblz4 reproduces must keep reproducing, and a declared-divergent vector must
+    keep the exact bytes mapped to its name — "differs from liblz4" alone is a
+    one-bit check that any other valid LZ4 block would satisfy.
+
+Both commands refuse to run under -O/PYTHONOPTIMIZE: every check in this file
+is an `assert`, so an optimised `verify` would report a pass having tested
+nothing, and an optimised `generate` would rewrite the fixture with its input
+checks stripped. The guard is at module scope, so `import` cannot skip it
+either; regression-tested by tools/test_wire_format_reference.py.
 """
 
 from __future__ import annotations
@@ -39,6 +63,57 @@ from pathlib import Path
 FIXTURE_PATH = Path(__file__).resolve().parent.parent / "test-vectors" / "wire-format.json"
 
 FIXTURE_VERSION = "1.1.1"
+# The base vectors this fixture is pinned to contain. Checked as a SET, because every
+# other integrity check here iterates the fixture's own vector list and therefore
+# cannot see a vector that is simply absent: dropping a legacy base AND its `_bin`
+# twin together left `generate`'s append-only diff empty and `verify` reporting "all 6
+# vector pairs verified", exit 0 (LAB-1751 panel round 3). Same lesson as the
+# original_size/input_size drift one level up — a name list derived from the artifact
+# under test pins nothing, so the expected set has to live in code.
+EXPECTED_BASE_VECTORS = frozenset(
+    {
+        "empty",
+        "simple_string",
+        "binary_data",
+        "large_compressible",
+        "json_like",
+        "single_byte",
+        "width_boundary_bin16",
+    }
+)
+# spec/wire-format.md 'Security Limits'. Pinned here so the fixture's own declared
+# `limits` block cannot drift from the spec table: SDKs read their bounds from that
+# block, so a fixture shipping max_uncompressed_size=1 with CI green would hand every
+# downstream reader a wrong bound. `verify` compares the two. The per-vector check
+# below additionally rejects an inflated declared original_size by name; note the
+# ground-truth `original_size == len(input_hex)` assert would catch that case anyway,
+# so this bound is about naming the spec limit that was breached, not about bounding
+# an allocation. The compressed_data length cap and the 1000:1 bomb check are a
+# reader's obligations, not this fixture verifier's.
+SPEC_LIMITS = {
+    "max_uncompressed_size": 512 * 1024 * 1024,
+    "max_compressed_size": 512 * 1024 * 1024,
+    "max_compression_ratio": 1000,
+}
+MAX_UNCOMPRESSED_SIZE = SPEC_LIMITS["max_uncompressed_size"]
+# spec/wire-format.md 'Compressed-byte reproducibility' names WHICH vectors liblz4
+# fails to reproduce on encode, and maps each to the bytes actually pinned. Encoder
+# agreement is not a conformance rule, but the spec's claim about the set is a fact,
+# so a change to it must fail CI and force the text to be re-read — otherwise the next
+# `lz4==` bump rots the spec silently. The value is load-bearing: asserting only
+# "these bytes differ from liblz4's output" is a one-bit check that ANY other valid
+# LZ4 block satisfies, so a re-pin of the divergent vector to unrelated bytes passed
+# (LAB-1751 panel round 3). Byte-pinning the divergent vector is the only encode-side
+# enforcement it has anywhere in the fleet.
+# Base names only: twins carry the same compressed_data and are not iterated.
+LZ4_ENCODE_DIVERGENT = {"large_compressible": "1f410100ffffffe960414141414141"}
+if not LZ4_ENCODE_DIVERGENT.keys() <= EXPECTED_BASE_VECTORS:
+    # A phantom name here is never compared against anything in the loop below, so it
+    # would leave the spec's named set wrong with CI green.
+    raise SystemExit(
+        "BUG: LZ4_ENCODE_DIVERGENT names vectors not in EXPECTED_BASE_VECTORS: "
+        f"{', '.join(sorted(LZ4_ENCODE_DIVERGENT.keys() - EXPECTED_BASE_VECTORS))}"
+    )
 ENVELOPE_FORMAT = (
     "MessagePack positional array (rmp_serde::to_vec): "
     "[compressed_data, checksum, original_size, format]. Vectors without an "
@@ -222,10 +297,45 @@ def _split_vectors(fixture: dict) -> tuple[list[dict], dict[str, dict]]:
     bins = {v["name"]: v for v in fixture["vectors"] if v.get("envelope_encoding") == "bin"}
     # Fail closed: every vector must classify as exactly one of the two sets,
     # with no duplicate names — otherwise verify would silently skip it (and
-    # generate would silently drop it from the append-only fixture).
-    if len(legacy) + len(bins) != len(fixture["vectors"]) or len({v["name"] for v in legacy}) != len(legacy):
-        raise ValueError("fixture contains unclassifiable or duplicate-named vectors")
+    # generate would silently drop it from the append-only fixture). Named
+    # separately, and caught by both callers, so the failure says WHICH vector
+    # is unusable instead of exiting via a bare traceback.
+    if len(legacy) + len(bins) != len(fixture["vectors"]):
+        classified = {v["name"] for v in legacy} | set(bins)
+        stray = [v["name"] for v in fixture["vectors"] if v["name"] not in classified]
+        raise ValueError(
+            "fixture vector(s) classify as neither legacy nor bin (envelope_encoding "
+            f"must be absent or 'bin'): {', '.join(sorted(stray))}"
+        )
+    names = [v["name"] for v in legacy]
+    if len(set(names)) != len(names):
+        dupes = sorted({n for n in names if names.count(n) > 1})
+        raise ValueError(f"fixture contains duplicate-named legacy vector(s): {', '.join(dupes)}")
     return legacy, bins
+
+
+def _base_set_error(legacy: list[dict]) -> str | None:
+    """Compare the fixture's base-vector set against EXPECTED_BASE_VECTORS.
+
+    Absence is the one drift class every per-vector check is blind to, because they
+    all iterate the fixture's own list. Returns a message, or None when the set is
+    exactly as pinned.
+    """
+    present = {v["name"] for v in legacy}
+    missing = EXPECTED_BASE_VECTORS - present
+    unexpected = present - EXPECTED_BASE_VECTORS
+    if not missing and not unexpected:
+        return None
+    parts = []
+    if missing:
+        parts.append(f"missing base vector(s): {', '.join(sorted(missing))}")
+    if unexpected:
+        parts.append(f"unexpected base vector(s): {', '.join(sorted(unexpected))}")
+    return (
+        f"fixture base-vector set drifted — {'; '.join(parts)}. A dropped base and its "
+        "'_bin' twin are invisible to every per-vector check; add a genuinely new "
+        "vector to EXPECTED_BASE_VECTORS deliberately, and never remove one."
+    )
 
 
 def _bin_twin(base: dict) -> dict:
@@ -246,9 +356,39 @@ def _bin_twin(base: dict) -> dict:
 
 
 def generate() -> int:
-    fixture = _load()
-    legacy, _ = _split_vectors(fixture)
-    fixture["vectors"] = legacy + [_bin_twin(v) for v in legacy]
+    try:
+        fixture = _load()
+        legacy, _ = _split_vectors(fixture)
+    except ValueError as e:
+        print(f"REFUSED: unusable fixture: {e}", file=sys.stderr)
+        return 1
+    # Refuse before the write if the base set itself has drifted. The `lost` diff below
+    # is derived from the fixture on both sides, so dropping a base AND its twin
+    # together nets to zero there and `generate` would happily write the shrunken
+    # fixture (LAB-1751 panel round 3).
+    set_error = _base_set_error(legacy)
+    if set_error:
+        print(f"REFUSED: {set_error}", file=sys.stderr)
+        return 1
+    rebuilt = legacy + [_bin_twin(v) for v in legacy]
+    # Append-only, as the fixture's own contract requires (LAB-783), and the same
+    # refusal the sibling python-frame-reference.py uses for its whole-fixture rebuild
+    # (its upsert-by-name applies only to the single-vector append mode, LAB-1203 — do
+    # not "align" this to an upsert). Rebuilding from the legacy set alone silently
+    # drops any committed vector that is not a derived twin, and `verify`'s orphan FAIL
+    # names `generate` as the remedy — so the repair step completes the data loss.
+    # Refuse instead: this file is vendored and sha256-pinned downstream, and a
+    # deletion here is invisible until an SDK's conformance coverage has already shrunk.
+    lost = {v["name"] for v in fixture["vectors"]} - {v["name"] for v in rebuilt}
+    if lost:
+        print(
+            f"REFUSED: generate would drop committed vector(s): {', '.join(sorted(lost))}. "
+            "A bin vector with no legacy base is not regenerable from the legacy set — "
+            "restore the missing base vector rather than regenerating.",
+            file=sys.stderr,
+        )
+        return 1
+    fixture["vectors"] = rebuilt
     fixture["envelope_format"] = ENVELOPE_FORMAT
     fixture["generator"] = GENERATOR
     fixture["version"] = FIXTURE_VERSION
@@ -257,7 +397,7 @@ def generate() -> int:
     return 0
 
 
-def _verify_vector(base: dict, bins: dict, msgpack) -> str:
+def _verify_vector(base: dict, bins: dict, msgpack, lz4_block) -> str:
     """Validate one legacy vector against its bin twin (popped from `bins`).
 
     Returns the one-line size-delta summary on success, or raises
@@ -275,6 +415,37 @@ def _verify_vector(base: dict, bins: dict, msgpack) -> str:
     assert len(old_env) == base["envelope_size"], "envelope_size mismatch"
     assert fmt == base["format"], "format field mismatch"
     assert size == base["input_size"], "original_size != input_size"
+    # ...and against ground truth. original_size and input_size both live IN the
+    # file under test, so a regeneration bug that inflates them drifts them
+    # together and the line above still passes (LAB-903's lesson). input_hex is
+    # the only field the pinned bytes are actually derived from, so it is the
+    # one to measure against. Stdlib, and outside the optional-deps gate below,
+    # so fixture self-consistency holds on both CI legs. This is NOT spec decode
+    # step 9 (data.length == original_size after decompression) — that compares
+    # decompressed output and only runs on the lz4 leg, as `got == inp` below.
+    if size > MAX_UNCOMPRESSED_SIZE:
+        # Before the compare, and before any decompression: an inflated declared
+        # size must fail by name on both legs, not be sized into RAM downstream.
+        raise ValueError(
+            f"original_size {size} exceeds the spec's {MAX_UNCOMPRESSED_SIZE} B limit"
+        )
+    assert size == len(bytes.fromhex(base["input_hex"])), (
+        "original_size != len(input_hex)"
+    )
+    # A vector the spec declares encode-divergent keeps the exact bytes mapped to its
+    # name. Stdlib, and deliberately OUTSIDE the optional-deps gate below (same reason
+    # as the ground-truth compare above): the set-level tripwire on the lz4 leg only
+    # asserts "these bytes differ from liblz4's output", which ANY other valid LZ4
+    # block satisfies — so a re-pin to unrelated bytes passed both legs. This is the
+    # only encode-side enforcement the divergent vector has anywhere in the fleet;
+    # cachekit-core re-encodes via lz4_flex and so cannot check it either.
+    pinned_hex = LZ4_ENCODE_DIVERGENT.get(base["name"])
+    assert pinned_hex is None or data.hex() == pinned_hex, (
+        f"declared-divergent vector {base['name']} no longer carries its pinned "
+        f"compressed_data ({data.hex()} != {pinned_hex}) — re-pin deliberately in "
+        "LZ4_ENCODE_DIVERGENT and re-read spec/wire-format.md 'Compressed-byte "
+        "reproducibility'"
+    )
 
     # 2. twin equivalence
     twin = bins.pop(base["name"] + "_bin", None)
@@ -285,8 +456,7 @@ def _verify_vector(base: dict, bins: dict, msgpack) -> str:
     )
     assert new_env[0] == 0x94, "outer fixarray(4) not preserved"
     assert new_env[1] in (0xC4, 0xC5, 0xC6), "element[0] not bin-encoded"
-    t_data, t_checksum, t_size, t_fmt, t_encoding = decode_envelope(new_env)
-    assert t_encoding == "bin"
+    t_data, t_checksum, t_size, t_fmt, _t_encoding = decode_envelope(new_env)
     assert (t_data, t_checksum, t_size, t_fmt) == (data, checksum, size, fmt), (
         "twin decodes to different fields"
     )
@@ -315,30 +485,92 @@ def _verify_vector(base: dict, bins: dict, msgpack) -> str:
             "msgpack-python legacy re-encode mismatch"
         )
 
+    # optional: liblz4 decode conformance. Encode agreement is asserted only against
+    # the declared LZ4_ENCODE_DIVERGENT set — a drift tripwire, never a per-vector
+    # conformance rule; see spec 'Compressed-byte reproducibility' (LAB-1751).
+    lz4_note = ""
+    if lz4_block is not None:
+        inp = bytes.fromhex(base["input_hex"])
+        try:
+            got = lz4_block.decompress(data, uncompressed_size=size)
+        except (lz4_block.LZ4BlockError, OverflowError) as e:
+            # convert to the guarded type so a corrupt stream fails itself, not the
+            # run. MemoryError is deliberately NOT caught: it is a host signal, and
+            # relabelling it as a per-vector conformance failure would hide an OOM.
+            raise AssertionError(f"liblz4 rejects pinned compressed_data: {e}") from e
+        assert got == inp, "liblz4 does not decompress pinned compressed_data to the input"
+        theirs = lz4_block.compress(inp, store_size=False)
+        diverges = theirs != data
+        # Set-level half of the tripwire: WHICH vectors liblz4 fails to reproduce is a
+        # spec fact, so a change either direction must fail CI. The byte-level half
+        # (the pinned bytes themselves) is asserted above on both legs.
+        assert diverges == (pinned_hex is not None), (
+            f"liblz4 encode-divergence set changed: {base['name']} "
+            f"{'now diverges from' if diverges else 'now reproduces'} the pin — "
+            "update spec/wire-format.md 'Compressed-byte reproducibility' and "
+            "LZ4_ENCODE_DIVERGENT together"
+        )
+        lz4_note = (
+            f"; liblz4 decode ok, encode diverges ({len(theirs)} B vs {len(data)} B pinned — decode-verified only)"
+            if diverges
+            else "; liblz4 decode ok, encode reproduces pin"
+        )
+
     delta = len(new_env) - len(old_env)
-    return f"legacy {len(old_env)} B -> bin {len(new_env)} B ({delta:+d} B)"
+    return f"legacy {len(old_env)} B -> bin {len(new_env)} B ({delta:+d} B){lz4_note}"
 
 
-def verify() -> int:
+def verify(require_extras: bool = False) -> int:
     fixture = _load()
-    legacy, bins = _split_vectors(fixture)
+    try:
+        legacy, bins = _split_vectors(fixture)
+    except ValueError as e:
+        print(f"FAIL: unusable fixture: {e}", file=sys.stderr)
+        return 1
     if not legacy:
         print("FAIL: no legacy vectors found", file=sys.stderr)
         return 1
     if fixture.get("version") != FIXTURE_VERSION:
         print(f"FAIL: fixture version {fixture.get('version')} != {FIXTURE_VERSION}", file=sys.stderr)
         return 1
+    set_error = _base_set_error(legacy)
+    if set_error:
+        print(f"FAIL: {set_error}", file=sys.stderr)
+        return 1
+    # The fixture declares the bounds SDKs read; the spec table is normative. Neither
+    # pinned the other, so a fixture rewriting max_uncompressed_size to 1 verified
+    # green (LAB-1751 panel round 3).
+    declared = fixture.get("limits", {})
+    drifted = sorted(k for k, v in SPEC_LIMITS.items() if declared.get(k) != v)
+    if drifted:
+        detail = ", ".join(f"{k}: fixture {declared.get(k)!r} != spec {SPEC_LIMITS[k]}" for k in drifted)
+        print(
+            f"FAIL: fixture 'limits' drifted from spec/wire-format.md 'Security Limits' — {detail}",
+            file=sys.stderr,
+        )
+        return 1
 
     try:
         import msgpack  # type: ignore[import-untyped]
     except ImportError:
         msgpack = None
+    try:
+        import lz4.block as lz4_block  # type: ignore[import-untyped]
+    except ImportError:
+        lz4_block = None
+    if require_extras and (msgpack is None or lz4_block is None):
+        # CI's optional-deps leg passes --require-extras so a dependency drift
+        # cannot silently turn the deeper conformance checks off (exit-0 with
+        # a "stdlib-only" banner would be an unflagged loss of coverage).
+        missing = [n for n, mod in (("msgpack", msgpack), ("lz4", lz4_block)) if mod is None]
+        print(f"FAIL: --require-extras set but not importable: {', '.join(missing)}", file=sys.stderr)
+        return 1
 
     failures = 0
     for base in legacy:
         name = base["name"]
         try:
-            print(f"  ok {name}: {_verify_vector(base, bins, msgpack)}")
+            print(f"  ok {name}: {_verify_vector(base, bins, msgpack, lz4_block)}")
         except (AssertionError, ValueError, IndexError, KeyError) as e:
             # Per-vector isolation: a malformed vector (truncated hex, missing
             # field) fails only itself with a named FAIL line, not the whole run.
@@ -349,7 +581,8 @@ def verify() -> int:
         failures += 1
         print(f"  FAIL {orphan}: bin vector without a legacy base", file=sys.stderr)
 
-    conformance = "with msgpack-python conformance" if msgpack else "stdlib-only"
+    extras = [label for label, mod in (("msgpack-python", msgpack), ("liblz4 decode", lz4_block)) if mod]
+    conformance = "with " + " + ".join(extras) + " conformance" if extras else "stdlib-only"
     if failures:
         print(f"FAIL: {failures} failure(s) ({conformance})", file=sys.stderr)
         return 1
@@ -358,14 +591,46 @@ def verify() -> int:
 
 
 def main() -> int:
-    cmd = sys.argv[1] if len(sys.argv) > 1 else "verify"
+    argv = sys.argv[1:]
+    require_extras = "--require-extras" in argv
+    args = [a for a in argv if a != "--require-extras"]
+    # Reject anything unrecognised rather than dropping it. `--require-extras` is
+    # matched by exact string and it gates the deepest coverage, so a silently
+    # ignored `--require-extra` typo used to exit 0 with the extras legs off —
+    # the exact fail-open the flag was added to close. The arity check is what
+    # closes it: the typo survives the strip above, leaving two positionals. A
+    # lone unrecognised token falls through to the unknown-command exit 2 below.
+    if len(args) > 1:
+        print(__doc__, file=sys.stderr)
+        return 2
+    cmd = args[0] if args else "verify"
+    if require_extras and cmd != "verify":
+        # Same rule as the unrecognised-arg rejection above: a flag that is accepted
+        # and ignored on the fixture-WRITING path is the fail-open this guard exists
+        # to close.
+        print(f"FAIL: --require-extras is not valid for '{cmd}'", file=sys.stderr)
+        return 2
     if cmd == "generate":
         return generate()
     if cmd == "verify":
-        return verify()
+        return verify(require_extras=require_extras)
     print(__doc__, file=sys.stderr)
     return 2
 
+
+if not __debug__:
+    # Every integrity check in this file is an `assert`, so -O/-OO strips all of them:
+    # `verify` reports a pass having tested nothing and `generate` rewrites the fixture
+    # with its input checks gone. Module scope, not main(), because a CLI-only guard is
+    # bypassed by importing this module and calling verify() directly — which the
+    # regression harness's importlib probe does, and which is how the sibling tools
+    # load each other's codecs (interop-v2-reference.py loads interop-reference.py by
+    # spec_from_file_location). Regression-tested by tools/test_wire_format_reference.py.
+    print(
+        "FAIL: assertions disabled (-O / PYTHONOPTIMIZE) — this tool proves nothing",
+        file=sys.stderr,
+    )
+    sys.exit(1)
 
 if __name__ == "__main__":
     sys.exit(main())
