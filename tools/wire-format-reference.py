@@ -48,6 +48,12 @@ from pathlib import Path
 FIXTURE_PATH = Path(__file__).resolve().parent.parent / "test-vectors" / "wire-format.json"
 
 FIXTURE_VERSION = "1.1.1"
+# spec/wire-format.md 'Size Limits' — 512 MiB, and the decode sequence validates
+# original_size against it BEFORE decompressing (step 4, ahead of step 6). This
+# file is the spec's executable witness, so it has to run that step too: liblz4
+# pre-allocates uncompressed_size, so a fixture whose original_size was mutated
+# upward gets the run OOM-killed rather than failing the vector by name.
+MAX_UNCOMPRESSED_SIZE = 536_870_912
 ENVELOPE_FORMAT = (
     "MessagePack positional array (rmp_serde::to_vec): "
     "[compressed_data, checksum, original_size, format]. Vectors without an "
@@ -329,6 +335,9 @@ def _verify_vector(base: dict, bins: dict, msgpack, lz4_block) -> str:
     lz4_note = ""
     if lz4_block is not None:
         inp = bytes.fromhex(base["input_hex"])
+        assert size <= MAX_UNCOMPRESSED_SIZE, (
+            f"original_size {size} exceeds the spec's {MAX_UNCOMPRESSED_SIZE} B limit"
+        )
         try:
             got = lz4_block.decompress(data, uncompressed_size=size)
         except (lz4_block.LZ4BlockError, OverflowError, MemoryError) as e:

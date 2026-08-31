@@ -18,8 +18,9 @@ All notable changes to the CacheKit Protocol Specification.
   emits a 14 B block where the fixture pins `lz4_flex`'s 15 B. Found by
   execution during the LAB-868 panel review; resolves the trust bug of a
   fixture implying a reproducibility property the reference toolchain cannot
-  produce. Regeneration was rejected: every SDK compresses through
-  `cachekit-core`'s `lz4_flex`, whose CI asserts re-encode byte-identity, so
+  produce. Regeneration was rejected: every envelope-using SDK compresses
+  through `cachekit-core`'s `lz4_flex` (`cachekit-rs` writes plain MessagePack
+  with no envelope — spec 'Per-SDK'), whose CI asserts re-encode byte-identity, so
   re-pinning to liblz4 output would break the canonical writer and merely swap
   which compressor diverges.
 - [`tools/wire-format-reference.py`](tools/wire-format-reference.py) `verify`
