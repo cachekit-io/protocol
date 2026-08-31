@@ -74,11 +74,12 @@ def check_optimised_refusals() -> list[str]:
         ok = proc.returncode == expected
         # An -O run must say why it refused; a bare non-zero exit could be an
         # unrelated crash, which would let the guard rot behind a passing test.
+        label = name
         if ok and flags and "assertions disabled" not in proc.stderr:
-            ok, name = False, name + " (exited 1 but not via the guard)"
-        print(f"  [{'ok' if ok else 'FAIL'}] {name}: expected exit {expected}, got {proc.returncode}")
+            ok, label = False, f"{name} (exited {expected} but not via the guard)"
+        print(f"  [{'ok' if ok else 'FAIL'}] {label}: expected exit {expected}, got {proc.returncode}")
         if not ok:
-            failures.append(name)
+            failures.append(label)
 
     # The guard is at module scope precisely so this path cannot skip it.
     probe = "import importlib.util as u;s=u.spec_from_file_location('w',r'%s');m=u.module_from_spec(s);s.loader.exec_module(m);print('RAN',m.verify())"
