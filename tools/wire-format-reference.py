@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """Reference encoder/verifier for the ByteStorage envelope (spec/wire-format.md).
 
-Stdlib-only (one optional extra, see below). Scope: the **MessagePack encoding**
+Stdlib-only (optional extras, see below). Scope: the **MessagePack encoding**
 of the StorageEnvelope positional array — both the legacy element[0] encoding
 (array of integers, pre-1.1 writers) and the canonical one (msgpack `bin`,
-protocol 1.1+ writers). LZ4 decompression and xxHash3-64 recomputation are NOT
-verified here (neither is stdlib); that enforcement lives in cachekit-core's CI
-(`tests/wire_format_vectors.rs`, LAB-423).
+protocol 1.1+ writers). xxHash3-64 recomputation is NOT verified here (not
+stdlib); byte-level enforcement for the canonical writer lives in
+cachekit-core's CI (`tests/wire_format_vectors.rs`, LAB-423).
 
 What `verify` proves, for every vector pair in ../test-vectors/wire-format.json:
   1. Codec fidelity — decoding a legacy vector and re-encoding it in legacy form
@@ -23,11 +23,20 @@ What `verify` proves, for every vector pair in ../test-vectors/wire-format.json:
 
 Usage:
     python3 tools/wire-format-reference.py verify     # default
+    python3 tools/wire-format-reference.py verify --require-extras
+                                                      # fail if optional deps are
+                                                      # missing (CI optional-deps leg)
     python3 tools/wire-format-reference.py generate   # (re)derive *_bin vectors
 
-One optional-dependency check deepens `verify` when importable (runs in CI):
+Two optional-dependency checks deepen `verify` when importable (both run in CI):
   - `msgpack`: third-encoder conformance — msgpack-python re-encodes both forms
     from decoded fields and must reproduce the pinned bytes byte-identically.
+  - `lz4`: C-implementation (liblz4) DECODE conformance — liblz4 must
+    decompress every vector's pinned compressed_data to the pinned input.
+    Compressed bytes are not canonical across conforming LZ4 block encoders
+    (spec/wire-format.md 'Compressed-byte reproducibility', LAB-1751), so
+    encoder agreement with the pinned lz4_flex bytes is reported per vector
+    but never asserted — liblz4 is known to diverge on `large_compressible`.
 """
 
 from __future__ import annotations
@@ -257,7 +266,7 @@ def generate() -> int:
     return 0
 
 
-def _verify_vector(base: dict, bins: dict, msgpack) -> str:
+def _verify_vector(base: dict, bins: dict, msgpack, lz4_block) -> str:
     """Validate one legacy vector against its bin twin (popped from `bins`).
 
     Returns the one-line size-delta summary on success, or raises
@@ -315,11 +324,30 @@ def _verify_vector(base: dict, bins: dict, msgpack) -> str:
             "msgpack-python legacy re-encode mismatch"
         )
 
+    # optional: liblz4 DECODE-only conformance — encode agreement reported, never
+    # asserted; see module docstring / spec 'Compressed-byte reproducibility' (LAB-1751).
+    lz4_note = ""
+    if lz4_block is not None:
+        inp = bytes.fromhex(base["input_hex"])
+        try:
+            got = lz4_block.decompress(data, uncompressed_size=size)
+        except (lz4_block.LZ4BlockError, OverflowError, MemoryError) as e:
+            # convert to the guarded type so a bad vector (corrupt stream, or an
+            # oversized size that liblz4 rejects/pre-allocates) fails itself, not the run
+            raise AssertionError(f"liblz4 rejects pinned compressed_data: {e}") from e
+        assert got == inp, "liblz4 does not decompress pinned compressed_data to the input"
+        theirs = lz4_block.compress(inp, store_size=False)
+        lz4_note = (
+            "; liblz4 decode ok, encode reproduces pin"
+            if theirs == data
+            else f"; liblz4 decode ok, encode diverges ({len(theirs)} B vs {len(data)} B pinned — decode-verified only)"
+        )
+
     delta = len(new_env) - len(old_env)
-    return f"legacy {len(old_env)} B -> bin {len(new_env)} B ({delta:+d} B)"
+    return f"legacy {len(old_env)} B -> bin {len(new_env)} B ({delta:+d} B){lz4_note}"
 
 
-def verify() -> int:
+def verify(require_extras: bool = False) -> int:
     fixture = _load()
     legacy, bins = _split_vectors(fixture)
     if not legacy:
@@ -333,12 +361,23 @@ def verify() -> int:
         import msgpack  # type: ignore[import-untyped]
     except ImportError:
         msgpack = None
+    try:
+        import lz4.block as lz4_block  # type: ignore[import-untyped]
+    except ImportError:
+        lz4_block = None
+    if require_extras and (msgpack is None or lz4_block is None):
+        # CI's optional-deps leg passes --require-extras so a dependency drift
+        # cannot silently turn the deeper conformance checks off (exit-0 with
+        # a "stdlib-only" banner would be an unflagged loss of coverage).
+        missing = [n for n, mod in (("msgpack", msgpack), ("lz4", lz4_block)) if mod is None]
+        print(f"FAIL: --require-extras set but not importable: {', '.join(missing)}", file=sys.stderr)
+        return 1
 
     failures = 0
     for base in legacy:
         name = base["name"]
         try:
-            print(f"  ok {name}: {_verify_vector(base, bins, msgpack)}")
+            print(f"  ok {name}: {_verify_vector(base, bins, msgpack, lz4_block)}")
         except (AssertionError, ValueError, IndexError, KeyError) as e:
             # Per-vector isolation: a malformed vector (truncated hex, missing
             # field) fails only itself with a named FAIL line, not the whole run.
@@ -349,7 +388,8 @@ def verify() -> int:
         failures += 1
         print(f"  FAIL {orphan}: bin vector without a legacy base", file=sys.stderr)
 
-    conformance = "with msgpack-python conformance" if msgpack else "stdlib-only"
+    extras = [label for label, mod in (("msgpack-python", msgpack), ("liblz4 decode", lz4_block)) if mod]
+    conformance = "with " + " + ".join(extras) + " conformance" if extras else "stdlib-only"
     if failures:
         print(f"FAIL: {failures} failure(s) ({conformance})", file=sys.stderr)
         return 1
@@ -358,11 +398,13 @@ def verify() -> int:
 
 
 def main() -> int:
-    cmd = sys.argv[1] if len(sys.argv) > 1 else "verify"
+    args = [a for a in sys.argv[1:] if a != "--require-extras"]
+    require_extras = "--require-extras" in sys.argv[1:]
+    cmd = args[0] if args else "verify"
     if cmd == "generate":
         return generate()
     if cmd == "verify":
-        return verify()
+        return verify(require_extras=require_extras)
     print(__doc__, file=sys.stderr)
     return 2
 

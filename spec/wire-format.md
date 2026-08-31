@@ -40,7 +40,11 @@ This document specifies two layers:
    vendors the file sha256-pinned in `tests/wire_format_vectors.rs`, asserting
    decode byte-identity for every vector and re-encode byte-identity for the
    canonical `*_bin` vectors only — legacy array-of-integers vectors are
-   decode-only, retained as legacy-read proof.
+   decode-only, retained as legacy-read proof. Byte-canonicity scopes to the
+   envelope's MessagePack encoding and to the **canonical writer's** output:
+   the LZ4 bytes inside `compressed_data` are not reproducible across
+   conforming compressors — see
+   [Compressed-byte reproducibility](#compressed-byte-reproducibility-per-vector-scoping).
 2. **[SDK storage containers](#sdk-storage-containers-auto-mode)** — what each SDK
    *actually stores* in a backend in default (auto) mode. These differ per SDK, are
    **SDK-internal**, and are documented here so their bytes are identifiable — not so
@@ -247,6 +251,45 @@ the generic shortest-width selection property at fixture level, while
 
 > [!WARNING]
 > **PHP**: Standard `php-ext-lz4`'s `lz4_compress()` is **not compliant** — it prepends a proprietary 4-byte size header. Use `lz4_compress_raw()` from the forked extension at `27Bslash6/php-ext-lz4`.
+
+### Compressed-byte reproducibility (per-vector scoping)
+
+The LZ4 block **format** is fixed, but conforming **encoders** are not: the
+format constrains only what a block must decompress to, so two compliant
+compressors may legally emit different bytes for the same input. Compressed
+bytes are therefore
+**not canonical**, and conformance for `compressed_data` is **read-side**:
+
+- A conforming reader MUST decompress every pinned vector's `compressed_data`
+  to its pinned input.
+- A writer is NOT required to reproduce the pinned compressed bytes, and
+  MUST NOT be conformance-tested by byte-comparing its compressor output
+  against the fixture — validate a writer by decoding its envelopes per the
+  [Retrieve Flow](#retrieve-flow) and checking its MessagePack encoding against
+  [Byte Layout](#byte-layout-canonical-encoding).
+
+This is the same doctrine [interop v2](interop-v2.md) records for its
+compressed-values profile. The pinned bytes are the **canonical implementation's** output
+(`lz4_flex` via `cachekit-core`), and only that writer's reproducibility is
+enforced — by the re-encode byte-identity assertions in
+`cachekit-core/tests/wire_format_vectors.rs`. The reference liblz4 mapping
+above (`lz4.block`) is **decode-verified against every vector** in this repo's
+CI (`tools/wire-format-reference.py verify`, optional `lz4` leg); on encode it
+happens to reproduce six of the seven pairs byte-for-byte, which is an
+observation, not a guarantee.
+
+> [!NOTE]
+> **Known encode divergence — `large_compressible` / `large_compressible_bin`
+> (decode-verified only).** For this pair's input (1024 × `'A'`), liblz4
+> (observed at 1.9.4 via `python-lz4` 4.4.5) emits a **14-byte** block where
+> the fixture pins `lz4_flex`'s **15-byte** block. The blocks differ only in
+> the end-of-block match/literal split: `lz4_flex` ends the long match one byte
+> earlier and emits six trailing literals (`… e9 60` + `41`×6) where liblz4
+> emits five (`… ea 50` + `41`×5). Both are valid LZ4 blocks and both
+> decompress to the input; the divergence is encode-only. A third-party writer
+> following the Library Mapping will therefore produce a different — equally
+> conforming — envelope for this input. (LAB-1751; found by execution during
+> the LAB-868 panel review.)
 
 ---
 

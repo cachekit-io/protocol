@@ -4,6 +4,33 @@ All notable changes to the CacheKit Protocol Specification.
 
 ## [Unreleased]
 
+### Wire format — compressed-byte reproducibility scoped per-vector (LAB-1751)
+
+- LZ4 compressed bytes are **not canonical** across conforming block encoders.
+  [`spec/wire-format.md`](spec/wire-format.md) now states this explicitly
+  (new "Compressed-byte reproducibility" section, mirroring interop v2's
+  doctrine): `compressed_data` conformance is read-side only, writers are
+  never validated by byte-comparing compressor output against fixtures, and
+  only the canonical writer (`lz4_flex` via `cachekit-core`) has enforced
+  byte-reproducibility. The `large_compressible` / `large_compressible_bin`
+  pair is marked **known encode-divergent, decode-verified only** under the
+  spec's own reference liblz4 mapping — `lz4.block.compress(store_size=False)`
+  emits a 14 B block where the fixture pins `lz4_flex`'s 15 B. Found by
+  execution during the LAB-868 panel review; resolves the trust bug of a
+  fixture implying a reproducibility property the reference toolchain cannot
+  produce. Regeneration was rejected: every SDK compresses through
+  `cachekit-core`'s `lz4_flex`, whose CI asserts re-encode byte-identity, so
+  re-pinning to liblz4 output would break the canonical writer and merely swap
+  which compressor diverges.
+- [`tools/wire-format-reference.py`](tools/wire-format-reference.py) `verify`
+  gains an optional `lz4` leg (the dependency was already installed in CI's
+  optional-deps step): liblz4 MUST decompress every pinned `compressed_data`
+  to the pinned input; encoder agreement with the pin is reported per vector
+  but never asserted. The CI invocation now passes `--require-extras`
+  (precedent: `encryption-verify.py --require-seal`) so a dependency drift
+  cannot silently turn the deeper checks off. Fixture bytes untouched
+  (version stays 1.1.1) — no downstream SDK re-vendors required.
+
 ### Interop v2 — compressed-values profile (DRAFT)
 
 - New [`spec/interop-v2.md`](spec/interop-v2.md) (LAB-1135, protocol#52):
