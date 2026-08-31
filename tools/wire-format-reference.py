@@ -335,9 +335,15 @@ def _verify_vector(base: dict, bins: dict, msgpack, lz4_block) -> str:
     lz4_note = ""
     if lz4_block is not None:
         inp = bytes.fromhex(base["input_hex"])
-        assert size <= MAX_UNCOMPRESSED_SIZE, (
-            f"original_size {size} exceeds the spec's {MAX_UNCOMPRESSED_SIZE} B limit"
-        )
+        # `raise`, not `assert`, unlike every conformance check around it: `python -O`
+        # strips asserts. For the conformance checks that is self-announcing — the
+        # tool verifies nothing and says so. A memory-safety bound stripped under -O
+        # looks fine right up to the point an oversized fixture takes the process out.
+        # ValueError is in verify()'s per-vector guard, so the named FAIL line is kept.
+        if size > MAX_UNCOMPRESSED_SIZE:
+            raise ValueError(
+                f"original_size {size} exceeds the spec's {MAX_UNCOMPRESSED_SIZE} B limit"
+            )
         try:
             got = lz4_block.decompress(data, uncompressed_size=size)
         except (lz4_block.LZ4BlockError, OverflowError, MemoryError) as e:
