@@ -18,6 +18,7 @@
 - [Authentication](#authentication)
 - [Content Type](#content-type)
 - [Cache Endpoints](#cache-endpoints)
+- [Stale-While-Revalidate](#stale-while-revalidate)
 - [Lock Endpoints](#lock-endpoints)
 - [TTL Endpoints](#ttl-endpoints)
 - [Health Endpoint](#health-endpoint)
@@ -84,6 +85,12 @@ Authorization: Bearer ck_live_xxx
 | `200 OK` | Cache hit | Return raw bytes to caller |
 | `404 Not Found` | Cache miss | Return `None`/`null` |
 
+**Response headers:**
+
+| Header | Description |
+| :--- | :--- |
+| `X-CacheKit-Freshness` | `fresh` or `stale` — lowercase, case-sensitive tokens. Emitted on every `200 OK` by servers implementing [stale-while-revalidate](#stale-while-revalidate). SDKs MUST treat an absent header as `fresh` (pre-SWR servers do not emit it) and an unrecognized value as `stale` (revalidation is the conservative action). Read behavior is specified in [Stale-While-Revalidate](#stale-while-revalidate). |
+
 ---
 
 ### PUT /v1/cache/{key}
@@ -103,6 +110,7 @@ X-CacheKit-TTL: 3600
 | Header | Required | Description |
 | :--- | :---: | :--- |
 | `X-CacheKit-TTL` | No | Time-to-live in seconds. Positive integer, minimum 1, maximum 2,592,000 (30 days). Omit to use server default. |
+| `X-CacheKit-Stale-TTL` | No | Stale-grace window in seconds after freshness expiry. Requires an explicit `X-CacheKit-TTL` on the same request. Validation and semantics: [Stale-While-Revalidate](#stale-while-revalidate). Pre-SWR servers ignore this header. |
 
 > [!IMPORTANT]
 > **TTL Validation Rules** — These rules are normative for both SDKs and the SaaS backend.
@@ -121,7 +129,7 @@ X-CacheKit-TTL: 3600
 > **Migration:** The `X-TTL` header is deprecated. The server MUST accept both `X-CacheKit-TTL` and `X-TTL` during the transition period, preferring `X-CacheKit-TTL` when both are present. SDKs MUST send `X-CacheKit-TTL` only. The `X-TTL` header will be removed in protocol version 2.0 (targeted at SDK 1.0 milestone).
 
 > [!IMPORTANT]
-> **Maximum value size:** A single cache value may be at most **25 MB**. Larger values are rejected with `413 Payload Too Large` — a **permanent** error: SDKs MUST NOT retry and SHOULD surface "value too large" to the caller. This ceiling MAY change, so SDKs MUST treat any `413` as "value too large" regardless of the exact byte count. It is unrelated to the SDK serializer's 512 MB in-memory safety bound (see `wire-format.md`) — that bound governs what the SDK will serialize, not what the service will store.
+> **Maximum value size:** A single cache value may be at most **25 MB**. Larger values are rejected with `413 Payload Too Large` — a **permanent** error: SDKs MUST NOT retry and SHOULD surface "value too large" to the caller. This ceiling MAY change, so SDKs MUST treat any `413` as "value too large" regardless of the exact byte count. It is unrelated to the SDK serializer's 512 MiB in-memory safety bound (see `wire-format.md`) — that bound governs what the SDK will serialize, not what the service will store.
 
 | Status | Meaning |
 | :---: | :--- |
@@ -162,6 +170,93 @@ Authorization: Bearer ck_live_xxx
 | `200 OK` | Key exists |
 | `404 Not Found` | Key does not exist |
 
+Servers implementing [stale-while-revalidate](#stale-while-revalidate) emit the same `X-CacheKit-Freshness` response header as `GET`.
+
+---
+
+## Stale-While-Revalidate
+
+> Status: **specified** (LAB-381). Server implementation: cachekit-io/saas (pending). SDK adoption tracked in the [feature matrix](../sdk-feature-matrix.md#reliability-features).
+
+Stale-while-revalidate (SWR, [RFC 5861](https://www.rfc-editor.org/rfc/rfc5861) semantics) lets a client serve an expired-but-present value immediately and recompute it in the background, so no request pays the recompute cost at a TTL boundary. Because the recompute is the client's wrapped function, **the client owns revalidation**; the server's role is read-time staleness signaling and single-flight coordination.
+
+### Entry lifecycle
+
+An entry stored with `X-CacheKit-TTL: ttl` and `X-CacheKit-Stale-TTL: stale_ttl` has two windows:
+
+```
+stored_at ──────────── fresh_until ──────────────── evict_at
+          FRESH                       STALE
+          (200, fresh)                (200, stale)   404
+
+fresh_until = stored_at + ttl
+evict_at    = fresh_until + stale_ttl
+```
+
+| Window | `GET` / `HEAD` behavior |
+| :--- | :--- |
+| `now < fresh_until` | `200 OK`, `X-CacheKit-Freshness: fresh` |
+| `fresh_until ≤ now < evict_at` | `200 OK` **with the stored bytes**, `X-CacheKit-Freshness: stale` |
+| `now ≥ evict_at` | `404 Not Found`. The server MUST NOT serve an entry past `evict_at`. |
+
+All lifecycle times are computed against the **server's clock**; SDKs MUST NOT derive freshness for backed entries from their own clocks.
+
+Without `X-CacheKit-Stale-TTL` (or with `0`), `evict_at = fresh_until` and server behavior is identical to the pre-SWR protocol.
+
+### Validation
+
+These rules are normative for both SDKs and the SaaS backend, mirroring the [TTL validation rules](#put-v1cachekey):
+
+| Condition | Behavior |
+| :--- | :--- |
+| `stale_ttl` negative, non-integer, or > 2,591,999 | `400 Bad Request`. The standalone bound is checked **before** any arithmetic (no integer wrap on `evict_at`). |
+| `X-CacheKit-Stale-TTL` present without an explicit `X-CacheKit-TTL` | `400 Bad Request`. Validation must not depend on hidden tenant defaults — clients must be able to pre-validate. |
+| `ttl + stale_ttl > 2,592,000` | `400 Bad Request` (the stale window shares the 30-day storage cap) |
+| `stale_ttl = 0` | Accepted; equivalent to omitting the header |
+| `stale_ttl < 1` second (sub-second duration in SDK API) | SDKs MUST ceil to 1, never truncate to 0 (same rule as TTL) |
+
+### Write semantics
+
+- **`PUT` fully replaces the entry's timing metadata.** Both windows derive from the new request alone; a `PUT` that omits `X-CacheKit-Stale-TTL` (or sends `0`) leaves the entry with **no** stale window, regardless of what the previous entry had. A revalidation `PUT` therefore MUST re-send the stale window it intends to keep.
+- **`PATCH /v1/cache/{key}/ttl` within the fresh window** resets `fresh_until = now + ttl` and preserves the entry's stored stale window; the combined total is re-validated against the 30-day cap.
+- **`PATCH /v1/cache/{key}/ttl` on an entry past `fresh_until` MUST return `409 Conflict`.** A stale entry regains freshness only via a `PUT` of recomputed bytes — otherwise a routine TTL-renewal job could indefinitely resurrect stale data without revalidation, defeating the `evict_at` bound.
+
+### Reading a stale entry
+
+On a `200` with `X-CacheKit-Freshness: stale`:
+
+- An SDK MUST NOT treat the response as a protocol error.
+- By default it SHOULD return the bytes to the caller immediately — a stale response is never a blocking miss.
+- An SDK MAY instead treat a stale hit as a **miss** by local policy (e.g. security-sensitive caches where TTL is a revocation boundary) and take the ordinary synchronous miss path. Such caches SHOULD NOT set `X-CacheKit-Stale-TTL` on write in the first place.
+- Local caches (L1) MUST NOT record a stale-flagged response as fresh, and local caching MUST NOT extend service of an entry past the server's `evict_at`.
+- Revalidation is triggered only by `GET`. `HEAD` freshness is informational; an existence check MUST NOT fire a background recompute.
+
+### Revalidation flow (SDK)
+
+An SDK that serves a stale hit and owns revalidation (the recompute is the wrapped function — the server cannot do it):
+
+1. MUST return the stale bytes (or take its local miss policy, above) without blocking on revalidation.
+2. SHOULD single-flight the recompute by attempting `POST /v1/cache/{key}/lock` (the existing [lock endpoint](#post-v1cachekeylock)) as a **non-blocking** lease. The lease is acquired **only** on `200 OK` with a non-empty `lock_id`. Contention is signalled **only** by a `200 OK` with a `null`/absent `lock_id` — or, defensively, a legacy `409 Conflict` — and means another client is revalidating: serve stale; the SDK MUST NOT wait or retry. Any other non-`200` (`401`, `403`, `429`, `5xx`, …) is **not** contention — it is an ordinary error subject to [Error Classification](#error-classification): abandon this revalidation attempt without a lease (the caller already has the stale bytes from step 1) and let a subsequent stale read re-trigger revalidation.
+
+   > [!NOTE]
+   > **Contested lock is `200 OK` with `{"lock_id": null}` (LAB-240).** The
+   > lease/single-flight contract keys off `lock_id` **presence**, never the HTTP
+   > status — see the [lock endpoint](#post-v1cachekeylock). Do not reintroduce a
+   > `409` contested status: the deployed server never emitted one, and status-based
+   > branching silently disables single-flight.
+
+3. The lease holder recomputes in the background, `PUT`s the new value (re-sending `X-CacheKit-Stale-TTL` per [write semantics](#write-semantics)), then `DELETE`s the lock.
+4. A failed recompute **or** a failed revalidation `PUT` are equivalent: release the lock, leave the entry untouched, surface no error to the caller. Subsequent stale reads MAY re-trigger revalidation until `evict_at`; past `evict_at` the next request takes the ordinary synchronous miss path. SWR degrades to pre-SWR behavior — it never serves unbounded staleness.
+5. The lease is **best-effort stampede mitigation, not a correctness guarantee**: it is bounded by the lock's `timeout_ms`, and a recompute that outlives it loses exclusivity. Duplicate revalidations are benign — concurrent revalidation `PUT`s are last-write-wins between freshly computed values, the same ordering as concurrent miss-path `PUT`s today. SDKs SHOULD size `timeout_ms` at or above the expected recompute duration.
+
+### Semantics notes
+
+- **Metering:** a stale-window `GET` is a cache **hit** (`200`) for metered-misses billing; the revalidation `PUT` is an ordinary write. In the [SDK metrics headers](#optional-metrics-headers), a stale serve increments `X-CacheKit-L2-Hits`; a background revalidation MUST NOT increment `X-CacheKit-Misses`.
+- **Invalidation race:** an explicit `DELETE /v1/cache/{key}` concurrent with an in-flight revalidation may be overwritten by the revalidation `PUT` (last-write-wins) — the same race as today's concurrent miss-path recompute. Callers that need durable invalidation must version their keys.
+- **Zero-knowledge:** no change to the wire format, ByteStorage envelope, encryption, or AAD; the value bytes remain opaque.
+- **`GET /v1/cache/{key}/ttl`:** the returned `ttl` is the remaining seconds until **eviction** (`evict_at`).
+- **Compatibility:** additive for servers — a pre-SWR server ignores `X-CacheKit-Stale-TTL` (the entry evicts at `fresh_until`, no freshness header is emitted) and SDK behavior is exactly pre-SWR. It is **not** transparent to mixed readers: enabling `stale_ttl` on a key affects every reader of that key, and a pre-SWR SDK will consume stale-window values as fresh (`200`, no header) where it previously saw a miss. Deployments MUST NOT enable `stale_ttl` on keys whose readers rely on hard TTL expiry (pre-SWR SDKs or security-sensitive consumers).
+
 ---
 
 ## Lock Endpoints
@@ -183,8 +278,20 @@ Content-Type: application/json
 
 | Status | Meaning | Response Body |
 | :---: | :--- | :--- |
-| `200 OK` | Lock acquired | `{"lock_id": "uuid-string"}` |
-| `409 Conflict` | Lock held by another client | — |
+| `200 OK` | Lock **acquired** | `{"lock_id": "uuid-string"}` |
+| `200 OK` | Lock **contested** (held by another client) | `{"lock_id": null}` |
+
+Contention is signalled in the response **body**, not the HTTP status: a non-empty
+`lock_id` means the caller holds the lease; a `null` (or absent) `lock_id` means
+another client holds it. Clients MUST branch on `lock_id` presence and MUST NOT
+branch on the status code — the single-flight lease contract (see
+[Revalidation flow](#revalidation-flow-sdk)) depends on it.
+
+> **History (LAB-240):** earlier revisions of this spec specified `409 Conflict`
+> for a contested lock. The deployed server never implemented that — it has always
+> returned `200 OK` with `{"lock_id": null}` — so `409` is **not** part of the lock
+> contract. SDKs that additionally treat a `409` as contested (e.g. cachekit-ts)
+> remain correct: the body-based rule subsumes it.
 
 ---
 
@@ -219,7 +326,7 @@ X-CacheKit-Lock-Id: uuid-string
 
 ### GET /v1/cache/{key}/ttl
 
-Get remaining TTL for a key.
+Get remaining TTL for a key. The returned `ttl` is the remaining seconds until **eviction** — for entries with a [stale-grace window](#stale-while-revalidate), that is `evict_at`, not `fresh_until`.
 
 | Status | Meaning | Response Body |
 | :---: | :--- | :--- |
@@ -241,12 +348,13 @@ Content-Type: application/json
 {"ttl": 7200}
 ```
 
-The `ttl` field follows the same validation rules as `X-CacheKit-TTL`: positive integer, minimum 1, maximum 2,592,000.
+The `ttl` field follows the same validation rules as `X-CacheKit-TTL`: positive integer, minimum 1, maximum 2,592,000. For entries stored with a stale-grace window, see [SWR write semantics](#write-semantics): a PATCH within the fresh window renews it; a PATCH on a stale entry MUST return `409 Conflict`.
 
 | Status | Meaning |
 | :---: | :--- |
 | `200 OK` | TTL updated |
 | `400 Bad Request` | Invalid TTL (zero, negative, exceeds maximum) |
+| `409 Conflict` | Entry is past `fresh_until` ([SWR write semantics](#write-semantics)) — refresh requires a `PUT` of recomputed bytes |
 
 ---
 
@@ -308,7 +416,7 @@ SDKs SHOULD send cache metrics headers for rate limiting and observability:
 | `401` | Unauthorized | Invalid or missing API key |
 | `403` | Forbidden | API key lacks permission for this operation/namespace |
 | `404` | Not Found | Cache miss (GET/HEAD) or key not found (DELETE) |
-| `409` | Conflict | Lock already held |
+| `409` | Conflict | `PATCH /v1/cache/{key}/ttl` on a stale entry past `fresh_until`; refresh requires a `PUT` of recomputed bytes ([SWR write semantics](#write-semantics)) |
 | `413` | Payload Too Large | Value exceeds max stored value size (25 MB). Permanent — do not retry; surface "value too large" |
 | `429` | Too Many Requests | Rate limited |
 | `500` | Internal Server Error | Backend failure |
@@ -322,7 +430,7 @@ SDKs should classify errors for circuit breaker integration:
 | Class | Status Codes | SDK Action |
 | :--- | :--- | :--- |
 | **Transient** | `429`, `500`, `502`, `503`, network timeouts | Retry with backoff |
-| **Permanent** | `400`, `401`, `403`, `413` | Do not retry, surface to caller |
+| **Permanent** | `400`, `401`, `403`, `409`, `413` | Do not retry, surface to caller. For `409` (`PATCH /ttl` past `fresh_until`): do not re-`PATCH` — recompute and `PUT` ([write semantics](#write-semantics)) |
 | **Cache miss** | `404` on GET/HEAD/DELETE | Not an error — return `None`/`false` |
 
 ---

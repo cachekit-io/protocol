@@ -19,7 +19,7 @@
 - [Nonce Generation](#nonce-generation)
 - [Ciphertext Format](#ciphertext-format)
 - [Additional Authenticated Data (AAD)](#additional-authenticated-data-aad)
-- [Encryption Header (Key Rotation)](#encryption-header-rotationawareheader)
+- [Key Rotation (Keyring)](#key-rotation-keyring)
 - [Encryption Flow](#encryption-flow)
 - [Decryption Flow](#decryption-flow)
 - [Compliance](#compliance)
@@ -31,7 +31,7 @@
 CacheKit provides **optional** client-side encryption using AES-256-GCM. When enabled, the backend (Redis or SaaS) stores opaque ciphertext and never has access to keys or plaintext.
 
 > [!NOTE]
-> Encryption is not configurable by design. AES-256-GCM is the only supported algorithm. See the [Encryption Algorithm Decision Record](../decisions/encryption-algorithm.md) for rationale.
+> Encryption is not configurable by design. AES-256-GCM is the only supported algorithm.
 
 | Property | Value |
 | :--- | :--- |
@@ -131,6 +131,10 @@ For key identification without revealing key material:
 fingerprint = SHA-256("key_fingerprint_v1" || key)[0..16]   // First 16 bytes
 ```
 
+For per-entry fingerprints — the value cachekit-py stores in CK frame metadata and
+the input to [keyring selection](#key-rotation-keyring) — `key` is the HKDF-derived
+per-tenant **encryption key** (`tenant_keys.encryption_key`), never the master key.
+
 ---
 
 ## Nonce Generation
@@ -199,10 +203,14 @@ Where `aes_gcm_seal` returns `ciphertext || auth_tag` (auth tag is the last 16 b
 <summary>Expand AAD byte layout</summary>
 
 ```
-┌──────┬────────┬───────────┬────────┬───────────┬────────┬────────┬────────┬───────────┐
-│ 0x03 │  len1  │ tenant_id │  len2  │ cache_key │  len3  │ format │  len4  │compressed │
-└──────┴────────┴───────────┴────────┴───────────┴────────┴────────┴────────┴───────────┘
-  1 B    4 B BE   variable    4 B BE   variable    4 B BE   var      4 B BE   var
+┌──────┬────────┬───────────┬────────┬───────────┬────────┬────────┬────────┬───────────┬╌╌╌╌╌╌╌╌┬╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┐
+│ 0x03 │  len1  │ tenant_id │  len2  │ cache_key │  len3  │ format │  len4  │compressed ╎  len5  ╎ original_type ╎
+└──────┴────────┴───────────┴────────┴───────────┴────────┴────────┴────────┴───────────┴╌╌╌╌╌╌╌╌┴╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┘
+  1 B    4 B BE   variable    4 B BE   variable    4 B BE   var      4 B BE   var         4 B BE   var
+
+Dashed fields are present only when the writer emits the optional original_type
+component (all current cachekit-py serializer paths do; cachekit-ts, cachekit-rs,
+and interop mode never do — see below).
 ```
 
 </details>
@@ -212,11 +220,97 @@ Where `aes_gcm_seal` returns `ciphertext || auth_tag` (auth tag is the last 16 b
 | Version byte | `0x03` | AAD format version |
 | `tenant_id` | Length-prefixed UTF-8 | Tenant identifier |
 | `cache_key` | Length-prefixed UTF-8 | Full cache key (prevents ciphertext swapping between keys) |
-| `format` | Length-prefixed UTF-8 | Serialization format (e.g., `"msgpack"`) |
-| `compressed` | Length-prefixed UTF-8 | String `"True"` or `"False"` |
-| `original_type` | Length-prefixed UTF-8 | *(Optional)* Original type hint |
+| `format` | Length-prefixed UTF-8 | Serialization-format token — see [`format` tokens](#format-tokens) |
+| `compressed` | Length-prefixed UTF-8 | Boolean token — exactly `True` or `False`, see [`compressed` tokens](#compressed-tokens) |
+| `original_type` | Length-prefixed UTF-8 | *(Optional)* Original-type hint — see [`original_type`](#original_type-optional-fifth-component) |
 
 Each component is prefixed with a 4-byte big-endian length.
+
+`format` and `compressed` describe the AES-GCM **plaintext** (the serialized/enveloped
+bytes fed to the cipher). They are stored as cleartext metadata alongside the
+ciphertext so the reader can rebuild the AAD; they are integrity-protected — not
+confidential — because any tampering changes the reconstructed AAD and fails
+authentication. That failure is the intended behavior: readers MUST NOT retry
+decryption with any alternative AAD input — a different `format` or `compressed`
+value, or presence/absence of `original_type`. A reader that probes AAD variants
+converts an authentication failure into a metadata-tamper oracle. Likewise, the
+post-decryption unenvelope step MUST be selected by the reader's configured
+serializer/mode — never by sniffing the decrypted bytes or falling back between
+containers — and MUST hard-fail on a parse mismatch.
+
+### `format` tokens
+
+The `format` component is a lowercase-ASCII token naming the serialization format of
+the AES-GCM plaintext. Registry of tokens produced by current SDKs:
+
+| Token | AES-GCM plaintext content | Produced by |
+| :--- | :--- | :--- |
+| `msgpack` | MessagePack-family bytes; the container varies by SDK/mode (ByteStorage envelope or plain MessagePack) — see [wire-format.md](wire-format.md) / [interop mode](interop-mode.md#encryption-in-interop-mode) | cachekit-py (`StandardSerializer`, `AutoSerializer` msgpack paths), cachekit-ts, cachekit-rs |
+| `orjson` | orjson JSON bytes, prefixed with an 8-byte xxHash3-64 checksum when integrity checking is enabled (the default): `[checksum(8)][JSON]`; plain JSON bytes otherwise | cachekit-py (`OrjsonSerializer`) |
+| `arrow` | Arrow IPC **file**-format envelope (`ARROW1` magic, not the IPC streaming format): `[8-byte xxHash3-64 checksum][Arrow IPC file]` | cachekit-py (`ArrowSerializer`) |
+
+The token names the serialization-format family; the exact container/envelope for
+each SDK and mode is specified in [wire-format.md](wire-format.md) and
+[interop-mode.md](interop-mode.md). The `compressed` component (below) — not the
+`format` token — authenticates whether that container applied compression.
+
+New serializers MUST register their token here before shipping. Tokens are
+case-sensitive, and the registry is a **writer-side contract**: readers rebuild the
+AAD verbatim from stored metadata, so nothing structurally rejects an off-registry
+token within the SDK that wrote it — the registry exists so independent
+implementations of the same entry agree on the bytes. Writers MUST emit only
+registry tokens; readers SHOULD reject tokens outside the registry before attempting
+decryption.
+
+### `compressed` tokens
+
+Exactly two legal values — **frozen ASCII byte strings**:
+
+| Value | Bytes on the wire |
+| :--- | :--- |
+| `True` | `54 72 75 65` |
+| `False` | `46 61 6c 73 65` |
+
+> [!IMPORTANT]
+> These tokens are **protocol constants**, not a rendering of any language's boolean
+> type. They historically coincide with Python's `str(bool)` output; that coincidence
+> is now frozen. Implementations in every language MUST emit exactly these byte
+> sequences — `true`, `false`, `TRUE`, `1`, `0`, or a raw byte are all non-conformant
+> and fail AES-GCM authentication against conformant peers.
+
+### `original_type` (optional fifth component)
+
+Only cachekit-py emits `original_type`; cachekit-ts and cachekit-rs always produce
+four-component AADs. When present it is appended as a fifth length-prefixed
+component. **All of cachekit-py's current serializers set it, so every cachekit-py
+encrypted entry today carries a five-component AAD.** Values currently emitted:
+`msgpack`, `orjson`, `arrow`, `numpy`, `dataframe`, `series`.
+
+This arity asymmetry never crosses an SDK boundary in practice: auto-mode entries are
+SDK-internal ([protocol#11](https://github.com/cachekit-io/protocol/issues/11)), and
+[interop mode](interop-mode.md#encryption-in-interop-mode) — the only cross-SDK
+encrypted surface — NEVER includes it: interop AAD is always exactly four components,
+and an SDK that carried a type hint into interop AAD would fail cross-SDK
+authentication.
+
+### Version policy — resolved: these rules stay within v0x03
+
+Decision ([protocol#12](https://github.com/cachekit-io/protocol/issues/12),
+2026-07-19): pinning the token bytes above and enumerating the `format` registry is a
+**specification correction, not a wire change** — no AAD version bump.
+
+- The AAD bytes produced by every deployed SDK (cachekit-py, cachekit-ts,
+  cachekit-rs) are unchanged; every existing v0x03 ciphertext remains decryptable.
+- [Interop/v1](interop-mode.md) test vectors already pin `compressed = "False"` as
+  normative published bytes; a re-encoding would fork that surface.
+- A hypothetical v0x04 with a single-byte boolean (`0x00`/`0x01`) would invalidate
+  all deployed ciphertexts or force a dual-AAD migration window, for zero security
+  gain — a frozen ASCII token authenticates exactly as strongly as a byte.
+
+**Backward compatibility**: none required — no wire bytes changed. The spec
+previously *defined* the `compressed` encoding by reference to Python semantics
+(`str(bool)`) and gave `format` only as an example; both are now explicit byte-level
+registries.
 
 ### AAD Construction Pseudocode
 
@@ -225,8 +319,8 @@ function create_aad(tenant_id, cache_key, format, compressed, original_type=null
     components = [
         tenant_id.encode("utf-8"),
         cache_key.encode("utf-8"),
-        format.encode("utf-8"),           // e.g., "msgpack"
-        str(compressed).encode("utf-8"),  // "True" or "False"
+        format.encode("utf-8"),                            // registry token: "msgpack" | "orjson" | "arrow"
+        (compressed ? "True" : "False").encode("utf-8"),   // frozen ASCII tokens — see above
     ]
     if original_type is not null:
         components.append(original_type.encode("utf-8"))
@@ -238,39 +332,59 @@ function create_aad(tenant_id, cache_key, format, compressed, original_type=null
     return aad
 ```
 
+Reference AAD vectors — covering `compressed=False`, the `arrow` and `orjson`
+tokens, four-component AADs (the cachekit-ts / cachekit-rs shape) and five-component
+`original_type` AADs (the cachekit-py shape) — are published in
+[`test-vectors/encryption.json`](../test-vectors/encryption.json) and verified in CI
+by `tools/encryption-verify.py`.
+
 ---
 
-## Encryption Header (RotationAwareHeader)
+## Key Rotation (Keyring)
 
-When key rotation is in use, a 32-byte header is prepended to identify which key encrypted the data.
+> [!WARNING]
+> **Status: specified, not yet implemented** (decision record:
+> [decisions/key-rotation.md](../decisions/key-rotation.md), 2026-07-23;
+> implementation tracked under LAB-516). Until an SDK ships this section, rotating
+> its master key invalidates every encrypted entry — fail-open readers take misses,
+> fail-closed readers take errors. The [feature matrix](../sdk-feature-matrix.md)
+> reflects per-SDK implementation status.
+>
+> Earlier revisions of this spec described a 32-byte `RotationAwareHeader` prepended
+> to ciphertext. **That header was never written by any SDK and is not part of the
+> protocol**; it is retired — rationale in the decision record.
 
-```
-┌──────┬──────┬──────────────────┬───────────────┬────────┬─────────┬──────────┐
-│ ver  │ algo │ key_fingerprint  │ tenant_hash   │ domain │ key_ver │ reserved │
-└──────┴──────┴──────────────────┴───────────────┴────────┴─────────┴──────────┘
-  1 B    1 B     16 bytes           8 bytes         4 B      1 B       1 B
-│◄──────────────────────── 32 bytes total ──────────────────────────────────────►│
-```
+Rotation is a client-side concern by construction: the backend stores ciphertext it
+cannot decrypt (zero-knowledge), so it can never re-encrypt. The mechanism is a
+**keyring** — configuration, not a state machine:
 
-| Field | Offset | Size | Description |
-| :--- | :---: | :---: | :--- |
-| `version` | 0 | 1 | Header version (must be `1`) |
-| `algorithm` | 1 | 1 | Encryption algorithm (`0` = AES-256-GCM, only valid value) |
-| `key_fingerprint` | 2 | 16 | First 16 bytes of SHA-256("key_fingerprint_v1" \|\| key) |
-| `tenant_id_hash` | 18 | 8 | Tenant identifier hash |
-| `domain` | 26 | 4 | Domain context (e.g., `"ench"` for encryption) |
-| `key_version` | 30 | 1 | `0` = original key, `1` = rotated key |
-| reserved | 31 | 1 | Reserved (must be `0x00`) |
+| Rule | Requirement |
+| :--- | :--- |
+| Keyring | One **current** master key (encrypts and decrypts) plus an ordered list of **at most 3 decrypt-only** master keys — typically previous keys; during a [two-phase rollout](../decisions/key-rotation.md#runbooks-normative-for-docs), the incoming key. SDKs MUST reject configuration exceeding the cap at load — never silently truncate. |
+| Configuration | Cross-SDK env vars: `CACHEKIT_MASTER_KEY` (current, [as above](#master-key)) and `CACHEKIT_PREVIOUS_MASTER_KEYS` (decrypt-only list, comma-separated hex, same per-key validation). Programmatic naming is SDK-local. |
+| Forward-only current key | A master key that has ever occupied the current (encrypting) slot MUST NOT be re-promoted to current; it may re-appear only in the decrypt-only list. Backing out a rotation means rotating **forward** to a fresh key. Re-promotion resumes a used, unknowable nonce budget and risks catastrophic AES-GCM nonce reuse (plaintext recovery and forgery). Enforcement: a stateless SDK cannot know whether a newly supplied current key was used before, so this invariant is **operator-enforced** (treat retired key material as destroyed); SDKs MUST reject the detectable subset — a configuration where the current key also appears in the decrypt-only list. |
+| Derivation | Each keyring entry independently derives per-tenant keys via the [HKDF construction above](#key-derivation). Salts, domains, and fingerprints are unchanged. |
+| Encrypt | Always the current key. A new master key yields freshly derived keys with a fresh per-key nonce budget — which is why rotation (always forward, to a *new* key) is the remedy when nonce-exhaustion monitoring fires. |
+| Decrypt — with per-entry key identity | Where the SDK stores a per-entry [key fingerprint](#key-fingerprint) (cachekit-py's CK frame metadata), select the keyring entry by exact fingerprint match; never trial-decrypt across the keyring. **The fingerprint is computed over the HKDF-derived per-tenant encryption key, not the master key**: selection derives the tenant's keys for each keyring entry, fingerprints each derived encryption key, and compares. A match is binding — if the matched key fails AES-GCM authentication, the failure is terminal (straight to the fail-open / fail-closed policy; no further keyring entries). No match → the SDK's existing fingerprint-mismatch semantics (fail-closed raises; fail-open attempts the current key only and treats the authentication failure as a miss). |
+| Decrypt — without per-entry key identity | (cachekit-ts, cachekit-rs, [interop mode](interop-mode.md)) Attempt each keyring key in order, current first, **rebuilding the identical AAD for every attempt**. Retrying across keys is permitted; retrying across AAD variants remains forbidden — the [no-retry rule](#additional-authenticated-data-aad) binds AAD inputs, not key count. |
+| Exhaustion | All permitted attempts fail → AES-GCM authentication failure → the SDK's existing fail-open / fail-closed policy. No new failure mode. |
+| Key hygiene | Derived keys held behind the native boundary zeroize on drop, decrypt-only keys included. Master-key material handled by managed-language runtimes (env vars, interpreter strings) cannot be reliably scrubbed — treat exposure of the keyring configuration as exposure of every key in it. |
 
-### Key Rotation Strategy
+Nothing on the wire changes: the [ciphertext format](#ciphertext-format) and
+[AAD v0x03](#additional-authenticated-data-aad) contain no key identity, so every
+existing entry remains format-compatible — and decryptable for as long as the key
+that encrypted it is retained in the keyring — and cross-SDK interop is unaffected. Keyring
+conformance vectors will accompany the implementations (test plan in the
+[decision record](../decisions/key-rotation.md#consequences--lab-516-sub-issues)).
 
-```
-1. Start rotation   → set new key, keep old key for decryption
-2. New encryptions  → use new key (key_version=1)
-3. Decryption       → try both keys based on key_version byte
-4. Migration window → run until all old-key entries expire
-5. Complete         → remove old key (complete_rotation())
-```
+**Rotation window**: writes during the window re-encrypt under the current key;
+old-key entries age out via TTL. Run the window at least as long as the longest TTL
+in use, **measured from the moment the last writer stopped encrypting under the old
+key** (fleet deploy of the promotion phase complete), then drop the retired key. An
+empty decrypt-only list is legal — the hard cut-over used for compromise response.
+Rollout choreography, preconditions (non-expiring entries), and the compromise
+runbook are normative in the
+[decision record](../decisions/key-rotation.md#runbooks-normative-for-docs).
 
 ---
 
@@ -279,36 +393,81 @@ When key rotation is in use, a 32-byte header is prepended to identify which key
 ```
 Input: user_data, master_key, tenant_id, cache_key
 
-1. Serialize:  msgpack_bytes   = msgpack_encode(user_data)
-2. Compress:   envelope_bytes  = byte_storage.store(msgpack_bytes)  // See wire-format.md
-3. Derive:     tenant_keys     = derive_tenant_keys(master_key, tenant_id)
-4. Build AAD:  aad             = create_aad(tenant_id, cache_key, "msgpack", true)
-5. Encrypt:    ciphertext      = aes_256_gcm_encrypt(
-                                     plaintext = envelope_bytes,
-                                     key       = tenant_keys.encryption_key,
-                                     aad       = aad
-                                 )
+1. Serialize:  serialized_bytes = serialize(user_data)              // msgpack / orjson / arrow
+2. Envelope:   plaintext_bytes  = envelope(serialized_bytes)        // See wire-format.md
+3. Derive:     tenant_keys      = derive_tenant_keys(master_key, tenant_id)
+4. Build AAD:  aad              = create_aad(tenant_id, cache_key, format, compressed,
+                                             original_type)   // only if the serializer emits it
+5. Encrypt:    ciphertext       = aes_256_gcm_encrypt(
+                                      plaintext = plaintext_bytes,
+                                      key       = tenant_keys.encryption_key,
+                                      aad       = aad
+                                  )
                // Returns: nonce(12) || encrypted_data || auth_tag(16)
-6. Store:      backend.set(cache_key, ciphertext)
+6. Store:      backend.set(cache_key, ciphertext)   // format + compressed stored as cleartext metadata
 ```
+
+The AAD inputs in step 4 MUST reflect what steps 1–2 actually produced — e.g.
+cachekit-py's default `StandardSerializer` path is
+`("msgpack", true, original_type="msgpack")`; cachekit-ts's default is
+`("msgpack", true)` with no fifth component; interop mode is always
+`("msgpack", false)` with the envelope step skipped
+([interop-mode.md](interop-mode.md#encryption-in-interop-mode)); cachekit-py's
+`ArrowSerializer` with compression disabled is
+`("arrow", false, original_type="arrow")`. Authenticating a flag that does not match
+the real envelope is a conformance bug: the entry round-trips within the writing
+process but fails authentication for any correct second reader (see
+[cachekit-py#166](https://github.com/cachekit-io/cachekit-py/issues/166)).
+
+> [!NOTE]
+> This flow and the decryption flow below show the **auto-mode ByteStorage-envelope
+> default path** (steps 2 and 4 here; step 4 in decryption). The crypto steps
+> (derive → AAD → AES-256-GCM) are universal, but the pre-encryption bytes and the
+> stored bytes are whatever the SDK's container layer produces **in auto mode** —
+> [wire-format.md → SDK Storage Containers](wire-format.md#sdk-storage-containers-auto-mode):
+> `cachekit-rs` encrypts plain MessagePack (no envelope), and `cachekit-py` wraps the
+> resulting ciphertext in its CK v3 frame before storing. **Interop mode** skips the
+> envelope entirely: the AES-GCM plaintext is the plain MessagePack value bytes, and
+> the stored bytes are the bare ciphertext blob (`nonce ‖ ciphertext ‖ tag`, no frame
+> or container) — see
+> [interop-mode.md → Encryption in Interop Mode](interop-mode.md#encryption-in-interop-mode).
 
 ---
 
 ## Decryption Flow
 
 ```
-Input: ciphertext, master_key, tenant_id, cache_key
+Input: ciphertext, stored metadata (format, compressed, optional original_type,
+       optional per-entry key_fingerprint — SDK-internal storage, e.g.
+       cachekit-py's CK frame header), keyring (current master_key +
+       decrypt-only master keys), tenant_id, cache_key
 
-1. Derive:      tenant_keys   = derive_tenant_keys(master_key, tenant_id)
-2. Build AAD:   aad           = create_aad(tenant_id, cache_key, "msgpack", true)
-3. Decrypt:     envelope_bytes = aes_256_gcm_decrypt(
-                                     ciphertext = ciphertext,  // nonce(12) || encrypted || tag(16)
-                                     key        = tenant_keys.encryption_key,
-                                     aad        = aad
-                                 )
-4. Extract:     (msgpack_bytes, format) = byte_storage.retrieve(envelope_bytes)
-5. Deserialize: user_data = msgpack_decode(msgpack_bytes)
+1. Select key:  per [Key Rotation (Keyring)](#key-rotation-keyring) — fingerprint
+                match where the stored key_fingerprint is present (binding: no
+                further keys after a match), else sequential keyring attempts,
+                current first — an authentication failure on an intermediate key
+                continues to the next permitted key; the hard-error semantics
+                below apply once permitted attempts are exhausted. Single-key
+                configurations reduce to the current key.
+2. Derive:      tenant_keys    = derive_tenant_keys(selected_master_key, tenant_id)
+3. Build AAD:   aad            = create_aad(tenant_id, cache_key,
+                                            stored.format, stored.compressed, stored.original_type)
+4. Decrypt:     plaintext_bytes = aes_256_gcm_decrypt(
+                                      ciphertext = ciphertext,  // nonce(12) || encrypted || tag(16)
+                                      key        = tenant_keys.encryption_key,
+                                      aad        = aad
+                                  )
+5. Unenvelope:  serialized_bytes = unenvelope(plaintext_bytes)   // per the reader's configured
+                                                                 // serializer/mode — see wire-format.md
+6. Deserialize: user_data = deserialize(serialized_bytes)
 ```
+
+The AAD in step 3 is rebuilt from the **stored cleartext metadata**; tampering makes
+step 4 fail authentication, which is a hard error once the key attempts permitted by
+step 1 are exhausted — the no-retry and no-sniffing
+rules in [AAD v0x03 Format](#additional-authenticated-data-aad) apply. How each SDK
+stores this metadata (e.g. cachekit-py's CK frame header) is SDK-internal; the only
+cross-SDK-normative AAD inputs are interop mode's pinned four components.
 
 ---
 

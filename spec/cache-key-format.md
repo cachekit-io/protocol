@@ -6,7 +6,7 @@
 
 **Deterministic key generation from function identity and arguments.**
 
-*Protocol Version 1.0 · Verified against `cachekit-py` v0.5.0 (`src/cachekit/key_generator.py`)*
+*Protocol Version 1.0 · Verified against `cachekit-py` v0.12.0 (`src/cachekit/key_generator.py`)*
 
 </div>
 
@@ -19,6 +19,7 @@
 - [Cross-SDK Key Generation Strategy](#cross-sdk-key-generation-strategy)
 - [Argument Hashing Algorithm](#argument-hashing-algorithm)
 - [Character Normalization](#character-normalization)
+- [Test Vectors](#test-vectors)
 - [Pseudocode for SDK Implementors](#pseudocode-for-sdk-implementors)
 
 ---
@@ -213,6 +214,14 @@ After key construction, the following characters are replaced:
 | Space (` `) | `_` |
 | Newline (`\n`) | `_` |
 | Carriage return (`\r`) | `_` |
+
+---
+
+## Test Vectors
+
+[`test-vectors/cache-keys.json`](../test-vectors/cache-keys.json) contains 10 auto-mode key vectors (`args` + `kwargs` + metadata → `expected_key`) covering primitives, mixed args/kwargs, `null`, booleans, nested dicts, and the no-namespace form. Keys were generated at top level, so the `func:` segment is `__main__.{qualname}` — cross-SDK implementations substitute their own module path; only the args-hash segment must match byte-for-byte.
+
+Enforcement: the vectors are vendored (sha256-pinned) into cachekit-py and byte-verified against `CacheKeyGenerator` on every default CI run (`tests/unit/protocol/test_cache_key_vectors.py`). A vector failing there is a key-stability break to triage — never silently regenerate: a changed key orphans every existing cache entry and turns the fleet's hits into billed misses.
 
 ---
 

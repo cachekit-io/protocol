@@ -1,0 +1,72 @@
+name: verify
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test-vectors:
+    name: Test vectors match reference implementations
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.12"
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "22"
+
+      - name: Python reference verify (stdlib only)
+        run: |
+          # Mutation suite first, same doctrine as the version-floor guard below:
+          # prove the fail-closed guards still fail before trusting the verify.
+          python3 tools/test_wire_format_reference.py
+          python3 tools/interop-reference.py verify
+          python3 tools/interop-v2-reference.py verify
+          python3 tools/encryption-verify.py
+          python3 tools/wire-format-reference.py verify
+
+      - name: Python reference verify (optional deps — AES-GCM seal + msgpack third-encoder + lz4 C-implementation conformance)
+        run: |
+          pip install cryptography==49.0.0 msgpack==1.2.1 lz4==4.4.5
+          python3 tools/interop-reference.py verify
+          python3 tools/interop-v2-reference.py verify
+          python3 tools/encryption-verify.py --require-seal
+          python3 tools/wire-format-reference.py verify --require-extras
+
+      - name: JS cross-check (independent encoder + @noble/hashes + WebCrypto)
+        run: |
+          npm init -y >/dev/null
+          npm install --no-audit --no-fund --ignore-scripts @noble/hashes@2.2.0
+          node tools/interop-crosscheck.mjs
+
+      - name: Interop v2 JS cross-check (zero-dep independent container parser + LZ4 decoder + WebCrypto)
+        run: node tools/interop-v2-crosscheck.mjs
+
+      - name: Python-frame verify (stdlib only)
+        run: python3 tools/python-frame-reference.py verify
+
+      - name: File-backend format verify (stdlib only)
+        run: python3 tools/file-backend-reference.py
+
+      - name: Python-frame JS cross-check (zero-dep independent reader, full round-trip)
+        run: node tools/frame-crosscheck.mjs
+
+      # Narrow on purpose: catches one facet of ONE of the six matrix incidents
+      # listed in decisions/matrix-version-verification.md — a version in the SDK
+      # Overview table stated as a snapshot, true when written and false at the
+      # next release. The other five need a reader, not a regex. The mutation
+      # suite runs first so the guard cannot degrade to silently reporting OK.
+      - name: SDK Overview versions are floors, not snapshots
+        run: |
+          python3 tools/test_check_version_floors.py
+          python3 tools/check-version-floors.py
