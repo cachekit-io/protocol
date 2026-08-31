@@ -115,6 +115,12 @@ def check_optimised_refusals() -> list[str]:
         # `generate` under -O is run against a scratch mirror: if the guard regresses,
         # the write lands on a throwaway copy instead of the vendored fixture.
         scratch_tool = _scratch(Path(td) / "opt")
+        # Byte snapshot, taken BEFORE the invocations and of the scratch file itself:
+        # comparing parsed JSON would call a reformatting rewrite "byte-untouched",
+        # and comparing against the repo fixture would compare the wrong file (the
+        # mirror is re-serialised by _scratch, so it is not byte-identical to it).
+        scratch_fixture = scratch_tool.parent.parent / "test-vectors" / FIXTURE.name
+        pristine_scratch = scratch_fixture.read_bytes()
         cases = [
             # Positive control: without -O the tool must still work, otherwise a guard
             # that refuses everything would pass every case below.
@@ -128,9 +134,7 @@ def check_optimised_refusals() -> list[str]:
 
         # The scratch fixture must be untouched even though the invocation asked to
         # write it — proves the -O refusal precedes the write, not follows it.
-        scratch_fixture = scratch_tool.parent.parent / "test-vectors" / FIXTURE.name
-        pristine = json.loads(FIXTURE.read_text())
-        untouched = json.loads(scratch_fixture.read_text()) == pristine
+        untouched = scratch_fixture.read_bytes() == pristine_scratch
         print(f"  [{'ok' if untouched else 'FAIL'}] -O generate wrote nothing")
         if not untouched:
             failures.append("generate under -O rewrote the fixture before refusing")
@@ -158,12 +162,14 @@ def check_generate_is_append_only() -> list[str]:
             tmp = Path(tempfile.mkdtemp(dir=td))
             tool = _scratch(tmp, mutate=mutate)
             fixture_path = tmp / "test-vectors" / FIXTURE.name
-            before = json.loads(fixture_path.read_text())
+            before = fixture_path.read_bytes()
             proc = _run([], ["generate"], tool=tool)
             _expect(failures, f"generate refuses: {label}", proc, 1, marker)
 
             # The refusal must be a no-op on disk, not a refusal after the write.
-            untouched = before == json.loads(fixture_path.read_text())
+            # Bytes, not parsed JSON: a rewrite that only reorders keys or reindents
+            # is still a write, and the claim below says byte-untouched.
+            untouched = before == fixture_path.read_bytes()
             print(f"  [{'ok' if untouched else 'FAIL'}] refusal left the fixture byte-untouched: {label}")
             if not untouched:
                 failures.append(f"generate mutated the fixture despite refusing: {label}")
@@ -199,7 +205,8 @@ def check_whole_file_properties() -> list[str]:
         import importlib.util as u
 
         spec = u.spec_from_file_location("_wfr", TOOL)
-        assert spec and spec.loader
+        if spec is None or spec.loader is None:
+            raise RuntimeError(f"cannot load {TOOL} as a module")
         mod = u.module_from_spec(spec)
         spec.loader.exec_module(mod)
         _d, checksum, size, fmt, _e = mod.decode_envelope(bytes.fromhex(base["envelope_hex"]))
@@ -245,7 +252,7 @@ def check_flag_rejections() -> list[str]:
         # writing the fixture, and this suite is the first thing CI runs.
         tool = _scratch(Path(td) / "flags")
         fixture_path = tool.parent.parent / "test-vectors" / FIXTURE.name
-        before = json.loads(fixture_path.read_text())
+        before = fixture_path.read_bytes()
         for name, argv, expected, marker in [
             ("generate --require-extras rejected", ["generate", "--require-extras"], 2, "not valid for"),
             ("unknown command rejected", ["bogus"], 2, "Usage:"),
@@ -253,7 +260,7 @@ def check_flag_rejections() -> list[str]:
         ]:
             _expect(failures, name, _run([], argv, tool=tool), expected, marker)
 
-        untouched = before == json.loads(fixture_path.read_text())
+        untouched = before == fixture_path.read_bytes()
         print(f"  [{'ok' if untouched else 'FAIL'}] no rejected invocation wrote the fixture")
         if not untouched:
             failures.append("a rejected invocation still wrote the fixture")
