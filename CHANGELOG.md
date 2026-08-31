@@ -9,7 +9,8 @@ All notable changes to the CacheKit Protocol Specification.
 - **`X-CacheKit-Fresh-For` remaining-freshness response header (LAB-557).**
   `GET /v1/cache/{key}` `200 OK` responses now carry the entry's remaining
   freshness in whole seconds (server-clock delta; `0` on stale-window
-  responses; omitted for entries with no expiry and by pre-signal servers), so
+  responses; emitted on every `GET` `200 OK` — TTL is mandatory, so a
+  "no expiry" entry cannot exist; omitted only by pre-signal servers), so
   SDK local caches (L1) can bound backfill to `min(local_ttl, fresh_for)`
   instead of restarting the freshness clock at time-of-read — an entry read
   near the end of its server-side window could previously be served fresh from
@@ -24,6 +25,18 @@ All notable changes to the CacheKit Protocol Specification.
   [saas-api.md → Remaining Freshness](spec/saas-api.md#remaining-freshness).
   Origin: CodeRabbit outside-diff finding on
   [cachekit-py#233](https://github.com/cachekit-io/cachekit-py/pull/233).
+- **Second panel round on the same header (LAB-2531).** The deployment-specific
+  "≤5 seconds" edge-coherence figure is dropped from the normative text — the
+  deployed tiers compose to roughly double it, and the spec now states the
+  general truth instead: coherence windows **compound** across composed tiers
+  that re-stamp rather than decay. New in the same round: servers MUST emit
+  `Cache-Control: no-store` on every response (the cache key carries no tenant,
+  so byte-identical URLs across tenants make heuristic HTTP caching
+  (RFC 9111 §4.2.2) a cross-tenant read; CacheKit-operated tiers MUST partition
+  internal caches by tenant); `fresh` + `Fresh-For: 0` documented as legal
+  (final sub-second floors to `0` — serve, don't backfill); the dead
+  "no expiry" emission branch removed (it failed open into pre-signal legacy
+  behavior); local deadlines SHOULD use a suspend-counting clock.
 
 ### Wire format — compressed-byte reproducibility scoped per-vector (LAB-1751)
 

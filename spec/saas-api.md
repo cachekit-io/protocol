@@ -51,6 +51,8 @@ Authorization: Bearer ck_live_xxxxxxxxxxxxxxxxxxxxxxxxx
 
 API keys follow the format `ck_live_...` (production) or `ck_test_...` (staging). The API key implicitly scopes all operations to a tenant. Multi-tenancy is enforced server-side.
 
+**HTTP intermediary caching is prohibited.** Servers MUST emit `Cache-Control: no-store` on every response. The [cache key](cache-key-format.md) carries no tenant component — tenancy rides only in the `Authorization` header — so two tenants using the same namespace, function, and arguments produce byte-identical request paths, and a shared HTTP cache applying heuristic freshness (RFC 9111 §4.2.2) to an unmarked response could serve one tenant's bytes to another. Any CacheKit-operated serving tier that caches responses (edge, colo) MUST partition its internal cache by tenant, never by URL alone; such tiers are part of the server, not HTTP intermediaries, and the `no-store` rule governs what they emit, not what they may store.
+
 ---
 
 ## Content Type
@@ -100,10 +102,10 @@ Authorization: Bearer ck_live_xxx
 
 **Server (emission):**
 
-- Emitted on `GET` `200 OK` responses for entries with a freshness bound. The value is a non-negative integer: `max(0, floor(fresh_until − now))`, computed against the **server's clock** at response time — the client never compares server timestamps against its own clock.
-- Stale-window responses (`X-CacheKit-Freshness: stale`) carry `X-CacheKit-Fresh-For: 0` — freshness is already exhausted.
-- Omitted for entries with no expiry (no freshness bound exists) and by pre-signal servers.
-- A serving tier that re-serves a value it read earlier (e.g. an edge cache in front of the store) MUST either decay the value by the time already elapsed or emit `X-CacheKit-Fresh-For: 0` when the remaining freshness is unknown — it MUST NOT omit the header it received (omission means "no freshness bound" to the client and would silently restore the unbounded backfill this header exists to kill). It MUST NOT replay an undecayed value beyond its documented coherence window (CacheKit's edge tiers: ≤5 seconds).
+- Emitted on **every** `GET` `200 OK` response by signal-capable servers. Every stored entry has a freshness bound — [TTL validation](#put-v1cachekey) rejects `0` and applies the tenant default when the header is omitted — so there is no "no expiry" entry and no compliant reason for a signal-capable server to omit the header. The value is a non-negative integer: `max(0, floor(fresh_until − now))`, computed against the **server's clock** at response time — the client never compares server timestamps against its own clock.
+- Stale-window responses (`X-CacheKit-Freshness: stale`) carry `X-CacheKit-Fresh-For: 0` — freshness is already exhausted. `X-CacheKit-Freshness: fresh` with `X-CacheKit-Fresh-For: 0` is also legal — an entry in its final sub-second of freshness floors to `0`. The response is served to the caller normally; the `0` governs only local caching (no backfill).
+- Omitted only by pre-signal servers.
+- A serving tier that re-serves a value it read earlier (e.g. an edge cache in front of the store) MUST either decay the value by the time already elapsed or emit `X-CacheKit-Fresh-For: 0` when the remaining freshness is unknown — it MUST NOT omit the header it received (omission means "pre-signal server" to the client and would silently restore the unbounded backfill this header exists to kill). It MUST NOT replay an undecayed value beyond its documented coherence window — and coherence windows **compound** across composed tiers: a tier that re-stamps its own full TTL on a hit from the tier below, instead of decaying, adds its window to the path's total, so a deployment's effective window is the sum along the serving path, not its largest single tier.
 - `HEAD` does **not** carry this header — an existence check returns no payload, so there is nothing to backfill locally (the `X-CacheKit-Freshness` label on `HEAD` remains informational, per [Stale-While-Revalidate](#stale-while-revalidate)). Correspondingly, a `HEAD` response MUST NOT create, refresh, or extend any local entry's service bound.
 
 **SDK (consumption):**
@@ -113,6 +115,7 @@ Authorization: Bearer ck_live_xxx
 - Absent header = pre-signal server: legacy behavior (the SDK's configured local TTL applies unchanged). This makes the header purely additive — old SDKs ignore it, and new SDKs against old servers behave exactly as before. Absence licenses only *fresh* service for that configured lifetime — it never licenses local stale service: the [`evict_at` bound](#reading-a-stale-entry) is unconditional, and without the header the client has no freshness signal at all to ground a stale window on.
 - An unparseable or negative value MUST be treated as `0` (do not extend local service — the conservative action, mirroring the unrecognized-`X-CacheKit-Freshness` → `stale` rule). The same applies to any value that is not a plain ASCII-digit integer, or that exceeds 2,592,000 (the [30-day TTL cap](#put-v1cachekey) makes larger values protocol-impossible — a buggy or misconfigured tier, not a real bound).
 - Network transit slightly overstates remaining freshness at the client (the value was computed at response time). This is accepted: the error is bounded by transit latency, the same class HTTP `Age` handling tolerates, and is negligible against whole-second granularity.
+- The local deadline SHOULD be measured against a clock that keeps counting across system suspend (wall-clock anchored, or a `CLOCK_BOOTTIME`-class monotonic source): a suspend-blind monotonic clock stops while the host sleeps and serves past the bound after resume. This is implementation guidance, not wire contract — the same clock discipline applies to all local TTL accounting.
 - An issued `fresh_for` is a snapshot, not a lease the server can recall: a later `DELETE`, or a fresh-window `PATCH /ttl` that shortens the entry, does not reach copies already backfilled — remote local caches compliantly serve until their bounded lifetime expires. Revocation therefore propagates to L1s within at most the largest outstanding `fresh_for`. Security-sensitive caches MUST size TTL (and local TTL) to their revocation tolerance, or version their keys (see the invalidation-race note in [Semantics notes](#semantics-notes)).
 
 ---
