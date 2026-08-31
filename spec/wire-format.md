@@ -291,7 +291,10 @@ fails CI rather than quietly making this paragraph wrong.
 > **Known encode divergence — `large_compressible` / `large_compressible_bin`
 > (decode-verified only).** For this pair's input (1024 × `'A'`), liblz4
 > (observed at 1.9.4 via `python-lz4` 4.4.5) emits a **14-byte** block where
-> the fixture pins `lz4_flex`'s **15-byte** block. The blocks differ only in
+> the fixture pins the **15-byte** block emitted by `lz4_flex` as shipped in
+> `cachekit-core` v0.2.0 (this vector's generator). Both sides are
+> version-stamped deliberately: encoder output is version-dependent, which is
+> the whole reason compressed bytes are not canonical. The blocks differ only in
 > the end-of-block match/literal split: `lz4_flex` ends the long match one byte
 > earlier and emits six trailing literals (`… e9 60` + `41`×6) where liblz4
 > emits five (`… ea 50` + `41`×5). Both are valid LZ4 blocks and both
