@@ -374,14 +374,18 @@ def _require_twin_equivalence(frame_vectors: list[dict]) -> None:
         )
 
 
-def _build_error_vectors(raw_frame: bytes, msgpack: ModuleType, wrapper: type) -> list[dict]:
+def _build_error_vectors(raw_frame: bytes) -> list[dict]:
     """Build the error vectors, each checked against the REAL implementation.
 
-    Split out of generate() so the frame-vector flow and the error-vector flow
-    read independently (PLR0915). Behaviour is unchanged: every vector here is
-    proven to be rejected by cachekit-py before it can be written, and the
-    interop vector is proven to be rejected by a strict msgpack reader.
+    Separate from generate() so the frame-vector flow and the error-vector flow
+    read independently. Every vector here is proven to be rejected by
+    cachekit-py before it can be written, and the interop vector is proven to
+    be rejected by a strict msgpack reader.
     """
+    import msgpack  # third-party; generation only
+
+    from cachekit.serializers.wrapper import SerializationWrapper
+
     built_errors = [
         {
             "name": "truncated_frame",
@@ -401,7 +405,7 @@ def _build_error_vectors(raw_frame: bytes, msgpack: ModuleType, wrapper: type) -
     ]
     for vec in built_errors:
         try:
-            wrapper.unwrap(bytes.fromhex(vec["frame_hex"]))
+            SerializationWrapper.unwrap(bytes.fromhex(vec["frame_hex"]))
         except ValueError:
             pass
         else:  # pragma: no cover - generation-time invariant
@@ -503,7 +507,7 @@ def generate() -> int:
             }
         )
 
-    built_errors = _build_error_vectors(raw_frame, msgpack, SerializationWrapper)
+    built_errors = _build_error_vectors(raw_frame)
 
     # Upsert by name. The top-level 'generator' (the legacy-vector provenance)
     # is never rewritten; every vector this run rewrites or adds carries its
