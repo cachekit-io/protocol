@@ -27,7 +27,7 @@ All notable changes to the CacheKit Protocol Specification.
 - [`tools/wire-format-reference.py`](tools/wire-format-reference.py) `verify`
   gains an optional `lz4` leg (the dependency was already installed in CI's
   optional-deps step): liblz4 MUST decompress every pinned `compressed_data`
-  to the pinned input; encoder agreement is asserted only as a set-level drift
+  to the pinned input; encoder agreement is asserted only as a drift
   tripwire against `LZ4_ENCODE_DIVERGENT`, never as a per-vector conformance rule. The CI invocation now passes `--require-extras`
   (precedent: `encryption-verify.py --require-seal`) so a dependency drift
   cannot silently turn the deeper checks off. Fixture bytes untouched
@@ -45,8 +45,9 @@ All notable changes to the CacheKit Protocol Specification.
     check is an `assert`, so an optimised `verify` reported "all 7 vector pairs
     verified" against a poisoned fixture, and an optimised `generate` rewrote the
     fixture with its input checks stripped. The guard is at module scope, not in
-    `main()`, because importing the module (sibling tools reuse this envelope
-    codec) walked straight past a CLI-only guard.
+    `main()`, because a CLI-only guard is bypassed by importing the module and
+    calling `verify()` directly — which the regression harness's `importlib`
+    probe does, and which is how the sibling tools load each other's codecs.
   - `generate` is now **append-only**: it refuses to write when the rebuild would
     drop a committed vector. It previously rebuilt `vectors` from the legacy set
     alone, so a bin vector with no legacy base was erased silently — and because
@@ -63,6 +64,40 @@ All notable changes to the CacheKit Protocol Specification.
   - The set of vectors liblz4 fails to reproduce on encode is pinned in
     `LZ4_ENCODE_DIVERGENT` and asserted, so a toolchain bump that changes it
     fails CI instead of quietly making the new spec section's prose wrong.
+- Second expert-panel round on the remediated verifier (crypto/protocol gate
+  keys off current HEAD, not "a panel ran once"). Three whole-file fail-opens,
+  all reproduced by execution and all previously exit-0:
+  - **The base-vector set is now pinned in code** (`EXPECTED_BASE_VECTORS`).
+    Every other check iterates the fixture's own vector list and so is
+    structurally blind to a vector that is simply *absent*. Dropping a legacy
+    base **and** its `_bin` twin together — the realistic bad-merge shape, which
+    the orphan-twin refusal does not cover — netted to zero in `generate`'s
+    append-only diff: `verify` reported "all 6 vector pairs verified" and
+    `generate` wrote the 12-vector fixture, both exit 0. It also silently
+    disarmed `LZ4_ENCODE_DIVERGENT`, since the divergent vector was no longer
+    iterated. Same lesson as `original_size`/`input_size` one level up: a name
+    list derived from the artifact under test pins nothing.
+  - **The fixture's declared `limits` block is now compared against the spec's
+    Security Limits table.** SDKs read their bounds from that block and nothing
+    pinned it either way, so a fixture rewriting `max_uncompressed_size` to `1`
+    verified green while handing every downstream reader a wrong bound.
+  - **A declared-divergent vector's `compressed_data` is now byte-pinned.**
+    `assert diverges == (name in LZ4_ENCODE_DIVERGENT)` is a one-bit check that
+    any other valid LZ4 block satisfies, so re-pinning `large_compressible` to
+    an unrelated (valid, correctly-decompressing) block passed both CI legs. The
+    byte-pin sits outside the optional-deps gate, so the one vector this section
+    exists to document is enforced on the stdlib leg too — it has no
+    canonical-writer check anywhere else in the fleet.
+  - `tools/test_wire_format_reference.py` gains mutation cases for all three,
+    each verified non-vacuous by deleting the guard and confirming the case
+    fails. Its own invocations that can reach `generate` now run against a
+    scratch mirror rather than the repo's sha256-pinned fixture — with the
+    guard regressed, the suite (CI's first step) rewrote the vendored artifact.
+    Exit-code-only assertions gained guard-marker checks, because python itself
+    exits 2 on a bad script path and 1 on a traceback, which made an
+    exit-code-only case pass vacuously.
+  - Fixture-shape rejections now name the offending vector instead of exiting
+    via a bare traceback.
 - [`spec/wire-format.md`](spec/wire-format.md) corrections from the same panel:
   the "MUST NOT byte-compare a writer's compressor output" rule is scoped to
   **non-canonical** writers — unscoped, it forbade the `cachekit-core` re-encode
@@ -70,9 +105,17 @@ All notable changes to the CacheKit Protocol Specification.
   mechanism, i.e. the fleet's only `lz4_flex` drift detector. The claim that
   cachekit-core enforces canonical-writer reproducibility is now scoped to the
   vectors that repo actually vendors: core pins `version == "1.1.0"`, so
-  `width_boundary_bin16` (added at 1.1.1) currently has no encode-side check
-  anywhere — recorded in the spec, closed by re-vendoring 1.1.1 into
-  cachekit-core.
+  `width_boundary_bin16` (added at 1.1.1) has no **canonical-writer
+  (`lz4_flex`) compressed-byte** check anywhere in the fleet, and its pinned
+  xxh3-64 checksum is recomputed nowhere. The earlier phrasing — "no
+  encode-side check anywhere" — was too broad and is corrected: this repo's
+  verifier does assert that vector's legacy and bin re-encode byte-identity on
+  every run, and liblz4 reproduces its compressed bytes on the optional leg. The
+  spec also now names what re-vendoring 1.1.1 into cachekit-core actually
+  requires: bump `FIXTURE_SHA256`, bump the version pin, **and** relax
+  `assert_eq!(twin_bytes[1], 0xc4)` to accept `0xc5` — that assertion demands
+  every twin be bin8, and `width_boundary_bin16_bin` is bin16, so a drop-in
+  re-vendor fails it. A remedy that fails on contact leaves the gap open longer.
 
 ### Interop v2 — compressed-values profile (DRAFT)
 

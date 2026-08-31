@@ -41,9 +41,8 @@ This document specifies two layers:
    decode byte-identity for every vector and re-encode byte-identity for the
    canonical `*_bin` vectors only — legacy array-of-integers vectors are
    decode-only, retained as legacy-read proof. That re-encode assertion covers
-   only the vectors the pinned file contains (core currently vendors 1.1.0; see
-   [Compressed-byte reproducibility](#compressed-byte-reproducibility-per-vector-scoping)
-   for the resulting gap). Byte-canonicity scopes to the
+   only the vectors the pinned file contains (core currently vendors 1.1.0, with
+   the resulting gap detailed below). Byte-canonicity scopes to the
    envelope's MessagePack encoding and to the **canonical writer's** output:
    the LZ4 bytes inside `compressed_data` are not reproducible across
    conforming compressors — see
@@ -264,7 +263,13 @@ bytes are therefore
 **not canonical**, and conformance for `compressed_data` is **read-side**:
 
 - A conforming reader MUST decompress every pinned vector's `compressed_data`
-  to its pinned input.
+  to its pinned input, **and MUST enforce [Retrieve Flow](#retrieve-flow) steps
+  4, 5 and 9 while doing so.** Read-side conformance is not "the vectors pass":
+  every pinned vector is well-formed and declares a truthful `original_size`, so
+  they evidence **none** of those bounds, and a reader that omits all three
+  decompresses all of them successfully. The vectors prove decode
+  interoperability; the bounds in [Security Limits](#security-limits) are a
+  separate, non-negotiable obligation that no fixture can demonstrate.
 - A writer **other than the canonical `lz4_flex` writer** is NOT required to
   reproduce the pinned compressed bytes, and MUST NOT be judged non-conforming
   because its compressor output differs from the fixture — validate such a
@@ -274,20 +279,35 @@ bytes are therefore
 - A writer MAY still byte-compare its compressor output against the pins as a
   **drift tripwire**, provided the expected divergences are declared per vector
   rather than treated as failures. This repo's own verifier does exactly that
-  (`LZ4_ENCODE_DIVERGENT` in `tools/wire-format-reference.py`) — which watches
-  the reference **liblz4** mapping for divergence-set drift, and cannot observe
-  `lz4_flex` at all. Canonical-writer byte-reproducibility is a separate
-  mechanism, enforced only by the re-encode assertions in `cachekit-core`
-  described below.
+  (`LZ4_ENCODE_DIVERGENT` in `tools/wire-format-reference.py`), in two halves: a
+  set-level half that watches the reference **liblz4** mapping for
+  divergence-set drift, and a byte-level half that pins the exact
+  `compressed_data` of each declared-divergent vector. Both are needed —
+  "differs from liblz4's output" alone is a one-bit assertion that any other
+  valid LZ4 block satisfies, so it accepts a re-pin to unrelated bytes. Neither
+  half runs `lz4_flex`, so neither can detect an `lz4_flex` **behaviour** change;
+  that remains the job of the re-encode assertions in `cachekit-core` described
+  below, subject to the vendored-version gap noted there.
 
 This is the same doctrine [interop v2](interop-v2.md) records for its
 compressed-values profile. The pinned bytes are the **canonical implementation's**
 output (`lz4_flex` via `cachekit-core`), enforced by the re-encode byte-identity
 assertions in `cachekit-core/tests/wire_format_vectors.rs` — **but only for the
-vectors present in the fixture that repo vendors**. That matters today: cachekit-core vendors 1.1.0
-and pins `version == "1.1.0"`, so `width_boundary_bin16` (added at 1.1.1) is
-not yet covered by any encode-side check anywhere — re-vendoring 1.1.1 into
-cachekit-core closes that gap. The reference liblz4 mapping
+vectors present in the fixture that repo vendors**. That matters today:
+cachekit-core vendors 1.1.0 and pins `version == "1.1.0"`, so
+`width_boundary_bin16` (added at 1.1.1) has **no canonical-writer (`lz4_flex`)
+compressed-byte check anywhere in the fleet**, and its pinned xxh3-64 checksum
+is recomputed nowhere. Its MessagePack encoding *is* covered: this repo's
+`tools/wire-format-reference.py verify` asserts legacy and bin re-encode
+byte-identity for it on every run, and liblz4 reproduces its compressed bytes
+on the optional `lz4` leg — so do not read this gap as "the vector is
+unverified". Closing it means re-vendoring 1.1.1 into cachekit-core, which
+requires three changes together, not one: bump `FIXTURE_SHA256`, bump the
+`version == "1.1.0"` pin to `1.1.1`, and relax
+`assert_eq!(twin_bytes[1], 0xc4)` to accept `0xc5` — that assertion currently
+requires *every* twin to be bin8, and `width_boundary_bin16_bin` is bin16
+(marker `0xc5`, 303-byte `compressed_data`), which is the whole point of the
+vector. A drop-in re-vendor fails that test. The reference liblz4 mapping
 above (`lz4.block`) is **decode-verified against every vector** in this repo's
 CI (`tools/wire-format-reference.py verify`, optional `lz4` leg); on encode it
 reproduces every pair except `large_compressible` byte-for-byte, which is an
