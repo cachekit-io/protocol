@@ -27,22 +27,30 @@ jobs:
 
       - name: Python reference verify (stdlib only)
         run: |
+          # Mutation suite first, same doctrine as the version-floor guard below:
+          # prove the fail-closed guards still fail before trusting the verify.
+          python3 tools/test_wire_format_reference.py
           python3 tools/interop-reference.py verify
+          python3 tools/interop-v2-reference.py verify
           python3 tools/encryption-verify.py
           python3 tools/wire-format-reference.py verify
 
-      - name: Python reference verify (optional deps — AES-GCM seal + msgpack third-encoder conformance)
+      - name: Python reference verify (optional deps — AES-GCM seal + msgpack third-encoder + lz4 C-implementation conformance)
         run: |
-          pip install cryptography==49.0.0 msgpack==1.2.1
+          pip install cryptography==49.0.0 msgpack==1.2.1 lz4==4.4.5
           python3 tools/interop-reference.py verify
+          python3 tools/interop-v2-reference.py verify
           python3 tools/encryption-verify.py --require-seal
-          python3 tools/wire-format-reference.py verify
+          python3 tools/wire-format-reference.py verify --require-extras
 
       - name: JS cross-check (independent encoder + @noble/hashes + WebCrypto)
         run: |
           npm init -y >/dev/null
           npm install --no-audit --no-fund --ignore-scripts @noble/hashes@2.2.0
           node tools/interop-crosscheck.mjs
+
+      - name: Interop v2 JS cross-check (zero-dep independent container parser + LZ4 decoder + WebCrypto)
+        run: node tools/interop-v2-crosscheck.mjs
 
       - name: Python-frame verify (stdlib only)
         run: python3 tools/python-frame-reference.py verify

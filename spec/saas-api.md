@@ -153,7 +153,7 @@ X-CacheKit-TTL: 3600
 > **Migration:** The `X-TTL` header is deprecated. The server MUST accept both `X-CacheKit-TTL` and `X-TTL` during the transition period, preferring `X-CacheKit-TTL` when both are present. SDKs MUST send `X-CacheKit-TTL` only. The `X-TTL` header will be removed in protocol version 2.0 (targeted at SDK 1.0 milestone).
 
 > [!IMPORTANT]
-> **Maximum value size:** A single cache value may be at most **25 MB**. Larger values are rejected with `413 Payload Too Large` — a **permanent** error: SDKs MUST NOT retry and SHOULD surface "value too large" to the caller. This ceiling MAY change, so SDKs MUST treat any `413` as "value too large" regardless of the exact byte count. It is unrelated to the SDK serializer's 512 MB in-memory safety bound (see `wire-format.md`) — that bound governs what the SDK will serialize, not what the service will store.
+> **Maximum value size:** A single cache value may be at most **25 MB**. Larger values are rejected with `413 Payload Too Large` — a **permanent** error: SDKs MUST NOT retry and SHOULD surface "value too large" to the caller. This ceiling MAY change, so SDKs MUST treat any `413` as "value too large" regardless of the exact byte count. It is unrelated to the SDK serializer's 512 MiB in-memory safety bound (see `wire-format.md`) — that bound governs what the SDK will serialize, not what the service will store.
 
 | Status | Meaning |
 | :---: | :--- |

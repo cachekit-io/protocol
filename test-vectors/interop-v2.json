@@ -1,0 +1,225 @@
+{
+  "version": "1.0.0",
+  "spec": "spec/interop-v2.md",
+  "generator": "tools/interop-v2-reference.py (CPython stdlib, incl. pure-Python LZ4 block codec)",
+  "cross_checked_by": "tools/interop-v2-crosscheck.mjs (independent container parser + LZ4 block decoder + WebCrypto HKDF/AES-GCM; zero dependencies)",
+  "container_format": "0xC1 0x02 + canonical msgpack [method:int, original_size:int, payload:bin]",
+  "security_limits": {
+    "max_uncompressed_size": 536870912,
+    "max_compressed_size": 536870912,
+    "max_compression_ratio": 1000,
+    "note": "All enforced BEFORE decompression, integer arithmetic only \u2014 spec/interop-v2.md#security-limits-decompression-bounds"
+  },
+  "compressed_bytes_note": "method-1 payload bytes are NOT canonical: conformant LZ4 encoders legally differ. Vectors pin the reference compressor's output for READ-side conformance; writers may produce different valid LZ4 for the same value.",
+  "error_vectors_note": "reject_* vectors MUST be rejected with an error; the 'error' text is a maintainer note, not a normative message.",
+  "container_vectors": [
+    {
+      "name": "method0_issue_example",
+      "description": "method 0 (no compression) wrap of the v1 issue_example_object value \u2014 original_size MUST equal the payload length",
+      "value": {
+        "name": "alice",
+        "age": 30
+      },
+      "value_msgpack_hex": "82a36167651ea46e616d65a5616c696365",
+      "method": 0,
+      "original_size": 17,
+      "payload_hex": "82a36167651ea46e616d65a5616c696365",
+      "container_hex": "c102930011c41182a36167651ea46e616d65a5616c696365"
+    },
+    {
+      "name": "lz4_roundtrip_compressible",
+      "description": "method 1 compressed round-trip of a redundant value. The payload is the REFERENCE compressor's output: readers MUST decompress it to the pinned value bytes; writers are NOT required to reproduce these compressed bytes (compressed bytes are non-canonical, read-side conformance only)",
+      "value": {
+        "events": [
+          "GET /api/users/42 200 OK",
+          "GET /api/users/42 200 OK",
+          "GET /api/users/42 200 OK",
+          "GET /api/users/42 200 OK",
+          "GET /api/users/42 200 OK",
+          "GET /api/users/42 200 OK",
+          "GET /api/users/42 200 OK",
+          "GET /api/users/42 200 OK"
+        ],
+        "source": "interop-v2-reference"
+      },
+      "value_msgpack_hex": "82a66576656e747398b8474554202f6170692f75736572732f343220323030204f4bb8474554202f6170692f75736572732f343220323030204f4bb8474554202f6170692f75736572732f343220323030204f4bb8474554202f6170692f75736572732f343220323030204f4bb8474554202f6170692f75736572732f343220323030204f4bb8474554202f6170692f75736572732f343220323030204f4bb8474554202f6170692f75736572732f343220323030204f4bb8474554202f6170692f75736572732f343220323030204f4ba6736f75726365b4696e7465726f702d76322d7265666572656e6365",
+      "method": 1,
+      "original_size": 237,
+      "payload_hex": "ff1382a66576656e747398b8474554202f6170692f75736572732f343220323030204f4b19009cf00da6736f75726365b4696e7465726f702d76322d7265666572656e6365",
+      "container_hex": "c1029301ccedc445ff1382a66576656e747398b8474554202f6170692f75736572732f343220323030204f4b19009cf00da6736f75726365b4696e7465726f702d76322d7265666572656e6365"
+    },
+    {
+      "name": "lz4_wraps_v1_value_vector",
+      "description": "method 1 container over the SAME plain bytes as v1's issue_example_object value vector \u2014 the inner value profile is inherited from v1 unchanged. Incompressible at this size: the LZ4 payload is a literals-only block LARGER than the value (writers SHOULD have used method 0; readers MUST still accept it)",
+      "value": {
+        "name": "alice",
+        "age": 30
+      },
+      "value_msgpack_hex": "82a36167651ea46e616d65a5616c696365",
+      "method": 1,
+      "original_size": 17,
+      "payload_hex": "f00282a36167651ea46e616d65a5616c696365",
+      "container_hex": "c102930111c413f00282a36167651ea46e616d65a5616c696365"
+    },
+    {
+      "name": "method0_noncanonical_widths",
+      "description": "Same value as method0_issue_example, but with deliberately NON-canonical header widths (array16, uint8 method, uint32 original_size, bin16 payload). Readers MUST accept any unsigned-family width; writers MUST NOT emit this.",
+      "value": {
+        "name": "alice",
+        "age": 30
+      },
+      "value_msgpack_hex": "82a36167651ea46e616d65a5616c696365",
+      "method": 0,
+      "original_size": 17,
+      "payload_hex": "82a36167651ea46e616d65a5616c696365",
+      "container_hex": "c102dc0003cc00ce00000011c5001182a36167651ea46e616d65a5616c696365"
+    }
+  ],
+  "aad_vectors": [
+    {
+      "name": "interop_v2_aad",
+      "description": "AAD v0x03 over the same tenant + interop key as v1's interop_key_aad; the two AADs differ ONLY in the final component (frozen tokens 'True' vs 'False') \u2014 this is the cryptographic mode separation",
+      "tenant_id": "cross-sdk-test",
+      "cache_key": "users:get_user:61598716255080080f6456eb065c2e51badfaa4320b0efe97469c29cffee8875",
+      "format": "msgpack",
+      "compressed": true,
+      "aad_hex": "030000000e63726f73732d73646b2d746573740000004f75736572733a6765745f757365723a36313539383731363235353038303038306636343536656230363563326535316261646661613433323062306566653937343639633239636666656538383735000000076d73677061636b0000000454727565",
+      "v1_aad_hex_for_comparison": "030000000e63726f73732d73646b2d746573740000004f75736572733a6765745f757365723a36313539383731363235353038303038306636343536656230363563326535316261646661613433323062306566653937343639633239636666656538383735000000076d73677061636b0000000546616c7365"
+    }
+  ],
+  "encryption_vectors": [
+    {
+      "name": "interop_v2_compressed_encryption_roundtrip",
+      "description": "Full v2 round-trip: HKDF-SHA256 per spec/encryption.md (same master key + tenant as interop/v1 and encryption.json, hence the same derived key), AES-256-GCM over the ENTIRE v2 container bytes (lz4_roundtrip_compressible) with the v2 AAD (compressed='True') and a fixed nonce.",
+      "master_key_hex": "6161616161616161616161616161616161616161616161616161616161616161",
+      "tenant_id": "cross-sdk-test",
+      "derived_key_fingerprint_hex": "96179a9bc881aa7ca83f04b78a66afd3",
+      "cache_key": "users:get_user:61598716255080080f6456eb065c2e51badfaa4320b0efe97469c29cffee8875",
+      "format": "msgpack",
+      "compressed": true,
+      "aad_hex": "030000000e63726f73732d73646b2d746573740000004f75736572733a6765745f757365723a36313539383731363235353038303038306636343536656230363563326535316261646661613433323062306566653937343639633239636666656538383735000000076d73677061636b0000000454727565",
+      "plaintext_hex": "c1029301ccedc445ff1382a66576656e747398b8474554202f6170692f75736572732f343220323030204f4b19009cf00da6736f75726365b4696e7465726f702d76322d7265666572656e6365",
+      "nonce_hex": "101112131415161718191a1b",
+      "ciphertext_hex": "101112131415161718191a1b043e651799eeb533c4ddf646124b57eabe59f9292ed9f2cc1412ce52f677fccc93f82f01894f619b13576eb790ea10a714a3afd85019a283a5240a602a170c9485575fe350ba5c414d1374f33216bd6b38eaf1f55503767f71229480e5",
+      "ciphertext_layout": "nonce(12) || ciphertext || auth_tag(16)"
+    }
+  ],
+  "reject_vectors": [
+    {
+      "name": "reject_bad_magic_v1_value",
+      "description": "A bare interop/v1 value fed to a v2 reader: first byte is a msgpack marker, not 0xC1",
+      "container_hex": "82a36167651ea46e616d65a5616c696365",
+      "error": "bad magic; reader SHOULD diagnose 'possible interop/v1 value'"
+    },
+    {
+      "name": "reject_bad_container_version",
+      "description": "Right magic, wrong version byte (0x03)",
+      "container_hex": "c103930011c41182a36167651ea46e616d65a5616c696365",
+      "error": "unsupported container version"
+    },
+    {
+      "name": "reject_unknown_method",
+      "description": "method 2 is not in the registry",
+      "container_hex": "c102930211c41182a36167651ea46e616d65a5616c696365",
+      "error": "unknown compression method"
+    },
+    {
+      "name": "reject_payload_array_of_ints",
+      "description": "Payload encoded as a msgpack array of integers instead of bin \u2014 the legacy ByteStorage leniency is explicitly NOT inherited by interop/v2",
+      "container_hex": "c10293000393010203",
+      "error": "payload must be msgpack bin"
+    },
+    {
+      "name": "reject_method_signed_marker",
+      "description": "method encoded with a signed-family marker (int8 0xd0 carrying value 0) \u2014 marker-level enforcement rejects the signed family even for non-negative values",
+      "container_hex": "c10293d00011c41182a36167651ea46e616d65a5616c696365",
+      "error": "signed-family int marker for method"
+    },
+    {
+      "name": "reject_negative_original_size",
+      "description": "original_size encoded as negative fixint -1 (0xff) \u2014 negative sizes are structurally unrepresentable once signed-family markers are rejected; a value-level reader that accepts -1 here bypasses every upper-bound check",
+      "container_hex": "c1029301ffc40410410000",
+      "error": "signed-family int marker for original_size"
+    },
+    {
+      "name": "reject_forged_bin32_length",
+      "description": "bin32 payload header declaring 4 GiB (0xffffffff) with no data following \u2014 readers MUST validate the length header against remaining input BEFORE allocating",
+      "container_hex": "c102930005c6ffffffff",
+      "error": "bin length header exceeds remaining input"
+    },
+    {
+      "name": "reject_payload_str",
+      "description": "Payload encoded as the msgpack str family instead of bin",
+      "container_hex": "c102930003a3616263",
+      "error": "payload must be msgpack bin"
+    },
+    {
+      "name": "reject_method0_size_mismatch",
+      "description": "method 0 with original_size != payload length",
+      "container_hex": "c102930012c41182a36167651ea46e616d65a5616c696365",
+      "error": "method 0 original_size mismatch"
+    },
+    {
+      "name": "reject_trailing_bytes",
+      "description": "Valid container followed by one extra byte",
+      "container_hex": "c102930011c41182a36167651ea46e616d65a5616c69636500",
+      "error": "trailing bytes after container body"
+    },
+    {
+      "name": "reject_declared_size_bomb",
+      "description": "original_size declares 1 TiB \u2014 exceeds the 512 MiB cap (checked BEFORE decompression)",
+      "container_hex": "c1029301cf0000010000000000c40410410000",
+      "error": "original_size exceeds max uncompressed size"
+    },
+    {
+      "name": "reject_ratio_bomb",
+      "description": "10-byte payload declaring 10001 output bytes \u2014 exceeds the 1000:1 ratio (checked BEFORE decompression)",
+      "container_hex": "c1029301cd2711c40a00000000000000000000",
+      "error": "compression ratio exceeds 1000:1"
+    },
+    {
+      "name": "reject_zero_length_compressed",
+      "description": "method 1 with an empty payload",
+      "container_hex": "c102930101c400",
+      "error": "zero-length compressed payload"
+    },
+    {
+      "name": "reject_lz4_zero_offset",
+      "description": "LZ4 sequence with match offset 0 (invalid in the block format)",
+      "container_hex": "c102930105c40410410000",
+      "error": "invalid LZ4 match offset 0"
+    },
+    {
+      "name": "reject_lz4_truncated",
+      "description": "The lz4_roundtrip_compressible payload with its last 3 bytes removed",
+      "container_hex": "c1029301ccedc442ff1382a66576656e747398b8474554202f6170692f75736572732f343220323030204f4b19009cf00da6736f75726365b4696e7465726f702d76322d726566657265",
+      "error": "truncated LZ4 block"
+    },
+    {
+      "name": "reject_lz4_length_mismatch",
+      "description": "Valid LZ4 block whose output is one byte short of original_size",
+      "container_hex": "c1029301cceec445ff1382a66576656e747398b8474554202f6170692f75736572732f343220323030204f4b19009cf00da6736f75726365b4696e7465726f702d76322d7265666572656e6365",
+      "error": "LZ4 output length != original_size (also fine to fail as overrun, depending on decoder structure)"
+    }
+  ],
+  "crypto_reject_vectors": [
+    {
+      "name": "reject_v2_ciphertext_with_v1_aad",
+      "description": "The v2 ciphertext MUST fail AES-GCM authentication under the v1 AAD (compressed='False')",
+      "master_key_hex": "6161616161616161616161616161616161616161616161616161616161616161",
+      "tenant_id": "cross-sdk-test",
+      "ciphertext_hex": "101112131415161718191a1b043e651799eeb533c4ddf646124b57eabe59f9292ed9f2cc1412ce52f677fccc93f82f01894f619b13576eb790ea10a714a3afd85019a283a5240a602a170c9485575fe350ba5c414d1374f33216bd6b38eaf1f55503767f71229480e5",
+      "aad_hex": "030000000e63726f73732d73646b2d746573740000004f75736572733a6765745f757365723a36313539383731363235353038303038306636343536656230363563326535316261646661613433323062306566653937343639633239636666656538383735000000076d73677061636b0000000546616c7365",
+      "error": "authentication failure \u2014 cross-mode read, terminal per the no-retry rule"
+    },
+    {
+      "name": "reject_v1_ciphertext_with_v2_aad",
+      "description": "interop/v1's published interop_encryption_roundtrip ciphertext MUST fail under the v2 AAD (compressed='True')",
+      "master_key_hex": "6161616161616161616161616161616161616161616161616161616161616161",
+      "tenant_id": "cross-sdk-test",
+      "ciphertext_hex": "000102030405060708090a0b033caf732820ce189e1506f842aebf8cdb6a242eb08c55b6f5a91eb9007b3bd657",
+      "aad_hex": "030000000e63726f73732d73646b2d746573740000004f75736572733a6765745f757365723a36313539383731363235353038303038306636343536656230363563326535316261646661613433323062306566653937343639633239636666656538383735000000076d73677061636b0000000454727565",
+      "error": "authentication failure \u2014 cross-mode read, terminal per the no-retry rule"
+    }
+  ]
+}
