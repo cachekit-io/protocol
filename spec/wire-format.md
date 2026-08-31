@@ -262,21 +262,30 @@ bytes are therefore
 
 - A conforming reader MUST decompress every pinned vector's `compressed_data`
   to its pinned input.
-- A writer is NOT required to reproduce the pinned compressed bytes, and
-  MUST NOT be conformance-tested by byte-comparing its compressor output
-  against the fixture — validate a writer by decoding its envelopes per the
+- A writer **other than the canonical `lz4_flex` writer** is NOT required to
+  reproduce the pinned compressed bytes, and MUST NOT be conformance-tested by
+  byte-comparing its compressor output against the fixture — validate such a
+  writer by decoding its envelopes per the
   [Retrieve Flow](#retrieve-flow) and checking its MessagePack encoding against
-  [Byte Layout](#byte-layout-canonical-encoding).
+  [Byte Layout](#byte-layout-canonical-encoding). The carve-out below is
+  deliberate: byte-comparing the *canonical* writer is the fleet's only
+  detector for an unintended `lz4_flex` behaviour change, so it stays.
 
 This is the same doctrine [interop v2](interop-v2.md) records for its
 compressed-values profile. The pinned bytes are the **canonical implementation's** output
 (`lz4_flex` via `cachekit-core`), and only that writer's reproducibility is
 enforced — by the re-encode byte-identity assertions in
-`cachekit-core/tests/wire_format_vectors.rs`. The reference liblz4 mapping
+`cachekit-core/tests/wire_format_vectors.rs`, **for the vectors present in the
+fixture that repo vendors**. That matters today: cachekit-core vendors 1.1.0
+and pins `version == "1.1.0"`, so `width_boundary_bin16` (added at 1.1.1) is
+not yet covered by any encode-side check anywhere — re-vendoring 1.1.1 into
+cachekit-core closes that gap. The reference liblz4 mapping
 above (`lz4.block`) is **decode-verified against every vector** in this repo's
 CI (`tools/wire-format-reference.py verify`, optional `lz4` leg); on encode it
-happens to reproduce six of the seven pairs byte-for-byte, which is an
-observation, not a guarantee.
+reproduces every pair except `large_compressible` byte-for-byte, which is an
+observation, not a guarantee — but one this repo's CI pins (see
+`LZ4_ENCODE_DIVERGENT`), so a toolchain change that alters the divergent set
+fails CI rather than quietly making this paragraph wrong.
 
 > [!NOTE]
 > **Known encode divergence — `large_compressible` / `large_compressible_bin`

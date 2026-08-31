@@ -20,6 +20,9 @@ What `verify` proves, for every vector pair in ../test-vectors/wire-format.json:
      bin form reproduces the `*_bin` bytes exactly.
   3. Documented size bound — a bin envelope is never more than 1 byte larger
      than its legacy twin (the header-arithmetic bound stated in the spec).
+  4. Declared sizes match ground truth — `original_size` equals the real length
+     of `input_hex`, not merely the co-located `input_size` field (both declared
+     sizes live in the file under test, so they drift together).
 
 Usage:
     python3 tools/wire-format-reference.py verify     # default
@@ -35,8 +38,13 @@ Two optional-dependency checks deepen `verify` when importable (both run in CI):
     decompress every vector's pinned compressed_data to the pinned input.
     Compressed bytes are not canonical across conforming LZ4 block encoders
     (spec/wire-format.md 'Compressed-byte reproducibility', LAB-1751), so
-    encoder agreement with the pinned lz4_flex bytes is reported per vector
-    but never asserted — liblz4 is known to diverge on `large_compressible`.
+    encoder agreement is never a pass/fail criterion per vector. What IS
+    asserted is that the set of divergent vectors still equals
+    LZ4_ENCODE_DIVERGENT, so a toolchain bump cannot silently invalidate the
+    spec's statement of which vectors diverge.
+
+`verify` refuses to run under -O/PYTHONOPTIMIZE: every check above is an
+`assert`, so an optimised run would report a pass having tested nothing.
 """
 
 from __future__ import annotations
@@ -48,12 +56,16 @@ from pathlib import Path
 FIXTURE_PATH = Path(__file__).resolve().parent.parent / "test-vectors" / "wire-format.json"
 
 FIXTURE_VERSION = "1.1.1"
-# spec/wire-format.md 'Size Limits' — 512 MiB, and the decode sequence validates
-# original_size against it BEFORE decompressing (step 4, ahead of step 6). This
-# file is the spec's executable witness, so it has to run that step too: liblz4
-# pre-allocates uncompressed_size, so a fixture whose original_size was mutated
-# upward gets the run OOM-killed rather than failing the vector by name.
-MAX_UNCOMPRESSED_SIZE = 536_870_912
+# spec/wire-format.md 'Size Limits' step 4 — liblz4 pre-allocates uncompressed_size,
+# so an inflated original_size must be rejected by name rather than sized into RAM.
+# Only this one bound; the envelope/compressed_data length caps and the 1000:1 bomb
+# check are a reader's obligations, not this fixture verifier's.
+MAX_UNCOMPRESSED_SIZE = 512 * 1024 * 1024
+# spec/wire-format.md 'Compressed-byte reproducibility' names WHICH vectors liblz4
+# fails to reproduce on encode. Encoder agreement is not a conformance rule, but the
+# spec's claim about the set is a fact, so a change to it must fail CI and force the
+# text to be re-read — otherwise the next `lz4==` bump rots the spec silently.
+LZ4_ENCODE_DIVERGENT = frozenset({"large_compressible"})
 ENVELOPE_FORMAT = (
     "MessagePack positional array (rmp_serde::to_vec): "
     "[compressed_data, checksum, original_size, format]. Vectors without an "
@@ -290,6 +302,15 @@ def _verify_vector(base: dict, bins: dict, msgpack, lz4_block) -> str:
     assert len(old_env) == base["envelope_size"], "envelope_size mismatch"
     assert fmt == base["format"], "format field mismatch"
     assert size == base["input_size"], "original_size != input_size"
+    # ...and against ground truth. original_size and input_size both live IN the
+    # file under test, so a regeneration bug that inflates them drifts them
+    # together and the line above still passes (LAB-903's lesson). input_hex is
+    # the only field the pinned bytes are actually derived from, so it is the
+    # one to measure against. Stdlib, and outside the optional-deps gate below,
+    # so spec decode step 9 (data.length == original_size) runs on both CI legs.
+    assert size == len(bytes.fromhex(base["input_hex"])), (
+        "original_size != len(input_hex)"
+    )
 
     # 2. twin equivalence
     twin = bins.pop(base["name"] + "_bin", None)
@@ -335,10 +356,7 @@ def _verify_vector(base: dict, bins: dict, msgpack, lz4_block) -> str:
     lz4_note = ""
     if lz4_block is not None:
         inp = bytes.fromhex(base["input_hex"])
-        # `raise`, not `assert`, unlike every conformance check around it: `python -O`
-        # strips asserts. For the conformance checks that is self-announcing — the
-        # tool verifies nothing and says so. A memory-safety bound stripped under -O
-        # looks fine right up to the point an oversized fixture takes the process out.
+        # `raise`, not `assert`: this is a memory bound, and -O strips asserts.
         # ValueError is in verify()'s per-vector guard, so the named FAIL line is kept.
         if size > MAX_UNCOMPRESSED_SIZE:
             raise ValueError(
@@ -346,16 +364,24 @@ def _verify_vector(base: dict, bins: dict, msgpack, lz4_block) -> str:
             )
         try:
             got = lz4_block.decompress(data, uncompressed_size=size)
-        except (lz4_block.LZ4BlockError, OverflowError, MemoryError) as e:
-            # convert to the guarded type so a bad vector (corrupt stream, or an
-            # oversized size that liblz4 rejects/pre-allocates) fails itself, not the run
+        except (lz4_block.LZ4BlockError, OverflowError) as e:
+            # convert to the guarded type so a corrupt stream fails itself, not the
+            # run. MemoryError is deliberately NOT caught: it is a host signal, and
+            # relabelling it as a per-vector conformance failure would hide an OOM.
             raise AssertionError(f"liblz4 rejects pinned compressed_data: {e}") from e
         assert got == inp, "liblz4 does not decompress pinned compressed_data to the input"
         theirs = lz4_block.compress(inp, store_size=False)
+        diverges = theirs != data
+        assert diverges == (base["name"] in LZ4_ENCODE_DIVERGENT), (
+            f"liblz4 encode-divergence set changed: {base['name']} "
+            f"{'now diverges from' if diverges else 'now reproduces'} the pin — "
+            "update spec/wire-format.md 'Compressed-byte reproducibility' and "
+            "LZ4_ENCODE_DIVERGENT together"
+        )
         lz4_note = (
-            "; liblz4 decode ok, encode reproduces pin"
-            if theirs == data
-            else f"; liblz4 decode ok, encode diverges ({len(theirs)} B vs {len(data)} B pinned — decode-verified only)"
+            f"; liblz4 decode ok, encode diverges ({len(theirs)} B vs {len(data)} B pinned — decode-verified only)"
+            if diverges
+            else "; liblz4 decode ok, encode reproduces pin"
         )
 
     delta = len(new_env) - len(old_env)
@@ -363,6 +389,15 @@ def _verify_vector(base: dict, bins: dict, msgpack, lz4_block) -> str:
 
 
 def verify(require_extras: bool = False) -> int:
+    if not __debug__:
+        # Every conformance check in this file is an `assert`, so -O strips all of
+        # them and an optimised run prints "all N vector pairs verified" having
+        # verified nothing. Refuse instead of reporting a vacuous pass.
+        print(
+            "FAIL: assertions disabled (-O / PYTHONOPTIMIZE) — verify proves nothing",
+            file=sys.stderr,
+        )
+        return 1
     fixture = _load()
     legacy, bins = _split_vectors(fixture)
     if not legacy:
@@ -413,8 +448,16 @@ def verify(require_extras: bool = False) -> int:
 
 
 def main() -> int:
-    args = [a for a in sys.argv[1:] if a != "--require-extras"]
-    require_extras = "--require-extras" in sys.argv[1:]
+    argv = sys.argv[1:]
+    require_extras = "--require-extras" in argv
+    args = [a for a in argv if a != "--require-extras"]
+    # Reject anything unrecognised rather than dropping it. `--require-extras` is
+    # matched by exact string and it gates the deepest coverage, so a silently
+    # ignored `--require-extra` typo used to exit 0 with the extras legs off —
+    # the exact fail-open the flag was added to close.
+    if len(args) > 1 or any(a.startswith("-") for a in args):
+        print(__doc__, file=sys.stderr)
+        return 2
     cmd = args[0] if args else "verify"
     if cmd == "generate":
         return generate()

@@ -31,6 +31,36 @@ All notable changes to the CacheKit Protocol Specification.
   (precedent: `encryption-verify.py --require-seal`) so a dependency drift
   cannot silently turn the deeper checks off. Fixture bytes untouched
   (version stays 1.1.1) — no downstream SDK re-vendors required.
+- Expert-panel hardening of the same verifier (crypto/protocol gate; every item
+  below was reproduced by poisoning the fixture and re-run after the fix):
+  - `original_size` is now checked against `len(input_hex)`, not just the
+    co-located `input_size` field. Both declared sizes live *in* the file under
+    test, so a regeneration bug that inflates them drifts them together and the
+    old check still passed — a vector declaring 100 MB for 16 bytes of input
+    verified green, and liblz4 did not catch it because
+    `decompress(uncompressed_size=…)` sizes the output buffer rather than
+    asserting the length. Runs on both CI legs (stdlib and optional-deps).
+  - `verify` refuses to run under `-O`/`PYTHONOPTIMIZE`: every conformance check
+    is an `assert`, so an optimised run reported "all 7 vector pairs verified"
+    against a poisoned fixture.
+  - Unrecognised arguments now exit 2 instead of being dropped, closing a
+    fail-open in the new flag itself: `verify --require-extra` (one character
+    short) exited 0 with the extras legs silently off.
+  - The set of vectors liblz4 fails to reproduce on encode is pinned in
+    `LZ4_ENCODE_DIVERGENT` and asserted, so a toolchain bump that changes it
+    fails CI instead of quietly making the new spec section's prose wrong.
+  - `MemoryError` is no longer caught as a per-vector conformance failure (it is
+    a host signal, and relabelling it would hide an OOM).
+- [`spec/wire-format.md`](spec/wire-format.md) corrections from the same panel:
+  the "MUST NOT byte-compare a writer's compressor output" rule is scoped to
+  **non-canonical** writers — unscoped, it forbade the `cachekit-core` re-encode
+  assertions that the very next paragraph relies on as the enforcement
+  mechanism, i.e. the fleet's only `lz4_flex` drift detector. The claim that
+  cachekit-core enforces canonical-writer reproducibility is now scoped to the
+  vectors that repo actually vendors: core pins `version == "1.1.0"`, so
+  `width_boundary_bin16` (added at 1.1.1) currently has no encode-side check
+  anywhere — recorded in the spec, closed by re-vendoring 1.1.1 into
+  cachekit-core.
 
 ### Interop v2 — compressed-values profile (DRAFT)
 
