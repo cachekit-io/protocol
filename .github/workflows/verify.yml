@@ -27,6 +27,11 @@ jobs:
 
       - name: Python reference verify (stdlib only)
         run: |
+          # Runs first, same doctrine as the version-floor mutation suite below:
+          # every check in wire-format-reference.py is an assert, so -O turns
+          # `verify` into a vacuous pass and `generate` into an unvalidated
+          # fixture rewrite. Prove the refusal holds before trusting the verify.
+          python3 tools/test_wire_format_reference.py
           python3 tools/interop-reference.py verify
           python3 tools/interop-v2-reference.py verify
           python3 tools/encryption-verify.py

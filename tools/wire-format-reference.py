@@ -389,15 +389,6 @@ def _verify_vector(base: dict, bins: dict, msgpack, lz4_block) -> str:
 
 
 def verify(require_extras: bool = False) -> int:
-    if not __debug__:
-        # Every conformance check in this file is an `assert`, so -O strips all of
-        # them and an optimised run prints "all N vector pairs verified" having
-        # verified nothing. Refuse instead of reporting a vacuous pass.
-        print(
-            "FAIL: assertions disabled (-O / PYTHONOPTIMIZE) — verify proves nothing",
-            file=sys.stderr,
-        )
-        return 1
     fixture = _load()
     legacy, bins = _split_vectors(fixture)
     if not legacy:
@@ -448,6 +439,18 @@ def verify(require_extras: bool = False) -> int:
 
 
 def main() -> int:
+    if not __debug__:
+        # Every integrity check in this file is an `assert`, so -O strips all of
+        # them. That makes `verify` print "all N vector pairs verified" having
+        # verified nothing, and lets `generate` write the fixture every SDK
+        # conforms against with its input checks removed. No command in this
+        # tool is meaningful with assertions off, so refuse before dispatch
+        # rather than emit a vacuous pass or an unvalidated fixture.
+        print(
+            "FAIL: assertions disabled (-O / PYTHONOPTIMIZE) — this tool proves nothing",
+            file=sys.stderr,
+        )
+        return 1
     argv = sys.argv[1:]
     require_extras = "--require-extras" in argv
     args = [a for a in argv if a != "--require-extras"]
