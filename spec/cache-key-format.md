@@ -98,7 +98,8 @@ enforces is security-relevant (per `saas` issue #91 / SRP refactor):
 | Charset | `[a-zA-Z0-9_.:-]` only — no `/` (sub-resource routing), no `%`, no control chars. |
 | Traversal | `..` is rejected anywhere in the key. |
 | Namespace | Keys starting `ns:{namespace}:` or `nsapi:{namespace}:` must have a namespace of 1–64 chars of `[a-zA-Z0-9_-]`. Keys without either prefix scope to the `default` namespace. |
-| Write spaces | `ns:` keys are mutable only by SDK (`ck_sdk_`) API keys; `nsapi:` keys only by direct (`ck_api_`) API keys. Reads are open to both. Legacy `ck_live_` keys are exempt. |
+| Write spaces | `ns:` keys are mutable only by SDK (`ck_sdk_`) API keys; `nsapi:` keys only by direct (`ck_api_`) API keys. Reads are open to both. Legacy `ck_live_` keys predate the split and are exempt from it — they may write either class. No server-side retirement date is set for `ck_live_`. |
+| Default namespace | Keys with neither prefix (TypeScript/Rust `{ns}:{hash}`, [Interop Mode](interop-mode.md) keys, bare hashes) are an **open** write space: any key class may write them, so the intra-tenant write-space isolation above does not protect them. Per-key namespace grants still apply — an API key restricted to named namespaces must include `default` to read or write unprefixed keys. |
 
 Everything else in this document — segment count, `func:`/`args:` literals,
 hash length, metadata flags — is SDK convention for deterministic key
@@ -219,7 +220,7 @@ After key construction, the following characters are replaced:
 
 ## Test Vectors
 
-[`test-vectors/cache-keys.json`](../test-vectors/cache-keys.json) contains 10 auto-mode key vectors (`args` + `kwargs` + metadata → `expected_key`) covering primitives, mixed args/kwargs, `null`, booleans, nested dicts, and the no-namespace form. Keys were generated at top level, so the `func:` segment is `__main__.{qualname}` — cross-SDK implementations substitute their own module path; only the args-hash segment must match byte-for-byte.
+[`test-vectors/cache-keys.json`](../test-vectors/cache-keys.json) contains 10 auto-mode key vectors (`args` + `kwargs` + metadata → `expected_key`) covering primitives, mixed args/kwargs, `null`, booleans, nested dicts, and the no-namespace form. Keys were generated at top level, so the `func:` segment is `__main__.{qualname}`. These vectors are **Python-SDK-only**: the `func:` segment is language-specific, so no other SDK can reproduce these keys or share the cache entries they name. Cross-SDK conformance uses [`test-vectors/interop-mode.json`](../test-vectors/interop-mode.json) (see [Interop Mode](interop-mode.md)).
 
 Enforcement: the vectors are vendored (sha256-pinned) into cachekit-py and byte-verified against `CacheKeyGenerator` on every default CI run (`tests/unit/protocol/test_cache_key_vectors.py`). A vector failing there is a key-stability break to triage — never silently regenerate: a changed key orphans every existing cache entry and turns the fleet's hits into billed misses.
 
