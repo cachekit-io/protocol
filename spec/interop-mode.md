@@ -11,6 +11,9 @@
 > [npm](https://www.npmjs.com/package/@cachekit-io/cachekit) 0.1.3+, Rust on
 > [crates.io](https://crates.io/crates/cachekit-rs) 0.4.0+ — floors, not snapshots; consult
 > each registry or the [SDK feature matrix](../sdk-feature-matrix.md#compliance-status) for current versions.
+> Server-side: the CachekitIO validator accepts interop-format keys
+> (`{namespace}:{operation}:{args_hash}` scopes to the `default` namespace;
+> see [cache-key-format.md → Server-Side Requirements](cache-key-format.md#server-side-requirements)).
 > Design discussion: [Issue #1](https://github.com/cachekit-io/protocol/issues/1) ·
 > Test vectors: [`test-vectors/interop-mode.json`](../test-vectors/interop-mode.json) ·
 > Reference implementation: [`tools/interop-reference.py`](../tools/interop-reference.py)
@@ -375,13 +378,15 @@ bytes ([saas-api.md](saas-api.md)). Interop keys carry **no `ns:` prefix**; the
 `{namespace}` segment is an SDK-level convention, not a SaaS routing element (tenant
 isolation comes from authentication, not key parsing).
 
-> [!WARNING]
-> The deployed SaaS cache-key validator currently enforces auto-mode grammar and
-> would reject interop-format keys. Shrinking that validator to security-only checks
-> is tracked in [saas#91](https://github.com/cachekit-io/saas/issues/91) and MUST land
-> before interop mode ships against the CachekitIO backend. The interop segment
-> grammar (lowercase, no `:` beyond the two delimiters, no `/`, max 194 chars) is
-> deliberately a strict subset of what a security-only validator accepts.
+> [!NOTE]
+> The SaaS cache-key validator was shrunk to security-only checks
+> ([saas#91](https://github.com/cachekit-io/saas/issues/91), landed in
+> [saas#231](https://github.com/cachekit-io/saas/pull/231)) — the deployed validator
+> accepts interop-format keys; see
+> [cache-key-format.md → Server-Side Requirements](cache-key-format.md#server-side-requirements).
+> The interop segment grammar (lowercase, no `:` beyond the two delimiters, no `/`,
+> max 194 chars) is deliberately a strict subset of what the security-only
+> validator accepts.
 
 ---
 
