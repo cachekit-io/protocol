@@ -17,6 +17,7 @@ Usage:
 from __future__ import annotations
 
 import json
+import logging
 from pathlib import Path
 import sys
 
@@ -160,7 +161,10 @@ def verify(document: dict) -> tuple[int, str]:
         data = bytes.fromhex(v["input_hex"])
         try:
             msgpack.unpackb(data)
-        except Exception:  # noqa: BLE001 — any decode error is a conforming rejection
+        # Every msgpack-python unpack error subclasses ValueError (StackError, FormatError,
+        # ExtraData, max_*_len, incomplete input). Anything else — MemoryError, RecursionError,
+        # a crash — is the failure_mode rule being violated, so it must propagate, not count.
+        except ValueError:
             continue
         raise ValueError(f"{v['name']}: msgpack-python decoded a reject vector")
     for v in document["accept_vectors"]:
@@ -172,7 +176,7 @@ def main() -> None:
     mode = sys.argv[1] if len(sys.argv) > 1 else "verify"
     if mode == "generate":
         VECTORS.write_text(json.dumps(build(), indent=2) + "\n", encoding="utf-8")
-        print(f"wrote {VECTORS.relative_to(ROOT)}")
+        logging.info("wrote %s", VECTORS.relative_to(ROOT))
         return
     if mode != "verify":
         sys.exit(f"usage: {sys.argv[0]} [verify|generate]")
@@ -180,8 +184,9 @@ def main() -> None:
         count, leg = verify(json.loads(VECTORS.read_text(encoding="utf-8")))
     except ValueError as e:
         sys.exit(f"decode-bounds verify FAILED: {e}")
-    print(f"decode-bounds: {count} vectors OK ({leg})")
+    logging.info("decode-bounds: %d vectors OK (%s)", count, leg)
 
 
 if __name__ == "__main__":
+    logging.basicConfig(level=logging.INFO, format="%(message)s", stream=sys.stdout)
     main()
