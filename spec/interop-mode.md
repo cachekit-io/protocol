@@ -457,6 +457,11 @@ therefore:
 2. **Never pre-allocate beyond what the input can back.** Every declared element or
    byte needs at least one input byte, so a structurally incomplete document
    (Σ declared slots > input bytes − 1) MUST be rejected *without* materialising it.
+   A map pair counts as two slots (key + value). Every per-header term and the running
+   sum MUST be computed in at least 64 bits or with checked/saturating arithmetic, and
+   an overflow is itself a rejection: two `array32` headers already exceed 2³², and a
+   32-bit accumulator that wraps to a small value passes the budget
+   (`array32_sum_wraps_u32` and `map32_half_claim_wraps_u32_mul` pin the shapes).
    Do not assume a decoder is lazy: `rmp-serde` reads str/bin lazily but serde's
    `Vec<T>` visitor still pre-allocates up to 1 MiB per collection from the
    declared length. A header-only structural walk before decoding (the pre-scan in
@@ -469,7 +474,7 @@ These bounds are SDK-owned invariants, not library defaults: each SDK pins them
 explicitly and regression-tests them, so a decoder dependency bump cannot silently
 re-open the amplifier.
 [`test-vectors/decode-bounds.json`](../test-vectors/decode-bounds.json) pins the
-bytes every decoder MUST reject (10) and MUST accept (2); the same rules apply to
+bytes every decoder MUST reject (13) and MUST accept (2); the same rules apply to
 any other untrusted MessagePack decode in an SDK (auto-mode payloads after the
 envelope is unwrapped, invalidation events). The 40× residual — a *legal* payload
 still materialises far more than its byte size in language objects — is bounded by
@@ -510,13 +515,15 @@ not re-litigated by accident.
 | `error_vectors` | 9 | Inputs that MUST be rejected (NaN, +Inf and −Inf as independent vectors, int overflow/underflow, naive datetime, bad segments incl. trailing newline). The `error` text is a maintainer note, not a normative message |
 
 [`test-vectors/decode-bounds.json`](../test-vectors/decode-bounds.json) (see
-[Decode bounds](#decode-bounds)) adds 10 `reject_vectors` (nested-header bombs,
-over-claiming `array32`/`map32`/`bin32`/`str32` headers, a truncated array) and 2
+[Decode bounds](#decode-bounds)) adds 13 `reject_vectors` (nested-header bombs,
+over-claiming `array32`/`map32`/`bin32`/`str32` headers, a truncated array and map,
+two shapes that wrap 32-bit slot arithmetic) and 2
 `accept_vectors` (32-deep nesting, a fully backed `array16`) that every SDK's
 untrusted decoder MUST honour; `tools/decode-bounds-reference.py verify` checks the
 file against its recipes and, when `msgpack-python` is installed, that the real
-decoder rejects/accepts each vector (rejection only — the allocation rule is each
-SDK's own guard).
+decoder rejects/accepts each vector (rejection only — msgpack-python's default limits
+reject them, which proves each vector trips a stock decoder's limits; each SDK's explicit bound and
+no-pre-allocation guard are tested in that SDK, not here).
 
 Inputs use a tagged-JSON convention (`{"$set": …}`, `{"$float": "2.0"}`,
 `{"$int": "…"}`, `{"$datetime": "…"}`, `{"$uuid": "…"}`, `{"$bytes": "<hex>"}`)

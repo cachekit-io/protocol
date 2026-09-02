@@ -2,7 +2,7 @@
 """Reference tool for test-vectors/decode-bounds.json (untrusted-decode bounds).
 
 Normative rules and the measurements behind them: spec/interop-mode.md → Decode
-bounds. This file pins the bytes every SDK's decoder MUST reject (10) and MUST
+bounds. This file pins the bytes every SDK's decoder MUST reject (13) and MUST
 accept (2, so the bound cannot over-tighten).
 
 Usage:
@@ -10,7 +10,11 @@ Usage:
               that each vector's depth/slot tags match its arithmetic. When
               `msgpack` (msgpack-python) is importable, additionally checks the
               real decoder rejects every reject vector and accepts every accept
-              vector — rejection only; the allocation rule is each SDK's guard.
+              vector. Rejection only: msgpack-python's own default limits reject
+              them, which proves each vector trips a stock decoder's limits; each SDK's explicit bound
+              and no-pre-allocation guard are tested in that SDK, not here.
+              `--require-extras` turns a missing msgpack into a failure (CI's
+              optional-deps leg).
     generate  Rewrites the vector file from the recipes below.
 """
 
@@ -79,8 +83,20 @@ def build() -> dict:
                "A lone 5-byte array32 header claiming 2^32-1 elements.",
                "dd" + u32(0xFFFFFFFF), 1, depth=1, slots=0xFFFFFFFF, reasons=["overclaim"]),
         recipe("map32_max_claim_alone",
-               "A lone 5-byte map32 header claiming 2^32-1 pairs.",
-               "df" + u32(0xFFFFFFFF), 1, depth=1, slots=0xFFFFFFFF, reasons=["overclaim"]),
+               "A lone 5-byte map32 header claiming 2^32-1 pairs (2^33-2 slots: each pair is a key and a value).",
+               "df" + u32(0xFFFFFFFF), 1, depth=1, slots=2 * 0xFFFFFFFF, reasons=["overclaim"]),
+        recipe("array32_sum_wraps_u32",
+               "array32 claiming 2^32-1 elements whose first element is an array32 claiming 1: the declared "
+               "slots sum to exactly 2^32, which a 32-bit accumulator wraps to 0 and then passes the slot budget.",
+               "dd" + u32(0xFFFFFFFF), 1, "dd" + u32(1), depth=2, slots=0xFFFFFFFF + 1, reasons=["overclaim"]),
+        recipe("map32_half_claim_wraps_u32_mul",
+               "A lone map32 header claiming 2^31 pairs: the per-header term 2 x pairs is exactly 2^32, which a "
+               "32-bit multiply wraps to 0 before it is ever added to the budget.",
+               "df" + u32(0x80000000), 1, depth=1, slots=2 * 0x80000000, reasons=["overclaim"]),
+        recipe("fixmap_short_by_one",
+               "fixmap claiming 1 pair with the key present and the value missing: the map twin of "
+               "fixarray_short_by_one. Counting one slot per pair (instead of two) accepts it.",
+               "81", 1, "c0", depth=1, slots=2, reasons=["overclaim"]),
         recipe("bin32_overclaim",
                "bin32 header claiming 2^32-1 bytes with 1 backing byte (a 6-byte document declaring a 4 GiB buffer).",
                "c6" + u32(0xFFFFFFFF), 1, "41", depth=0, slots=0xFFFFFFFF, reasons=["overclaim"]),
@@ -107,9 +123,9 @@ def build() -> dict:
         "version": "1.0.0",
         "spec": "spec/interop-mode.md#decode-bounds",
         "generator": "tools/decode-bounds-reference.py generate (CPython stdlib)",
-        "scope": "Any untrusted MessagePack decode in any SDK: interop/v1 values, auto-mode payloads after "
-                 "the ByteStorage envelope is unwrapped, invalidation events. The bytes are plain MessagePack "
-                 "with no envelope.",
+        "scope": "Any untrusted MessagePack decode in any SDK: interop/v1 values, the ByteStorage envelope bytes "
+                 "before StorageEnvelope is materialised, auto-mode payloads after the envelope is unwrapped, "
+                 "invalidation events. The bytes are plain MessagePack with no envelope.",
         "rules": {
             "depth": f"Readers MUST bound nesting depth. The bound MUST be >= {MIN_DEPTH_FLOOR} and MUST be "
                      f"<= {MAX_DEPTH_CEILING}; every reject vector tagged 'depth' nests deeper than "
@@ -117,14 +133,17 @@ def build() -> dict:
             "overclaim": "Readers MUST NOT pre-allocate for a collection/str/bin header more than the remaining "
                          "input can back (each element or byte needs >= 1 input byte), and MUST reject a "
                          "structurally incomplete document. Every reject vector tagged 'overclaim' has "
-                         "declared_slots > input_len - 1 (the root header is the only byte that is not an element).",
+                         "declared_slots > input_len - 1 (the root header is the only byte that is not an element). "
+                         "A map pair counts as two slots (key + value). Every per-header term and the running sum "
+                         "MUST be computed in >= 64 bits or with checked/saturating arithmetic; an overflow is "
+                         "itself a rejection.",
             "failure_mode": "Rejection MUST surface as a catchable decode error that the SDK read path turns "
                             "into a cache miss (fail-closed), never an uncaught crash or an OOM abort.",
         },
         "field_notes": {
             "construction": "input = bytes.fromhex(repeat_hex) * count + bytes.fromhex(suffix_hex)",
             "nesting_depth": "collection headers along the deepest spine (str/bin count as 0)",
-            "declared_slots": "sum of every header's declared element/byte count (a nested header counts as one element of its parent)",
+            "declared_slots": "sum of every header's declared element/byte count; a map pair counts as two slots (key + value); a nested header counts as one element of its parent",
             "reject_reasons": "which rule(s) the vector violates; a maintainer note, not a normative message",
         },
         "reject_vectors": reject,
@@ -132,13 +151,13 @@ def build() -> dict:
     }
 
 
-def check(condition: bool, name: str, detail: str) -> None:
+def check(condition: bool, name: str, detail: str) -> None:  # noqa: FBT001
     """Fail closed even under ``python -O`` (asserts would be stripped)."""
     if not condition:
         raise ValueError(f"{name}: {detail}")
 
 
-def verify(document: dict) -> tuple[int, str]:
+def verify(document: dict, *, require_extras: bool = False) -> tuple[int, str]:
     fresh = build()
     check(document == fresh, "document", "vector file differs from the recipes; run `generate`")
     # input_hex / input_len are derived from `construction` by recipe(), so the equality
@@ -152,41 +171,53 @@ def verify(document: dict) -> tuple[int, str]:
         if not reasons:
             check(v["nesting_depth"] <= MIN_DEPTH_FLOOR, v["name"], "accept vector deeper than the floor")
 
+    total = len(document["reject_vectors"]) + len(document["accept_vectors"])
     try:
         import msgpack  # type: ignore[import-not-found]
     except ImportError:
-        return len(document["reject_vectors"]) + len(document["accept_vectors"]), "stdlib only (msgpack absent)"
+        if require_extras:
+            raise ValueError("--require-extras set but msgpack is not importable") from None
+        return total, "stdlib only (msgpack absent)"
 
     for v in document["reject_vectors"]:
         data = bytes.fromhex(v["input_hex"])
         try:
             msgpack.unpackb(data)
-        # Every msgpack-python unpack error subclasses ValueError (StackError, FormatError,
-        # ExtraData, max_*_len, incomplete input). Anything else — MemoryError, RecursionError,
-        # a crash — is the failure_mode rule being violated, so it must propagate, not count.
+        # unpackb surfaces every unpack failure as a ValueError (StackError, FormatError,
+        # ExtraData, max_*_len; it wraps OutOfData — the streaming Unpacker does not). Anything
+        # else is the failure_mode rule being violated, so it must fail the run, not count.
         except ValueError:
             continue
+        except (MemoryError, RecursionError) as e:
+            raise ValueError(f"{v['name']}: msgpack-python violated failure_mode ({type(e).__name__})") from e
         raise ValueError(f"{v['name']}: msgpack-python decoded a reject vector")
     for v in document["accept_vectors"]:
         msgpack.unpackb(bytes.fromhex(v["input_hex"]))
-    return len(document["reject_vectors"]) + len(document["accept_vectors"]), f"msgpack-python {msgpack.version} rejects/accepts as required"
+    return total, f"msgpack-python {msgpack.version} rejects/accepts as required"
 
 
 def main() -> None:
-    mode = sys.argv[1] if len(sys.argv) > 1 else "verify"
+    usage = f"usage: {sys.argv[0]} [verify|generate] [--require-extras]"
+    args = sys.argv[1:]
+    require_extras = "--require-extras" in args
+    modes = [a for a in args if a != "--require-extras"]
+    mode = modes[0] if modes else "verify"
+    # Fail closed on anything unexpected: a typo in the flag must not silently drop the
+    # extras requirement CI relies on, and generate has no extras to require.
+    if len(modes) > 1 or mode not in ("verify", "generate") or (require_extras and mode != "verify"):
+        sys.exit(usage)
     if mode == "generate":
         VECTORS.write_text(json.dumps(build(), indent=2) + "\n", encoding="utf-8")
         logging.info("wrote %s", VECTORS.relative_to(ROOT))
         return
-    if mode != "verify":
-        sys.exit(f"usage: {sys.argv[0]} [verify|generate]")
     try:
-        count, leg = verify(json.loads(VECTORS.read_text(encoding="utf-8")))
+        count, leg = verify(json.loads(VECTORS.read_text(encoding="utf-8")), require_extras=require_extras)
     except ValueError as e:
         sys.exit(f"decode-bounds verify FAILED: {e}")
     logging.info("decode-bounds: %d vectors OK (%s)", count, leg)
 
 
 if __name__ == "__main__":
+    # stdout, matching the pre-logging behaviour and the other tools' report lines.
     logging.basicConfig(level=logging.INFO, format="%(message)s", stream=sys.stdout)
     main()

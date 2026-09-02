@@ -264,9 +264,9 @@ bytes are therefore
 
 - A conforming reader MUST decompress every pinned vector's `compressed_data`
   to its pinned input, **and MUST enforce [Retrieve Flow](#retrieve-flow) steps
-  4, 5 and 9 while doing so.** Read-side conformance is not "the vectors pass":
+  2, 4, 5 and 9 while doing so.** Read-side conformance is not "the vectors pass":
   every pinned vector is well-formed and declares a truthful `original_size`, so
-  they evidence **none** of those bounds, and a reader that omits all three
+  they evidence **none** of those bounds, and a reader that omits all four
   decompresses all of them successfully. The vectors prove decode
   interoperability; the bounds in [Security Limits](#security-limits) are a
   separate, non-negotiable obligation that no fixture can demonstrate.
@@ -376,12 +376,13 @@ let checksum: [u8; 8] = xxh3_64(&original_data).to_be_bytes();
 > Additionally, a decoder MUST validate any declared MessagePack `bin`/array
 > length header against the remaining input bytes **before** allocating for it —
 > a 5-byte `bin32` header can otherwise declare a 4 GiB allocation from a
-> ~30-byte envelope. (Slice-based decoders such as `rmp-serde` satisfy this
-> inherently; readers that pre-allocate from length fields must check.) The
-> payload *inside* the envelope is untrusted MessagePack too — decode it under
-> the depth and allocation rules in
-> [interop-mode.md → Decode bounds](interop-mode.md#decode-bounds), pinned by
-> `test-vectors/decode-bounds.json`.
+> ~30-byte envelope. No decoder satisfies this inherently — even slice-based
+> ones pre-allocate collections from declared lengths. The envelope bytes *and*
+> the payload inside them
+> are both untrusted MessagePack — decode each under the depth and allocation
+> rules in [interop-mode.md → Decode bounds](interop-mode.md#decode-bounds),
+> pinned by `test-vectors/decode-bounds.json`, running the structural pre-scan
+> before materialising `StorageEnvelope`.
 
 | Limit | Value | Purpose |
 | :--- | ---: | :--- |
@@ -443,7 +444,8 @@ Input: raw_data (bytes), format (string, default "msgpack")
 Input: envelope_bytes
 
 1.  Validate:    envelope_bytes.length <= 512 MiB
-2.  Deserialize: envelope = msgpack_decode(envelope_bytes) as StorageEnvelope
+2.  Deserialize: pre-scan envelope_bytes (decode bounds, see Security Limits), then
+                 envelope = msgpack_decode(envelope_bytes) as StorageEnvelope
                  // accept BOTH element[0] encodings: bin AND array-of-ints
 3.  Validate:    envelope.compressed_data.length <= 512 MiB
 4.  Validate:    envelope.original_size <= 512 MiB
