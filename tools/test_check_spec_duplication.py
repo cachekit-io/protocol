@@ -41,7 +41,7 @@ def edit(rel: str, old: str, new: str, *, once: bool = True) -> Callable[[Path],
 
 # (name, mutate(root) -> None, expected_exit)
 CASES: list[tuple[str, Callable[[Path], None], int]] = [
-    ("unmodified tree", lambda root: None, 0),
+    ("unmodified tree", lambda _: None, 0),
     # --- must be CAUGHT (exit 1) ---
     (
         "one copy weakened to 32-bit (the LAB-2594 bug, re-armed)",

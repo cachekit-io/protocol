@@ -391,7 +391,7 @@ All three limits above are enforced here, and the step order is normative —
 the ratio check relies on both size caps having already passed. The check uses
 **integer-valued arithmetic** and never a floating-point *ratio*:
 
-```
+```text
 if original_size > MAX_UNCOMPRESSED:
     REJECT  // 512 MiB cap
 
@@ -439,12 +439,21 @@ floating-point ratio is the precision bypass the integer rule exists to prevent.
 > the bound: for any product `p ≥ 2³²`, `wrapped(p) = p mod 2³² < 2³² ≤ p`,
 > while `original_size` (≤ 512 MiB < 2³²) cannot itself wrap, so the direction
 > of the comparison is preserved. The failure mode is therefore **spurious
-> rejection** and not a bomb bypass — but a total one: at 4,294,968 B the
-> wrapped bound collapses to 704 B, and at the 512 MiB cap it collapses to 0.
-> Every entry whose compressed payload is ≥ 4.29 MB becomes permanently
-> unreadable on such a target — 99.2 % of the legal range, as a hard error
-> rather than a cache miss. Those payloads are legal under this specification;
-> an implementation that refuses them is non-conforming.
+> rejection** and not a bomb bypass. It is not, however, uniform: the wrapped
+> bound sweeps the whole `[0, 2³²)` range in steps of 1000 as `compressed_size`
+> grows, so it falls below the 512 MiB uncompressed cap — the only region where
+> it can reject a legal entry at all — for exactly ⅛ of each `2³²/1000 ≈ 4.29` MB
+> wrap cycle (`2²⁹/2³² = 1/8`). Elsewhere in the cycle the wrapped bound still
+> exceeds every permitted `original_size`, and the entry is accepted. Within
+> that ⅛, an entry is rejected only when its `original_size` exceeds the wrapped
+> bound; the worst positions are severe — at `compressed_size = 4,294,968` B the
+> bound collapses to 704 B, and at the 512 MiB cap to 0. Those payloads are
+> legal under this specification; an implementation that refuses them is
+> non-conforming. The two figures in this section measure different things and
+> must not be conflated: *wrapping* rejects within ⅛ of each cycle, whereas
+> *rejecting on overflow* refuses every payload past the same 4.29 MB threshold
+> — the whole 99.2 % of the legal range — which is precisely why a checked
+> multiply is not a substitute for widening the operand.
 <!-- END shared-block: ratio-product-rule -->
 
 ---

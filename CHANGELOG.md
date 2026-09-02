@@ -43,11 +43,15 @@ All notable changes to the CacheKit Protocol Specification.
 - **`spec/interop-v2.md`'s rationale corrected**: 32-bit wrapping was said to
   "silently corrupt the bound **in both directions**". It cannot. Wrapping begins
   at `⌈2³²/1000⌉ = 4,294,968` B (~4.29 MB) and can only *tighten* the bound, so
-  the failure mode is **spurious rejection**, never a bomb bypass — but a total
-  one: the wrapped bound collapses to 704 B at that threshold and to 0 at the
-  512 MiB cap, making every entry with a ≥ 4.29 MB compressed payload
-  permanently unreadable on such a target. Both documents now say so, marked
-  non-normative, and interop v2 records the corrected claim in place.
+  the failure mode is **spurious rejection**, never a bomb bypass. The rejection
+  is not uniform: the wrapped bound sweeps `[0, 2³²)` in steps of 1000, so it
+  drops below the 512 MiB cap — the only region where it can refuse a legal
+  entry — for exactly ⅛ of each 4.29 MB wrap cycle (`2²⁹/2³²`), and inside that
+  eighth only when `original_size` exceeds it. The worst positions are still
+  severe (704 B at the threshold, 0 at the 512 MiB cap). Distinct from the
+  99.2 % figure above, which measures *reject-on-overflow*, not wrapping. Both
+  documents now say so, marked non-normative, and interop v2 records the
+  corrected claim in place.
 - **New CI guard**: [`tools/check-spec-duplication.py`](tools/check-spec-duplication.py)
   compares the two copies of the rule (delimited by sentinel comments) modulo the
   operand rename, with a 9-case mutation suite
