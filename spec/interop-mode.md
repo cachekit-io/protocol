@@ -451,18 +451,17 @@ few KB of nested headers can drive hundreds of MB of transient heap (measured
 therefore:
 
 1. **Bound nesting depth.** The bound MUST be at least 32 and MUST NOT exceed 1024.
-   (Today: TypeScript 100, Rust 100 — `rmp-serde`'s 1024 default overflows a
-   2 MiB thread stack in debug builds, an uncatchable abort — Python 1024, fixed
-   by `msgpack-python`'s iterative C unpacker and not configurable. A single shared value is
+   (Today: TypeScript 100, Rust 100, Python 1024. A single shared value is
    [protocol#20](https://github.com/cachekit-io/protocol/issues/20)'s open item;
    until it is ratified, writers SHOULD keep values within 32 levels.)
 2. **Never pre-allocate beyond what the input can back.** Every declared element or
    byte needs at least one input byte, so a structurally incomplete document
    (Σ declared slots > input bytes − 1) MUST be rejected *without* materialising it.
-   Slice-based decoders that size containers lazily satisfy this inherently
-   (`rmp-serde`); decoders that pre-allocate from headers MUST validate first — a
-   header-only structural walk (`Unpacker.skip()` in `msgpack-python`, the pre-scan
-   in `cachekit-ts`) is sufficient.
+   Do not assume a decoder is lazy: `rmp-serde` reads str/bin lazily but serde's
+   `Vec<T>` visitor still pre-allocates up to 1 MiB per collection from the
+   declared length. A header-only structural walk before decoding (the pre-scan in
+   `cachekit-ts`, `Unpacker.skip()` in `cachekit-py`, `check_structure` in
+   `cachekit-rs`) is sufficient.
 3. **Fail closed, catchably.** Rejection surfaces as a decode error the SDK read
    path turns into a cache miss — never an uncaught crash or an OOM abort.
 
@@ -515,8 +514,9 @@ not re-litigated by accident.
 over-claiming `array32`/`map32`/`bin32`/`str32` headers, a truncated array) and 2
 `accept_vectors` (32-deep nesting, a fully backed `array16`) that every SDK's
 untrusted decoder MUST honour; `tools/decode-bounds-reference.py verify` checks the
-file against its recipes and, when `msgpack-python` is installed, against the real
-decoder.
+file against its recipes and, when `msgpack-python` is installed, that the real
+decoder rejects/accepts each vector (rejection only — the allocation rule is each
+SDK's own guard).
 
 Inputs use a tagged-JSON convention (`{"$set": …}`, `{"$float": "2.0"}`,
 `{"$int": "…"}`, `{"$datetime": "…"}`, `{"$uuid": "…"}`, `{"$bytes": "<hex>"}`)

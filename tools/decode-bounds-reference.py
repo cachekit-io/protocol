@@ -1,21 +1,16 @@
 #!/usr/bin/env python3
 """Reference tool for test-vectors/decode-bounds.json (untrusted-decode bounds).
 
-Why these vectors exist: a MessagePack collection header costs 1-5 bytes but can
-declare up to 2^32-1 elements, and an eager decoder pre-allocates the container
-BEFORE decoding the children. Depth-first decoding stacks those allocations, so
-a few KB of nested headers can drive hundreds of MB of transient heap (measured
-15 KB -> ~400 MB in @msgpack/msgpack 3.1.3; 10 KB -> 67 MB in msgpack-python
-1.2.1 with array32 headers claiming len(input) elements). Normative rules live
-in spec/interop-mode.md "Decode bounds"; this file pins the bytes every SDK's
-decoder MUST reject (and two it MUST accept, so the bound cannot over-tighten).
+Normative rules and the measurements behind them: spec/interop-mode.md → Decode
+bounds. This file pins the bytes every SDK's decoder MUST reject (10) and MUST
+accept (2, so the bound cannot over-tighten).
 
 Usage:
-    verify    (default) stdlib-only. Regenerates every vector from its
-              `construction` recipe and byte-compares to `input_hex`; checks the
-              declared depth / slot arithmetic. When `msgpack` (msgpack-python)
-              is importable, additionally proves the real decoder rejects every
-              reject vector and accepts every accept vector.
+    verify    (default) stdlib-only. Checks the file equals the recipes below and
+              that each vector's depth/slot tags match its arithmetic. When
+              `msgpack` (msgpack-python) is importable, additionally checks the
+              real decoder rejects every reject vector and accepts every accept
+              vector — rejection only; the allocation rule is each SDK's guard.
     generate  Rewrites the vector file from the recipes below.
 """
 
@@ -61,16 +56,17 @@ def recipe(name: str, description: str, repeat_hex: str, count: int, suffix_hex:
 def build() -> dict:
     reject = [
         recipe("nested_array16_depth_2048",
-               "2048 nested array16 headers each claiming 10 000 elements, 0 backing bytes. The LAB-2487 "
-               "amplifier shape: an eager decoder pre-allocates 10 000 slots per level before hitting EOF.",
-               "dc" + u16(10000), 2048, depth=2048, slots=2048 * 10000, reasons=["depth", "overclaim"]),
+               "2048 nested array16 headers each claiming 2000 elements, 0 backing bytes. The LAB-2487 "
+               "amplifier shape: an eager decoder pre-allocates 2000 slots per level before hitting EOF. "
+               "2000 < input_len, so a per-collection cap of len(input) does NOT reject it.",
+               "dc" + u16(2000), 2048, depth=2048, slots=2048 * 2000, reasons=["depth", "overclaim"]),
         recipe("nested_array32_input_len_depth_1100",
                "1100 nested array32 headers each claiming exactly len(input)=5500 elements. Defeats a "
                "per-collection cap of len(input): peak pre-allocation is depth x len(input) x slot size.",
                "dd" + u32(5500), 1100, depth=1100, slots=1100 * 5500, reasons=["depth", "overclaim"]),
         recipe("nested_map16_depth_2048",
                "Map twin of nested_array16_depth_2048 (map pre-allocation is typically larger per slot).",
-               "de" + u16(10000), 2048, depth=2048, slots=2048 * 10000, reasons=["depth", "overclaim"]),
+               "de" + u16(2000), 2048, depth=2048, slots=2048 * 2 * 2000, reasons=["depth", "overclaim"]),
         recipe("nested_fixarray_depth_2048_complete",
                "Structurally COMPLETE document ([[...[null]...]]) nested 2048 deep: every header is backed, "
                "so only the depth bound rejects it. Isolates the depth rule from the allocation rule.",
@@ -144,11 +140,9 @@ def check(condition: bool, name: str, detail: str) -> None:
 def verify(document: dict) -> tuple[int, str]:
     fresh = build()
     check(document == fresh, "document", "vector file differs from the recipes; run `generate`")
+    # input_hex / input_len are derived from `construction` by recipe(), so the equality
+    # above already proves them; what still needs checking is the hand-entered tags.
     for v in document["reject_vectors"] + document["accept_vectors"]:
-        c = v["construction"]
-        data = bytes.fromhex(c["repeat_hex"]) * c["count"] + bytes.fromhex(c["suffix_hex"])
-        check(data.hex() == v["input_hex"], v["name"], "input_hex does not match construction")
-        check(len(data) == v["input_len"], v["name"], "input_len mismatch")
         reasons = v.get("reject_reasons", [])
         check(("depth" in reasons) == (v["nesting_depth"] > MAX_DEPTH_CEILING), v["name"], "depth tag mismatch")
         # Slot budget: every declared element (including a nested header) costs >= 1 input
@@ -171,7 +165,7 @@ def verify(document: dict) -> tuple[int, str]:
         raise ValueError(f"{v['name']}: msgpack-python decoded a reject vector")
     for v in document["accept_vectors"]:
         msgpack.unpackb(bytes.fromhex(v["input_hex"]))
-    return len(document["reject_vectors"]) + len(document["accept_vectors"]), f"msgpack-python {msgpack.version} conformance"
+    return len(document["reject_vectors"]) + len(document["accept_vectors"]), f"msgpack-python {msgpack.version} rejects/accepts as required"
 
 
 def main() -> None:
