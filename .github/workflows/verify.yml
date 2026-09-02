@@ -61,6 +61,15 @@ jobs:
       - name: Python-frame JS cross-check (zero-dep independent reader, full round-trip)
         run: node tools/frame-crosscheck.mjs
 
+      # The >=64-bit ratio-product rule is stated in full in BOTH spec documents
+      # (an implementer reads one standalone), so the copies are guarded rather
+      # than trusted -- divergent normative text for this exact bound is the bug
+      # LAB-2594 closed. Mutation suite first, same doctrine as below.
+      - name: Ratio-product rule identical in both spec documents
+        run: |
+          python3 tools/test_check_spec_duplication.py
+          python3 tools/check-spec-duplication.py
+
       # Narrow on purpose: catches one facet of ONE of the six matrix incidents
       # listed in decisions/matrix-version-verification.md — a version in the SDK
       # Overview table stated as a snapshot, true when written and false at the
