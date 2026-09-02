@@ -431,29 +431,29 @@ Truncating integer division (`original_size / compressed_size > 1000`) accepts u
 floating-point ratio is the precision bypass the integer rule exists to prevent.
 
 > [!NOTE]
-> **Non-normative rationale — the failure direction under pointer-width
-> arithmetic is fail-closed, never a bypass.** 32-bit pointer width is a live
+> **Non-normative rationale — the *ratio product's* failure direction under
+> pointer-width arithmetic is fail-closed, never a bypass.** (This covers the
+> product only. The width of `original_size` itself is a separate obligation
+> not bound by this rule.) 32-bit pointer width is a live
 > target: cachekit-ts ships a `wasm32` build. (That build is *not* affected — it
 > computes this bound through `cachekit-core`'s `u64`.) Wrapping begins at
 > `compressed_size ≥ ⌈2³²/1000⌉ = 4,294,968` B (~4.29 MB), and it can only ever *tighten*
 > the bound: for any product `p ≥ 2³²`, `wrapped(p) = p mod 2³² < 2³² ≤ p`,
 > while `original_size` (≤ 512 MiB < 2³²) cannot itself wrap, so the direction
 > of the comparison is preserved. The failure mode is therefore **spurious
-> rejection** and not a bomb bypass. It is not, however, uniform: the wrapped
-> bound sweeps the whole `[0, 2³²)` range in steps of 1000 as `compressed_size`
-> grows, so it falls below the 512 MiB uncompressed cap — the only region where
-> it can reject a legal entry at all — for exactly ⅛ of each `2³²/1000 ≈ 4.29` MB
-> wrap cycle (`2²⁹/2³² = 1/8`). Elsewhere in the cycle the wrapped bound still
-> exceeds every permitted `original_size`, and the entry is accepted. Within
-> that ⅛, an entry is rejected only when its `original_size` exceeds the wrapped
-> bound; the worst positions are severe — at `compressed_size = 4,294,968` B the
-> bound collapses to 704 B, and at the 512 MiB cap to 0. Those payloads are
-> legal under this specification; an implementation that refuses them is
-> non-conforming. The two figures in this section measure different things and
-> must not be conflated: *wrapping* rejects within ⅛ of each cycle, whereas
-> *rejecting on overflow* refuses every payload past the same 4.29 MB threshold
-> — the whole 99.2 % of the legal range — which is precisely why a checked
-> multiply is not a substitute for widening the operand.
+> rejection**, not a bomb bypass — but a hard error rather than a cache miss,
+> and a permanent one: the wrapped bound is a pure function of
+> `compressed_size`, so an affected entry fails identically on every read. It
+> does not bite everywhere — only where the wrapped bound falls below the
+> 512 MiB cap, a density of `2²⁹/2³² = 1/8` over the legal range — but where it
+> does, the collapse is near-total: 704 B at that first threshold, 8 B at
+> `compressed_size = 115,964,117` (the wrapped bound only ever lands on
+> multiples of `gcd(1000, 2³²) = 8`), and 0 at the 512 MiB cap. Those payloads
+> are legal under this specification; an implementation that refuses them is
+> non-conforming. So is one that rejects on overflow instead of widening: that
+> refuses the entire 99.2 % of the legal range above the same threshold, and it
+> is unnecessary besides — once the two size caps have passed, the product is
+> < 2³⁹ and cannot overflow 64 bits at all.
 <!-- END shared-block: ratio-product-rule -->
 
 ---
