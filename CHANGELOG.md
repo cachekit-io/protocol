@@ -4,6 +4,28 @@ All notable changes to the CacheKit Protocol Specification.
 
 ## [Unreleased]
 
+### Interop mode — untrusted-decode bounds pinned as a cross-SDK invariant (LAB-2503)
+
+- New [`spec/interop-mode.md` → Decode bounds](spec/interop-mode.md#decode-bounds):
+  readers MUST bound nesting depth (≥ 32, ≤ 1024), MUST NOT pre-allocate beyond
+  what the input can back (Σ declared slots ≤ input bytes − 1; structurally
+  incomplete documents are rejected without being materialised), and MUST fail
+  closed with a catchable error. Motivated by the LAB-2487 measurements: nested
+  collection headers amplify a few KB of input into hundreds of MB of transient
+  heap in eager decoders (15 KB → ~400 MB in `@msgpack/msgpack`; 10 KB → 67 MB
+  in `msgpack-python` with `array32` headers claiming `len(input)` — the
+  "82 MB hard ceiling" previously reported for Python was an artifact of the
+  `array16(10000)` probe, not a property of the decoder).
+- New [`test-vectors/decode-bounds.json`](test-vectors/decode-bounds.json):
+  10 reject vectors + 2 accept vectors, generated and verified by
+  [`tools/decode-bounds-reference.py`](tools/decode-bounds-reference.py)
+  (stdlib; the optional-deps CI leg also proves `msgpack-python` conforms).
+  Vendored and CI-executed by cachekit-py and cachekit-rs.
+- [`spec/wire-format.md` → Security Limits](spec/wire-format.md#security-limits)
+  cross-references the rules for the payload inside the envelope.
+- The single shared depth value stays [protocol#20](https://github.com/cachekit-io/protocol/issues/20)'s
+  open item; the spec pins the floor/ceiling every SDK already satisfies.
+
 ### Wire format — compressed-byte reproducibility scoped per-vector (LAB-1751)
 
 - LZ4 compressed bytes are **not canonical** across conforming block encoders.

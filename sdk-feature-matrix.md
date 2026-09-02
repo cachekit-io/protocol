@@ -285,7 +285,7 @@ its spec:
 | Encryption (AES-256-GCM) | ✅ Compliant | ✅ Canonical (cachekit-core) | ✅ Compliant | ⚠️ Untested |
 | AAD v0x03 | ✅ Compliant (5 components — every auto serializer appends `original_type`; interop mode is the sole 4-component path) | ✅ Compliant (4 components) | ✅ Compliant (4 components) | ❌ Not implemented |
 | SaaS API | ✅ Compliant | ✅ Compliant (CachekitIO backend) | ✅ Compliant | ❌ Not implemented |
-| Test vectors in CI¹⁶ | ✅ interop/v1 (full set, incl. AAD + encryption through the real stack) | ✅ interop/v1 (full set) since [#33](https://github.com/cachekit-io/cachekit-rs/pull/33) | ✅ interop/v1 (full set, incl. its key vectors) + inline Python-generated AAD-construction and encryption (decrypt-Python-ciphertext) vectors | ⚠️ Pending |
+| Test vectors in CI¹⁶ | ✅ interop/v1 (full set, incl. AAD + encryption through the real stack) + decode-bounds (LAB-2503) | ✅ interop/v1 (full set) since [#33](https://github.com/cachekit-io/cachekit-rs/pull/33) + decode-bounds (LAB-2503) | ✅ interop/v1 (full set, incl. its key vectors) + inline Python-generated AAD-construction and encryption (decrypt-Python-ciphertext) vectors; decode bounds enforced ([#112](https://github.com/cachekit-io/cachekit-ts/pull/112)), `decode-bounds.json` not yet vendored | ⚠️ Pending |
 | Interop mode ([spec](spec/interop-mode.md), opt-in) | ✅ Released — PyPI 0.14.0+¹⁷ ([#220](https://github.com/cachekit-io/cachekit-py/pull/220)) | ✅ Released — crates.io 0.4.0+ ([#33](https://github.com/cachekit-io/cachekit-rs/pull/33)) | ✅ Released — npm 0.1.3+ ([#71](https://github.com/cachekit-io/cachekit-ts/pull/71)) | ❌ Not implemented |
 
 > [!NOTE]

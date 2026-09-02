@@ -377,7 +377,11 @@ let checksum: [u8; 8] = xxh3_64(&original_data).to_be_bytes();
 > length header against the remaining input bytes **before** allocating for it —
 > a 5-byte `bin32` header can otherwise declare a 4 GiB allocation from a
 > ~30-byte envelope. (Slice-based decoders such as `rmp-serde` satisfy this
-> inherently; readers that pre-allocate from length fields must check.)
+> inherently; readers that pre-allocate from length fields must check.) The
+> payload *inside* the envelope is untrusted MessagePack too — decode it under
+> the depth and allocation rules in
+> [interop-mode.md → Decode bounds](interop-mode.md#decode-bounds), pinned by
+> `test-vectors/decode-bounds.json`.
 
 | Limit | Value | Purpose |
 | :--- | ---: | :--- |
