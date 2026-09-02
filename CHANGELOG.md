@@ -4,6 +4,73 @@ All notable changes to the CacheKit Protocol Specification.
 
 ## [Unreleased]
 
+### Decompression bomb bound — one ≥ 64-bit rule, guarded in both specs (LAB-2594)
+
+- [`spec/wire-format.md`](spec/wire-format.md) § Security Limits now carries the
+  same normative obligation as
+  [`spec/interop-v2.md`](spec/interop-v2.md) § Security Limits — *"The ratio
+  product MUST be computed in **at least 64-bit unsigned integers**"* — with an
+  identical rationale block (identical text, modulo each document's operand name,
+  `compressed_size` vs `payload.length`). The bound was previously specified
+  twice with divergent normative text: interop v2 bound the integer width
+  (LAB-1135, [#53](https://github.com/cachekit-io/protocol/pull/53)), wire format
+  said nothing, so an implementer reading only wire format could legally compute
+  the product in 32-bit pointer-width arithmetic.
+- The rule now names the **operation**, not a property of the arithmetic: widen
+  the operand to ≥ 64-bit unsigned *before* multiplying. That is what defeats the
+  actual defect — `1000 * payload.len()` on `usize` is 64-bit on the author's
+  host and in 64-bit CI, and wraps only on the shipped wasm32 target, so a rule
+  phrased as "compute in ≥ 64 bits" never fires in the author's self-assessment.
+  Rust `u64`, Python `int` and JavaScript `Number` (exact below 2⁵³; the product
+  is < 2³⁹, so no `BigInt`) all satisfy it, so no fallback is offered.
+- The `if max_allowed overflows: REJECT` pseudocode is **removed**, not reworded.
+  It is not an observable event as written (Rust release-mode arithmetic wraps
+  silently, JavaScript `Number` loses precision above 2⁵³ rather than
+  overflowing, Python integers are arbitrary-precision — the repo's own
+  `tools/interop-v2-reference.py` can never take that branch), and once the
+  operand is widened the branch is unreachable anyway: the two 512 MiB caps bound
+  the product below 2³⁹. Rejecting on overflow is explicitly **not** an accepted
+  substitute for widening — at 32-bit width it would refuse 99.2 % of the legal
+  compressed-size range. Both documents now also state the caps as a normative
+  precondition of the product bound, and wire format's pseudocode enforces them
+  inline instead of leaving them to a collapsed flow section.
+- The bound MUST now be computed by **multiplication**; deriving it by division
+  is forbidden in any arithmetic. Narrowing the old blanket "no floating point"
+  rule to "no floating-point *ratio*" (needed to permit JavaScript `Number`)
+  would otherwise have sanctioned `original_size / compressed_size > 1000`, whose
+  truncation accepts up to `1000·compressed_size + (compressed_size − 1)` — a
+  looser bound than this spec permits.
+- **`spec/interop-v2.md`'s rationale corrected**: 32-bit wrapping was said to
+  "silently corrupt the bound **in both directions**". It cannot. Wrapping begins
+  at `⌈2³²/1000⌉ = 4,294,968` B (~4.29 MB) and can only *tighten* the bound, so
+  the failure mode is **spurious rejection**, never a bomb bypass — but a total
+  one: the wrapped bound collapses to 704 B at that threshold and to 0 at the
+  512 MiB cap, making every entry with a ≥ 4.29 MB compressed payload
+  permanently unreadable on such a target. Both documents now say so, marked
+  non-normative, and interop v2 records the corrected claim in place.
+- **New CI guard**: [`tools/check-spec-duplication.py`](tools/check-spec-duplication.py)
+  compares the two copies of the rule (delimited by sentinel comments) modulo the
+  operand rename, with a 9-case mutation suite
+  ([`tools/test_check_spec_duplication.py`](tools/test_check_spec_duplication.py))
+  that re-arms the LAB-2594 divergence and asserts the guard fails. Stating the
+  rule twice is deliberate — an implementer reads one document standalone — so
+  the duplication is guarded rather than trusted.
+- **No implementation change.** `cachekit-core/src/byte_storage.rs` already
+  computes `MAX_COMPRESSION_RATIO: u64 * (len as u64)` via
+  `checked_mul(…).ok_or(DecompressionBomb)?`, correct and fail-closed on every
+  target including wasm32. cachekit-ts was verified to have no JS-side ratio
+  check and to inherit that arithmetic through the Rust core on the envelope
+  decode path; a JS-only decode path, if one is ever added, would be unbounded
+  and is out of scope here. This was a spec trust bug — the documented rule was
+  weaker and vaguer than the shipped one. No limit values changed and no fixture
+  bytes were touched (no SDK re-vendors).
+- **Known gap, not closed here**: no published conformance vector can distinguish
+  a 64-bit decoder from a 32-bit wrapping one. The largest `original_size` in
+  `test-vectors/interop-v2.json` is 237 B while divergence begins at a 4,294,968 B
+  compressed payload, so a wrapping decoder passes 100 % of the suite. Closing it
+  needs a limits-only vector shape and a fixture version bump (forcing py/ts
+  re-vendors), which is out of scope for a spec-text change — filed separately.
+
 ### Wire format — compressed-byte reproducibility scoped per-vector (LAB-1751)
 
 - LZ4 compressed bytes are **not canonical** across conforming block encoders.
