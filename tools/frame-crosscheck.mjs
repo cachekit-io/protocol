@@ -161,7 +161,10 @@ function decodeDocument(b) {
 const LZ4_MAX_EXPANSION = 255;
 
 function lz4BlockDecompress(src, expectedSize) {
-  if (!Number.isSafeInteger(expectedSize) || expectedSize < 0 || expectedSize > src.length * LZ4_MAX_EXPANSION) {
+  if (!Number.isSafeInteger(expectedSize) || expectedSize < 0) {
+    throw new Error(`LZ4 declared original_size ${expectedSize} is not a non-negative safe integer`);
+  }
+  if (expectedSize > src.length * LZ4_MAX_EXPANSION) {
     throw new Error(
       `LZ4 declared original_size ${expectedSize} exceeds max expansion ceiling (${src.length} compressed bytes x ${LZ4_MAX_EXPANSION})`
     );
