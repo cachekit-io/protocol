@@ -58,8 +58,13 @@ jobs:
       - name: File-backend format verify (stdlib only)
         run: python3 tools/file-backend-reference.py
 
+      # LAB-1202: the mutation suite runs first so the lz4 allocation guard
+      # cannot silently degrade to reporting OK (same rule as the version-floors
+      # suite below).
       - name: Python-frame JS cross-check (zero-dep independent reader, full round-trip)
-        run: node tools/frame-crosscheck.mjs
+        run: |
+          node tools/test-frame-crosscheck-guard.mjs
+          node tools/frame-crosscheck.mjs
 
       # Narrow on purpose: catches one facet of ONE of the six matrix incidents
       # listed in decisions/matrix-version-verification.md — a version in the SDK
