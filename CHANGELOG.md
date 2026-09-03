@@ -36,7 +36,11 @@ All notable changes to the CacheKit Protocol Specification.
   internal caches by tenant); `fresh` + `Fresh-For: 0` documented as legal
   (final sub-second floors to `0` — serve, don't backfill); the dead
   "no expiry" emission branch removed (it failed open into pre-signal legacy
-  behavior); local deadlines SHOULD use a suspend-counting clock.
+  behavior); local deadlines SHOULD use a suspend-counting clock. The
+  revocation-propagation bound names the serving path's compounded coherence
+  windows as a summed term alongside the local bound, transit, and clock error
+  — a re-stamping tier can hand out a pre-`DELETE` copy that was never in
+  flight (CodeRabbit finding on protocol#51).
 
 ### Wire format — compressed-byte reproducibility scoped per-vector (LAB-1751)
 
