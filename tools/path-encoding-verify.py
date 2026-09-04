@@ -5,7 +5,7 @@ spec/saas-api.md § Cache-Key Path Encoding. A transmittable row's `encoded` mus
 the reference form (`quote(key, safe="")`) and decode once back to `key`; a key whose
 reference form is a reserved segment (WHATWG dot segment or route token) must be a
 `reject` row with no wire form. A mutation self-test runs first so the guard cannot
-degrade to silently reporting OK (same doctrine as tools/test_wire_format_reference.py).
+degrade to silently reporting OK, and each mutation must trip the guard it names (same doctrine as tools/test_wire_format_reference.py).
 """
 
 from __future__ import annotations
@@ -21,10 +21,10 @@ from urllib.parse import quote, unquote
 ROOT = Path(__file__).resolve().parents[1]
 VECTORS = ROOT / "test-vectors" / "path-encoding.json"
 
-# WHATWG URL Standard § 4.1: single-/double-dot path segments, ASCII case-insensitive.
-WHATWG_DOT_SEGMENTS = {".", "%2e", "..", ".%2e", "%2e.", "%2e%2e"}
-# saas router: `/v1/cache/health` is the health endpoint; a final `ttl`/`lock` selects a sub-resource.
-ROUTE_TOKENS = {"health", "ttl", "lock"}
+# spec rule 2. `.`/`..` are dot segments (the server's WHATWG parse also collapses the
+# `%2e` forms, but quote() never emits those for `.`, so only the literals can appear here);
+# `health`/`ttl`/`lock` are saas route tokens at the `/v1/cache/` level.
+RESERVED_SEGMENTS = {".", "..", "health", "ttl", "lock"}
 # A conformant alternate wire form: RFC 3986 unreserved, the five sub-delims
 # encodeURIComponent leaves raw (spec rule 4), and uppercase %HH escapes.
 ALT_SEGMENT = re.compile(r"^(?:[A-Za-z0-9._~!*'()-]|%[0-9A-F]{2})+$")
@@ -36,20 +36,16 @@ def check(condition: bool, name: str, detail: str) -> None:
         raise ValueError(f"{name}: {detail}")
 
 
-def is_reserved(segment: str) -> bool:
-    return segment.lower() in WHATWG_DOT_SEGMENTS or segment in ROUTE_TOKENS
-
-
 def verify(document: dict) -> int:
     for vector in document["vectors"]:
         key = vector["key"]
         name = repr(key)
         reference = quote(key, safe="")
         if vector.get("reject"):
-            check(is_reserved(reference), name, "reject flag on a transmittable key")
+            check(reference in RESERVED_SEGMENTS, name, "reject flag on a transmittable key")
             check(vector["encoded"] is None and vector["decoded"] is None, name, "reject row carries a wire form")
             continue
-        check(not is_reserved(reference), name, "reserved segment must be a reject row")
+        check(reference not in RESERVED_SEGMENTS, name, "reserved segment must be a reject row")
         check(vector["decoded"] == key, name, "decoded != key (interop is defined on the decoded key)")
         check(vector["encoded"] == reference, name, f"encoded {vector['encoded']!r} != reference {reference!r}")
         for alt in vector.get("encoded_alternates", []):
@@ -66,21 +62,23 @@ def self_test(document: dict) -> None:
     def set_field(key: str, field: str, value: object):
         return lambda v: row(v, key).__setitem__(field, value)
 
+    # label: (poison, substring the tripped guard's message must contain)
     mutations = {
-        "encoded drift": set_field("x/../../health", "encoded", "x/..%2F..%2Fhealth"),
-        "decoded drift": set_field("ns:key", "decoded", "ns:kex"),
-        "reject row with wire form": set_field("..", "encoded", "%2E%2E"),
-        "reject flag on transmittable key": set_field("a:..", "reject", True),
-        "reserved key not flagged": lambda v: row(v, "..").update(reject=False, encoded="%2E%2E", decoded=".."),
-        "alternate raw slash": lambda v: row(v, "f(x)!*'")["encoded_alternates"].append("f(x)!*'/"),
-        "alternate decodes elsewhere": lambda v: row(v, "f(x)!*'")["encoded_alternates"].append("f%28x%29"),
+        "encoded drift": (set_field("x/../../health", "encoded", "x/..%2F..%2Fhealth"), "!= reference"),
+        "decoded drift": (set_field("ns:key", "decoded", "ns:kex"), "decoded != key"),
+        "reject row with wire form": (set_field("..", "encoded", "%2E%2E"), "carries a wire form"),
+        "reject flag on transmittable key": (set_field("a:..", "reject", True), "reject flag on a transmittable"),
+        "reserved key not flagged": (lambda v: row(v, "..").update(reject=False, encoded="%2E%2E", decoded=".."), "must be a reject row"),
+        "alternate raw slash": (lambda v: row(v, "f(x)!*'")["encoded_alternates"].append("f(x)!*'/"), "raw reserved character"),
+        "alternate decodes elsewhere": (lambda v: row(v, "f(x)!*'")["encoded_alternates"].append("f%28x%29"), "does not decode to key"),
     }
-    for label, mutate in mutations.items():
+    for label, (mutate, expected) in mutations.items():
         poisoned = copy.deepcopy(document)
         mutate(poisoned["vectors"])
         try:
             verify(poisoned)
-        except ValueError:
+        except ValueError as exc:
+            check(expected in str(exc), "self-test", f"mutation {label!r} tripped the wrong guard: {exc}")
             continue
         raise ValueError(f"self-test: mutation {label!r} was not rejected")
 

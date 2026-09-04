@@ -9,17 +9,17 @@ All notable changes to the CacheKit Protocol Specification.
 - [`spec/saas-api.md`](spec/saas-api.md) gains a normative **Cache-Key Path
   Encoding** section. The spec documented `/v1/cache/{key}` and its `/ttl` and
   `/lock` sub-resources without saying how `{key}` is placed in the path — a
-  silence that cost three SDK tickets (cachekit-py
-  [#279](https://github.com/cachekit-io/cachekit-py/pull/279) shipped the raw
-  key unquoted, CWE-22; cachekit-ts LAB-2877 and cachekit-rs LAB-2878 carry the
-  same latent all-dot gap). Rules: the key is ONE percent-encoded segment with
+  silence that cost three SDK tickets (cachekit-py shipped the raw key
+  unquoted, CWE-22, until
+  [#279](https://github.com/cachekit-io/cachekit-py/pull/279); cachekit-ts
+  LAB-2877 and cachekit-rs LAB-2878 carry the same latent `.`/`..` gap). Rules: the key is ONE percent-encoded segment with
   only RFC 3986 unreserved characters raw (`! * ' ( )` tolerated); the server
   URL-parses under the WHATWG URL Standard, splits on raw `/`, then decodes
   exactly once and validates the decoded key; encoders may differ on the
   sub-delims because interop is defined on the **decoded** key, and every
   server-accepted key is byte-identical on the wire regardless.
 - **Reserved segments must be rejected client-side; percent-encoding cannot
-  save an all-dot key.** The filing premise — encode `.`/`..` as `%2E`/`%2E%2E`
+  save a `.` or `..` key.** The filing premise — encode `.`/`..` as `%2E`/`%2E%2E`
   — is false: the server parses the request URL under the WHATWG URL Standard,
   which treats `%2e`, `%2e%2e`, `.%2e`, `%2e.` (any case) as dot segments.
   Verified live: `GET api.cachekit.io/v1/cache/%2E%2E/health` returns the

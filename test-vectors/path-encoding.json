@@ -1,6 +1,6 @@
 {
   "version": "1.0.0",
-  "generator": "urllib.parse.quote(key, safe=\"\") — cachekit-py v0.18.0 CachekitIOBackend._encode_key (f000ba3) minus its %2E all-dot rewrite, which the server's WHATWG URL parse collapses; all-dot keys are reject rows",
+  "generator": "urllib.parse.quote(key, safe=\"\") — cachekit-py v0.18.0 CachekitIOBackend._encode_key (f000ba3) minus its `.`/`..` → %2E rewrite, which the server's WHATWG URL parse collapses; `.` and `..` are reject rows",
   "spec": "spec/saas-api.md § Cache-Key Path Encoding",
   "ci_verification": "tools/path-encoding-verify.py (stdlib only; runs in this repo's verify.yml; mutation self-test first)",
   "contract": "`encoded` is the single `{key}` path segment in the reference form (spec rule 1); `decoded` is the key the server sees after its single percent-decode and equals `key` in every transmittable row (spec rules 3-4). Rows with `reject: true` are the reserved segments of spec rule 2 (`.`, `..`, `health`, `ttl`, `lock`): a conformant client raises before building the URL, so `encoded` and `decoded` are null. `encoded_alternates` lists the other conformant wire form where `encodeURIComponent` differs (`! * ' ( )` raw); assert `encoded in [encoded] + encoded_alternates`.",
@@ -46,14 +46,14 @@
       "encoded": null,
       "decoded": null,
       "reject": true,
-      "note": "All-dot key: the plain encoding `.` is a dot segment, and `%2E` is collapsed by the server's WHATWG parse (`/v1/cache/%2E` → `/v1/cache/`). No wire form reaches the validator."
+      "note": "Dot segment: the plain encoding `.` is removed by every URL parser, and `%2E` is collapsed by the server's WHATWG parse (`/v1/cache/%2E` → `/v1/cache/`). No wire form reaches the validator."
     },
     {
       "key": "..",
       "encoded": null,
       "decoded": null,
       "reject": true,
-      "note": "All-dot key: unencoded, `/v1/cache/..` collapses to `/v1/` and `/v1/cache/../ttl` to `/v1/ttl`; `%2E%2E` is collapsed the same way by the server (`GET /v1/cache/%2E%2E/health` returns the `/v1/health` response). No wire form reaches the validator."
+      "note": "Dot segment: unencoded, `/v1/cache/..` collapses to `/v1/` and `/v1/cache/../ttl` to `/v1/ttl`; `%2E%2E` is collapsed the same way by the server (`GET /v1/cache/%2E%2E/health` returns the `/v1/health` response). No wire form reaches the validator."
     },
     {
       "key": "health",
