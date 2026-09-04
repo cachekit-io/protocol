@@ -58,6 +58,9 @@ jobs:
       - name: File-backend format verify (stdlib only)
         run: python3 tools/file-backend-reference.py
 
+      - name: Cache-key path-encoding verify (stdlib only; mutation self-test first)
+        run: python3 tools/path-encoding-verify.py
+
       - name: Python-frame JS cross-check (zero-dep independent reader, full round-trip)
         run: node tools/frame-crosscheck.mjs
 

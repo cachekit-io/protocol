@@ -67,7 +67,7 @@ layer's own store/retrieve flows are specified in
 | [spec/cache-key-format.md](spec/cache-key-format.md) | Cache key generation algorithm — Blake2b-256, argument normalization, cross-SDK key strategy |
 | [spec/wire-format.md](spec/wire-format.md) | ByteStorage envelope — LZ4 block compression, xxHash3-64 integrity, decompression bomb protection |
 | [spec/encryption.md](spec/encryption.md) | AES-256-GCM encryption, HKDF-SHA256 key derivation, AAD v0x03, counter-based nonces, key rotation |
-| [spec/saas-api.md](spec/saas-api.md) | REST API endpoints, binary wire protocol, error codes, metrics headers |
+| [spec/saas-api.md](spec/saas-api.md) | REST API endpoints, cache-key path encoding, binary wire protocol, error codes, metrics headers |
 | [spec/interop-mode.md](spec/interop-mode.md) | Cross-SDK cache sharing — language-neutral key format, canonical argument normalization *(normative; shipped opt-in in all three SDKs — see the [feature matrix](sdk-feature-matrix.md#compliance-status) for per-SDK version floors)* |
 | [spec/interop-v2.md](spec/interop-v2.md) | Interop v2 compressed-values profile — opt-in LZ4-block + AES-256-GCM cross-SDK values *(DRAFT; no SDK implements it yet)* |
 | [spec/file-backend-format.md](spec/file-backend-format.md) | Shared local File backend filename, header, expiry, and fail-closed flag negotiation |
@@ -125,7 +125,7 @@ An SDK is protocol-compliant when:
 1. [Interop-mode](spec/interop-mode.md) key generation produces identical keys for identical inputs across all languages (auto-mode keys embed language-specific function identity and are not cross-SDK by design)
 2. Interop-mode values encode and decode per the canonical vectors; where the SDK implements the ByteStorage envelope, it deserializes any spec-conformant envelope
 3. Encrypted interop-mode payloads can be decrypted by any SDK with the same master key and tenant ID
-4. SaaS API integration follows the documented endpoint contracts
+4. SaaS API integration follows the documented endpoint contracts, including [cache-key path encoding](spec/saas-api.md#cache-key-path-encoding) (`test-vectors/path-encoding.json`)
 
 Test vectors are published in [`test-vectors/`](test-vectors/) as JSON files.
 

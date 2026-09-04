@@ -1,0 +1,86 @@
+{
+  "version": "1.0.0",
+  "generator": "cachekit-py v0.17.1+ `CachekitIOBackend._encode_key` (commit f000ba3): `urllib.parse.quote(key, safe=\"\")`, then an all-dot result (`.` / `..`) has each dot rewritten to `%2E`",
+  "spec": "spec/saas-api.md § Cache-Key Path Encoding",
+  "ci_verification": "tools/path-encoding-verify.py (stdlib only; runs in this repo's verify.yml)",
+  "contract": "`encoded` is the single path segment a client sends in place of `{key}` in `/v1/cache/{key}`, `/v1/cache/{key}/ttl`, `/v1/cache/{key}/lock`. Only RFC 3986 unreserved characters (ALPHA DIGIT - . _ ~) appear raw; every other UTF-8 byte is `%HH` (uppercase). `decoded` is what the server sees after its single percent-decode and equals `key` in every row — interop is defined on the decoded key.",
+  "encoder_variance": "`encodeURIComponent` (cachekit-ts) leaves `! * ' ( )` raw where `quote(safe=\"\")` (cachekit-py) and `urlencoding::encode` (cachekit-rs) emit `%21 %2A %27 %28 %29`. Both forms are conformant: they decode to the same key. Rows carrying `encoded_alternates` list the other conformant wire form; assert `encoded in [encoded] + encoded_alternates`. Every key the server accepts (`[A-Za-z0-9_.:-]`) contains none of these characters, so accepted keys are byte-identical on the wire across all three encoders.",
+  "dot_segment_rows": "Rows with `dot_segment: true` are keys whose encoded form is a dot segment under the WHATWG URL Standard (`%2e`, `%2e%2e`, `.%2e`, `%2e.`, case-insensitive). `encoded` is the form an RFC 3986 §5.2.4 client (e.g. httpx) sends intact — it collapses only the literal `.` / `..`. A WHATWG client (fetch/undici, browsers, Cloudflare Workers, rust-url/reqwest) collapses `encoded` too, so on that stack the conformant outcome for these rows is a client-side rejection of `key` before the URL is built — there is no percent-encoding of an all-dot key that survives a WHATWG parser.",
+  "vectors": [
+    {
+      "key": "ns:test:func:__main__.get_user:args:3870b2ea5735ae639ded9450ef117768db676f037bec636503796c5b81095153:1s",
+      "encoded": "ns%3Atest%3Afunc%3A__main__.get_user%3Aargs%3A3870b2ea5735ae639ded9450ef117768db676f037bec636503796c5b81095153%3A1s",
+      "decoded": "ns:test:func:__main__.get_user:args:3870b2ea5735ae639ded9450ef117768db676f037bec636503796c5b81095153:1s",
+      "note": "Canonical 7-segment auto-mode key (test-vectors/cache-keys.json `single_integer`). Only `:` is encoded; identical bytes from all three reference encoders."
+    },
+    {
+      "key": "default:../../admin",
+      "encoded": "default%3A..%2F..%2Fadmin",
+      "decoded": "default:../../admin",
+      "note": "Embedded traversal: every `/` is `%2F`, so no `../` boundary exists for a URL parser to collapse. Server decodes once, then rejects (`/` outside charset; `..` substring)."
+    },
+    {
+      "key": "x/../../health",
+      "encoded": "x%2F..%2F..%2Fhealth",
+      "decoded": "x/../../health",
+      "note": "Traversal aimed at the `/v1/cache/health` route token. Inert once `/` is `%2F`; an encoded `%2F` never becomes a segment boundary because the router splits on raw `/` before decoding."
+    },
+    {
+      "key": "k?x=1#f",
+      "encoded": "k%3Fx%3D1%23f",
+      "decoded": "k?x=1#f",
+      "note": "Query/fragment injection: `?` and `#` MUST be encoded or the client's URL parser truncates the key and emits a query string."
+    },
+    {
+      "key": "a b",
+      "encoded": "a%20b",
+      "decoded": "a b",
+      "note": "Space is `%20` in a path segment, never `+` (that is form-encoding, which the server does not decode)."
+    },
+    {
+      "key": "100%",
+      "encoded": "100%25",
+      "decoded": "100%",
+      "note": "A literal `%` is encoded exactly once (`%25`); the server decodes once and sees `100%`. Clients MUST NOT double-encode (`%2525`)."
+    },
+    {
+      "key": ".",
+      "encoded": "%2E",
+      "decoded": ".",
+      "dot_segment": true,
+      "note": "All-dot key. `quote`/`encodeURIComponent`/`urlencoding` all leave `.` raw (RFC 3986 unreserved), and a bare `.` segment is removed by every URL parser before the request is sent. RFC 3986 stacks (httpx) send `%2E` intact; WHATWG stacks collapse `%2E` as well and MUST reject the key client-side."
+    },
+    {
+      "key": "..",
+      "encoded": "%2E%2E",
+      "decoded": "..",
+      "dot_segment": true,
+      "note": "All-dot key. Unencoded, `/v1/cache/..` collapses to `/v1/` and `/v1/cache/../ttl` to `/v1/ttl` — a different route, carrying the bearer token, never reaching the key validator. RFC 3986 stacks (httpx) send `%2E%2E` intact and the server rejects the decoded `..`; WHATWG stacks collapse `%2E%2E` as well and MUST reject the key client-side."
+    },
+    {
+      "key": "a:..",
+      "encoded": "a%3A..",
+      "decoded": "a:..",
+      "note": "Trailing dots but NOT an all-dot segment: not a dot segment under either parsing model, so the dots stay raw. Server rejects the decoded `..` substring."
+    },
+    {
+      "key": "..a",
+      "encoded": "..a",
+      "decoded": "..a",
+      "note": "Leading dots, not an all-dot segment: sent verbatim (all characters unreserved). Server rejects the decoded `..` substring."
+    },
+    {
+      "key": "ns:key",
+      "encoded": "ns%3Akey",
+      "decoded": "ns:key",
+      "note": "Minimal namespaced key: `:` → `%3A`, decoded once server-side before the namespace-shape check."
+    },
+    {
+      "key": "f(x)!*'",
+      "encoded": "f%28x%29%21%2A%27",
+      "decoded": "f(x)!*'",
+      "encoded_alternates": ["f(x)!*'"],
+      "note": "Encoder-variance row: `quote(safe=\"\")` and `urlencoding::encode` produce `encoded`; `encodeURIComponent` produces the alternate with `!*'()` raw. Both decode to `key`, both are conformant. The server rejects this key (charset), so the variance never reaches stored data."
+    }
+  ]
+}

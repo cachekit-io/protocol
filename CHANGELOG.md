@@ -4,6 +4,46 @@ All notable changes to the CacheKit Protocol Specification.
 
 ## [Unreleased]
 
+### SaaS API — cache-key path encoding specified (LAB-2879)
+
+- [`spec/saas-api.md`](spec/saas-api.md) gains a normative **Cache-Key Path
+  Encoding** section. Until now the spec documented `/v1/cache/{key}` and its
+  `/ttl` and `/lock` sub-resources without saying how `{key}` is placed in the
+  path — a silence that cost three SDK tickets (cachekit-py
+  [#279](https://github.com/cachekit-io/cachekit-py/pull/279) shipped the raw
+  key unquoted, CWE-22; cachekit-ts LAB-2877 and cachekit-rs LAB-2878 carry the
+  same latent all-dot gap). The section states: the key is ONE percent-encoded
+  path segment with only RFC 3986 unreserved characters raw; the server decodes
+  exactly once and validates the decoded key (no double-encoding, `%2F` is never
+  a segment boundary); encoders may differ on `! * ' ( )` because interop is
+  defined on the **decoded** key — and every server-accepted key is
+  byte-identical on the wire regardless.
+- **All-dot keys (`.` / `..`) are stack-dependent, and `%2E` is not a universal
+  fix.** Dot-segment removal happens in the client's URL parser before the
+  request is sent, so the server cannot compensate. RFC 3986 §5.2.4 stacks
+  (httpx) remove only the literal `.`/`..`, so cachekit-py's `%2E` rewrite is
+  sound there. WHATWG URL Standard stacks (`fetch`/undici, browsers, Workers,
+  rust-url/`reqwest`) also treat `%2e`, `%2e%2e`, `.%2e`, `%2e.` (any case) as
+  dot segments — verified empirically (Node 25 `new URL()`/`Request`) and in
+  rust-url 2.5.8 `src/parser.rs:1319-1337`. No percent-encoding of an all-dot
+  key survives such a parser; on those stacks the client MUST reject the key
+  before building the URL. Found by execution while writing the section; the
+  filing ticket's premise that `%2E%2E` suffices everywhere was false.
+- New [`test-vectors/path-encoding.json`](test-vectors/path-encoding.json):
+  `key → encoded → decoded` rows for a canonical 7-segment key, embedded `../`
+  traversals, `?#` injection, space, `%`, both all-dot keys (flagged
+  `dot_segment: true`), the inert `a:..` / `..a`, `ns:key`, and an
+  encoder-variance row carrying `encoded_alternates` for the
+  `encodeURIComponent` form. Verified in `verify.yml` by
+  [`tools/path-encoding-verify.py`](tools/path-encoding-verify.py) (stdlib;
+  pins `encoded` to the reference encoder, round-trips a single decode, rejects
+  raw `/ ? # %` and literal dot segments, and cross-checks the WHATWG
+  dot-segment flag). A mutation self-test runs first so the guard cannot
+  degrade to silently passing.
+- [`sdk-feature-matrix.md`](sdk-feature-matrix.md) Compliance Status gains a
+  path-encoding row with actual state at merge time: Python merged (`f000ba3`,
+  unreleased — latest PyPI 0.17.1); Rust and TypeScript in progress.
+
 ### Wire format — compressed-byte reproducibility scoped per-vector (LAB-1751)
 
 - LZ4 compressed bytes are **not canonical** across conforming block encoders.
