@@ -4,6 +4,44 @@ All notable changes to the CacheKit Protocol Specification.
 
 ## [Unreleased]
 
+### SaaS API — cache-key path encoding specified (LAB-2879)
+
+- [`spec/saas-api.md`](spec/saas-api.md) gains a normative **Cache-Key Path
+  Encoding** section. The spec documented `/v1/cache/{key}` and its `/ttl` and
+  `/lock` sub-resources without saying how `{key}` is placed in the path — a
+  silence that cost three SDK tickets (cachekit-py shipped the raw key
+  unquoted, CWE-22, until
+  [#279](https://github.com/cachekit-io/cachekit-py/pull/279); cachekit-ts
+  LAB-2877 and cachekit-rs LAB-2878 carry the same latent `.`/`..` gap). Rules: the key is ONE percent-encoded segment with
+  only RFC 3986 unreserved characters raw (`! * ' ( )` tolerated); the server
+  URL-parses under the WHATWG URL Standard, splits on raw `/`, then decodes
+  exactly once and validates the decoded key; encoders may differ on the
+  sub-delims because interop is defined on the **decoded** key, and every
+  server-accepted key is byte-identical on the wire regardless.
+- **Reserved segments must be rejected client-side; percent-encoding cannot
+  save a `.` or `..` key.** The filing premise — encode `.`/`..` as `%2E`/`%2E%2E`
+  — is false: the server parses the request URL under the WHATWG URL Standard,
+  which treats `%2e`, `%2e%2e`, `.%2e`, `%2e.` (any case) as dot segments.
+  Verified live: `GET api.cachekit.io/v1/cache/%2E%2E/health` returns the
+  `/v1/health` response, `/v1/cache/%2E%2E/ttl` routes as `/v1/ttl`. httpx
+  0.28.1 sends `%2E%2E` intact (RFC 3986 §5.2.4 removes only literal dots), so
+  cachekit-py's f000ba3 rewrite moves the collapse from client to server rather
+  than preventing it; Node 25 `new URL()` and rust-url 2.5.8 collapse it before
+  sending. Clients MUST reject a key whose encoded form is exactly `.`, `..`,
+  or one of the route tokens `health`, `ttl`, `lock`. Found by execution during
+  the expert-panel round on this change (bug-hunter and security agents
+  independently probed the live server).
+- New [`test-vectors/path-encoding.json`](test-vectors/path-encoding.json)
+  (15 rows: 10 transmittable with `key → encoded → decoded`, 5 `reject: true`
+  reserved segments with no wire form, one `encoded_alternates` row for the
+  `encodeURIComponent` form), CI-verified by
+  [`tools/path-encoding-verify.py`](tools/path-encoding-verify.py) (stdlib;
+  9-mutation self-test first, each mutation tripping a distinct guard).
+- [`sdk-feature-matrix.md`](sdk-feature-matrix.md) Compliance Status gains a
+  path-encoding row with actual state: all three SDKs percent-encode one
+  segment but none yet rejects the reserved segments — Python's v0.18.0 `%2E`
+  rewrite is insufficient (follow-up filed); Rust and TypeScript in progress.
+
 ### Wire format — compressed-byte reproducibility scoped per-vector (LAB-1751)
 
 - LZ4 compressed bytes are **not canonical** across conforming block encoders.

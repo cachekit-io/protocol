@@ -17,6 +17,7 @@
 - [Overview](#overview)
 - [Authentication](#authentication)
 - [Content Type](#content-type)
+- [Cache-Key Path Encoding](#cache-key-path-encoding)
 - [Cache Endpoints](#cache-endpoints)
 - [Stale-While-Revalidate](#stale-while-revalidate)
 - [Lock Endpoints](#lock-endpoints)
@@ -63,6 +64,33 @@ Content-Type: application/octet-stream
 
 > [!WARNING]
 > **Discrepancy with RFC** — The RFC (Section 6.1) describes a JSON-based API with base64-encoded values and `Content-Type: application/json`. The actual implementation uses **raw binary** `application/octet-stream` for cache values. The RFC also uses `POST` for writes; the implementation uses `PUT`. **The implementation is authoritative.**
+
+---
+
+## Cache-Key Path Encoding
+
+Every endpoint below carries the cache key as a path segment — `/v1/cache/{key}`, `/v1/cache/{key}/ttl`, `/v1/cache/{key}/lock`. The key is caller-controlled (each SDK's `key=` escape hatch accepts an arbitrary string), so how it is placed in the path is a security boundary, not a formatting detail: an unencoded key can escape `/v1/cache/` and deliver the bearer token to a different route (CWE-22 — cachekit-py shipped exactly that until [cachekit-py#279](https://github.com/cachekit-io/cachekit-py/pull/279)). MUST, MUST NOT, SHOULD and MAY are used as in RFC 2119.
+
+### Encoding rules
+
+**1. One segment, percent-encoded.** `{key}` MUST be exactly one path segment. Clients MUST percent-encode the key's UTF-8 bytes (RFC 3986 §2.1) so that only unreserved characters — `ALPHA / DIGIT / "-" / "." / "_" / "~"` — appear raw. Every other byte MUST be sent as `%HH` — the delimiters `/ ? # %`, `:` (a canonical key carries six), space (`%20`, never `+`), every byte ≥ `0x80` — with one tolerance: the sub-delims `! * ' ( )` MAY be left raw (rule 4). Hex digits SHOULD be uppercase (RFC 3986 §2.1); the server decodes either case. Reference encoders: Python `urllib.parse.quote(key, safe="")`, Rust `urlencoding::encode`, JavaScript `encodeURIComponent`.
+
+**2. Reserved segments MUST be rejected client-side.** A key of exactly `.` or `..` survives rule 1 unchanged (`.` is unreserved) and is a *dot segment*: URL parsers remove it before routing — `/v1/cache/..` becomes `/v1/`, `/v1/cache/../ttl` becomes `/v1/ttl` — so the request lands on a different route, still carrying `Authorization`, and never reaches the key validator. Percent-encoding the dots does not help. The server parses the request URL under the WHATWG URL Standard, which treats an ASCII-case-insensitive `%2e` as a single-dot segment and `%2e%2e`, `.%2e`, `%2e.` as double-dot segments (URL Standard §4.1), so `%2E%2E` is collapsed *server-side* even when the client's own parser (RFC 3986 §5.2.4, e.g. `httpx`) sent it intact; WHATWG clients (`fetch`/undici, browsers, the Workers runtime, rust-url and therefore `reqwest`) collapse it before sending. **No wire form of a `.` or `..` key reaches the validator from any client.** The literal segments `health`, `ttl` and `lock` are route tokens at this level — `/v1/cache/health` is the health endpoint, and a final `ttl` or `lock` segment selects the sub-resource — so a key encoding to one of those words is routed elsewhere or read as an empty key.
+
+Therefore clients MUST reject a key whose encoded form is exactly `.`, `..`, `health`, `ttl` or `lock` before building the URL, surfacing a client-side error; servers MUST NOT be relied on to compensate. Only an *entirely*-dot segment is a dot segment: `a:..`, `..a`, `x..y` are inert and MUST be sent per rule 1 with their dots raw. Canonical and interop keys always contain `:` and never meet this rule. Conformance tests MUST assert on the *parsed* request path (`httpx.Request.url.raw_path`, `new URL(u).pathname`, `Url::parse(u)?.path()`), not on the un-parsed template string — a template-string test passes while the traversal ships.
+
+> **Evidence (2026-09-04):** against `api.cachekit.io`, `GET /v1/cache/%2E%2E/health` returns the `/v1/health` response and `/v1/cache/%2E%2E/ttl` is routed as `/v1/ttl`, while `/v1/cache/a%3A..%2Fb/ttl` reaches the cache route. `httpx` 0.28.1 sends `%2E%2E` unchanged; Node 25 `new URL()` and rust-url 2.5.8 collapse it client-side. A fix proven on one parser is not proof for the other, and cachekit-py's `%2E` rewrite ([cachekit-py#279](https://github.com/cachekit-io/cachekit-py/pull/279), v0.18.0) moves the collapse from client to server rather than preventing it (LAB-2880).
+
+**3. The server decodes exactly once.** After the WHATWG parse of rule 2, the server splits the path on raw `/`, then percent-decodes the key segment once (`decodeURIComponent`-equivalent; a malformed escape is `400`) and validates the *decoded* key: non-empty, within an implementation-defined maximum length (the deployed cap exceeds the 250-character SDK key limit in [cache-key-format.md](cache-key-format.md#key-length-limits)), drawn from `[A-Za-z0-9_.:-]`, free of the substring `..`, and — for `ns:` / `nsapi:` keys — of the shape `{prefix}:{namespace}:{rest}` with a 1–64-character namespace drawn from `[A-Za-z0-9_-]` and a non-empty `{rest}`. Anything else is `400 Bad Request`. Consequences clients MUST honour:
+
+- Clients MUST NOT double-encode. A literal `%` in a key is sent as `%25` once; `%2525` decodes to `%25`, a different key.
+- An encoded `%2F` never becomes a segment boundary: the split on raw `/` happens *before* decoding, so `a%2Fb` reaches the validator as `a/b` and is rejected by the charset rule. A conformant client can neither traverse nor store a key containing `/`.
+
+**4. Interop is defined on the decoded key.** `encodeURIComponent` leaves the sub-delims `! * ' ( )` raw (legal `pchar` in a path segment; they decode to themselves); `quote(safe="")` and `urlencoding::encode` emit `%21 %2A %27 %28 %29`. Both forms are conformant because the server-side key is identical after the single decode. Cross-SDK key equality is therefore a property of the **decoded** key, not of the wire bytes in general — but every key the server accepts is drawn from `[A-Za-z0-9_.:-]`, on which all three reference encoders agree (`:` → `%3A`, the rest raw). Every canonical auto-mode key and every [interop-mode](interop-mode.md) key is thus byte-identical on the wire across SDKs; the variance set only ever appears in keys the server rejects.
+
+### Test vectors
+
+[`test-vectors/path-encoding.json`](../test-vectors/path-encoding.json) pins `key → encoded → decoded` in the reference form (`quote(safe="")`). Rows with `reject: true` are the reserved segments of rule 2 and carry no wire form; `encoded_alternates` lists the `encodeURIComponent` form where it differs (rule 4). Verified in this repo's CI by [`tools/path-encoding-verify.py`](../tools/path-encoding-verify.py).
 
 ---
 
