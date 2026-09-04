@@ -36,7 +36,7 @@ All notable changes to the CacheKit Protocol Specification.
   reserved segments with no wire form, one `encoded_alternates` row for the
   `encodeURIComponent` form), CI-verified by
   [`tools/path-encoding-verify.py`](tools/path-encoding-verify.py) (stdlib;
-  7-mutation self-test first, each mutation tripping a distinct guard).
+  9-mutation self-test first, each mutation tripping a distinct guard).
 - [`sdk-feature-matrix.md`](sdk-feature-matrix.md) Compliance Status gains a
   path-encoding row with actual state: all three SDKs percent-encode one
   segment but none yet rejects the reserved segments — Python's v0.18.0 `%2E`

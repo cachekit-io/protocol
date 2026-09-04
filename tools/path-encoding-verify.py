@@ -15,6 +15,7 @@ import json
 import logging
 import re
 import sys
+from collections.abc import Callable
 from pathlib import Path
 from urllib.parse import quote, unquote
 
@@ -73,7 +74,7 @@ def self_test(document: dict) -> None:
     def row(vectors: list, key: str) -> dict:
         return next(v for v in vectors if v["key"] == key)
 
-    def set_field(key: str, field: str, value: object):
+    def set_field(key: str, field: str, value: object) -> Callable[[list], None]:
         return lambda v: row(v, key).__setitem__(field, value)
 
     # label: (poison, substring the tripped guard's message must contain)
