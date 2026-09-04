@@ -13,9 +13,9 @@ from __future__ import annotations
 import copy
 import json
 import logging
-from pathlib import Path
 import re
 import sys
+from pathlib import Path
 from urllib.parse import quote, unquote
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -36,6 +36,19 @@ def check(condition: bool, name: str, detail: str) -> None:
         raise ValueError(f"{name}: {detail}")
 
 
+def decodes_to(segment: str, key: str) -> bool:
+    """True iff percent-unescaping ``segment`` yields exactly ``key`` as valid UTF-8.
+
+    ``unquote`` defaults to ``errors="replace"``, which maps a non-UTF-8 escape such as
+    ``%FF`` to U+FFFD instead of rejecting it (spec rule 1 forbids non-UTF-8 wire forms).
+    Decode strictly so an invalid escape can never masquerade as a conformant alternate.
+    """
+    try:
+        return unquote(segment, errors="strict") == key
+    except UnicodeDecodeError:
+        return False
+
+
 def verify(document: dict) -> int:
     for vector in document["vectors"]:
         key = vector["key"]
@@ -49,8 +62,9 @@ def verify(document: dict) -> int:
         check(vector["decoded"] == key, name, "decoded != key (interop is defined on the decoded key)")
         check(vector["encoded"] == reference, name, f"encoded {vector['encoded']!r} != reference {reference!r}")
         for alt in vector.get("encoded_alternates", []):
+            check(alt != vector["encoded"], name, f"alternate {alt!r} repeats the reference encoded form")
             check(ALT_SEGMENT.fullmatch(alt) is not None, name, f"alternate {alt!r} has a raw reserved character or bad %HH")
-            check(unquote(alt) == key, name, f"alternate {alt!r} does not decode to key")
+            check(decodes_to(alt, key), name, f"alternate {alt!r} does not decode to key")
     return len(document["vectors"])
 
 
@@ -71,6 +85,8 @@ def self_test(document: dict) -> None:
         "reserved key not flagged": (lambda v: row(v, "..").update(reject=False, encoded="%2E%2E", decoded=".."), "must be a reject row"),
         "alternate raw slash": (lambda v: row(v, "f(x)!*'")["encoded_alternates"].append("f(x)!*'/"), "raw reserved character"),
         "alternate decodes elsewhere": (lambda v: row(v, "f(x)!*'")["encoded_alternates"].append("f%28x%29"), "does not decode to key"),
+        "alternate repeats encoded": (lambda v: row(v, "f(x)!*'")["encoded_alternates"].append(row(v, "f(x)!*'")["encoded"]), "repeats the reference"),
+        "alternate non-utf8 escape": (lambda v: row(v, "f(x)!*'")["encoded_alternates"].append("%FF"), "does not decode to key"),
     }
     for label, (mutate, expected) in mutations.items():
         poisoned = copy.deepcopy(document)
