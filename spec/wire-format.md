@@ -445,7 +445,8 @@ Input: envelope_bytes
 
 1.  Validate:    envelope_bytes.length <= 512 MiB
 2.  Deserialize: pre-scan envelope_bytes (decode bounds, see Security Limits), then
-                 envelope = msgpack_decode(envelope_bytes) as StorageEnvelope
+                 envelope: StorageEnvelope = msgpack_decode(envelope_bytes)
+                 // typed decode, not a cast: wrong arity or element type -> Reject
                  // accept BOTH element[0] encodings: bin AND array-of-ints
 3.  Validate:    envelope.compressed_data.length <= 512 MiB
 4.  Validate:    envelope.original_size <= 512 MiB

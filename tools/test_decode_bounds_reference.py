@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import copy
 import importlib.util
+import logging
 import subprocess
 import sys
 import types
@@ -94,12 +95,12 @@ def main() -> None:
     results.append(cli_rejects("generate with extras", "generate", "--require-extras"))
 
     failures = [f for f in results if f]
-    for f in failures:
-        print("FAIL", f, file=sys.stderr)
     if failures:
-        sys.exit(1)
-    print(f"decode-bounds mutation suite: {len(results)} guards fire as required")
+        sys.exit("\n".join(f"FAIL {f}" for f in failures))  # stderr + exit 1, the tool's own fatal path
+    logging.info("decode-bounds mutation suite: %d guards fire as required", len(results))
 
 
 if __name__ == "__main__":
+    # stdout, message-only: the same handler decode-bounds-reference.py installs.
+    logging.basicConfig(level=logging.INFO, format="%(message)s", stream=sys.stdout)
     main()
