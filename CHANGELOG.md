@@ -4,6 +4,44 @@ All notable changes to the CacheKit Protocol Specification.
 
 ## [Unreleased]
 
+### SaaS API
+
+- **`X-CacheKit-Fresh-For` remaining-freshness response header (LAB-557).**
+  `GET /v1/cache/{key}` `200 OK` responses now carry the entry's remaining
+  freshness in whole seconds (server-clock delta; `0` on stale-window
+  responses; emitted on every `GET` `200 OK` — TTL is mandatory, so a
+  "no expiry" entry cannot exist; omitted only by pre-signal servers), so
+  SDK local caches (L1) can bound backfill to `min(local_ttl, fresh_for)`
+  instead of restarting the freshness clock at time-of-read — an entry read
+  near the end of its server-side window could previously be served fresh from
+  L1 for up to another full TTL, past `fresh_until` (and, with a stale-grace
+  window, past `evict_at`). The header value is a hard local service bound:
+  once elapsed, the local copy MUST NOT be served in any form (a `0` value
+  prohibits backfill entirely) — client-side stale service of server-backed
+  entries is prohibited regardless of header presence, since the client has
+  no remaining-eviction signal; the server owns the stale window through
+  `evict_at`. Additive and backward compatible: absent header =
+  legacy behavior on both sides. Not emitted on `HEAD`. Spec:
+  [saas-api.md → Remaining Freshness](spec/saas-api.md#remaining-freshness).
+  Origin: CodeRabbit outside-diff finding on
+  [cachekit-py#233](https://github.com/cachekit-io/cachekit-py/pull/233).
+- **Second panel round on the same header (LAB-2531).** The deployment-specific
+  "≤5 seconds" edge-coherence figure is dropped from the normative text — the
+  deployed tiers compose to roughly double it, and the spec now states the
+  general truth instead: coherence windows **compound** across composed tiers
+  that re-stamp rather than decay. New in the same round: servers MUST emit
+  `Cache-Control: no-store` on every response (the cache key carries no tenant,
+  so byte-identical URLs across tenants make heuristic HTTP caching
+  (RFC 9111 §4.2.2) a cross-tenant read; CacheKit-operated tiers MUST partition
+  internal caches by tenant); `fresh` + `Fresh-For: 0` documented as legal
+  (final sub-second floors to `0` — serve, don't backfill); the dead
+  "no expiry" emission branch removed (it failed open into pre-signal legacy
+  behavior); local deadlines SHOULD use a suspend-counting clock. The
+  revocation-propagation bound names the serving path's compounded coherence
+  windows as a summed term alongside the local bound, transit, and clock error
+  — a re-stamping tier can hand out a pre-`DELETE` copy that was never in
+  flight (CodeRabbit finding on protocol#51).
+
 ### Wire format — compressed-byte reproducibility scoped per-vector (LAB-1751)
 
 - LZ4 compressed bytes are **not canonical** across conforming block encoders.
