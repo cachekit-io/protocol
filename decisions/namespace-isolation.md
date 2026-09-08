@@ -188,8 +188,10 @@ charset whitelist and fall through to `default`/`open` rather than being rejecte
 by the old auto-mode grammar (verified on `saas` `main`,
 `apps/cache/src/cache-key-validator.ts` header + fall-through, 2026-09-09). The
 `interop-mode.md` WARNING that "the deployed validator … would reject
-interop-format keys" (`:378-384`) predates saas#91 and is now **stale** — its
-cleanup is part of LAB-646, not a blocker on this decision.
+interop-format keys" (`:378-384`) predates saas#91 and is now **stale**; its
+cleanup (WARNING → NOTE) ships in
+[protocol#17](https://github.com/cachekit-io/protocol/pull/17), awaiting the
+owner's merge, and is tracked under LAB-646. Neither blocks this decision.
 
 Interop is therefore a *within-tenant-shared* space: within a tenant, interop
 entries are mutually accessible regardless of their `{namespace}` segment.
