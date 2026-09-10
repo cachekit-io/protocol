@@ -58,11 +58,8 @@ def master_fingerprint(doc: dict, key_id: str) -> str:
     return ev.key_fingerprint(bytes.fromhex(entry["master_key_hex"]))
 
 
-def swap_k1_payload_for_k2(doc: dict) -> None:
-    """k1-labelled vector carrying k2's sealed bytes: decrypts, but at the wrong entry."""
-    a, b = k1(doc), k2(doc)
-    for field in ("cache_key", "aad_hex", "ciphertext_hex", "plaintext_hex"):
-        a[field] = b[field]
+# The sealed bytes and the AAD that binds them; swapping these between vectors leaves each vector's identity in place.
+PAYLOAD_FIELDS = ("cache_key", "aad_hex", "ciphertext_hex", "plaintext_hex")
 
 
 STDLIB_CASES: dict[str, Callable[[dict], None]] = {
@@ -71,13 +68,23 @@ STDLIB_CASES: dict[str, Callable[[dict], None]] = {
     "fingerprint selection blanked": lambda d: k1(d).__setitem__("key_fingerprint_hex", ""),
     "fingerprint is the MASTER key's": lambda d: k1(d).__setitem__("key_fingerprint_hex", master_fingerprint(d, "k1")),
     "fingerprint selects the other entry": lambda d: k1(d).__setitem__("key_fingerprint_hex", k2(d)["key_fingerprint_hex"]),
+    # Not isolating: the mapping and fingerprint guards also reject an unknown id, so this proves the input is
+    # rejected, not that the KEYRING_ORDER membership check alone does it.
     "encrypted_with unknown id": lambda d: k1(d).__setitem__("encrypted_with", "kx"),
-    "encrypted_with contradicts frozen name": lambda d: k1(d).__setitem__("encrypted_with", "k2"),
+    # k1's vector becomes k2's in every field but its frozen name, so only the FROZEN_KEYRING_VECTORS mapping guard
+    # can reject it. A bare encrypted_with flip is also caught by the fingerprint guard and could not detect that
+    # mapping guard's removal.
+    "encrypted_with contradicts frozen name": lambda d: k1(d).update({k: v for k, v in k2(d).items() if k != "name"}),
     "duplicate entry ids": lambda d: d["keyring"]["entries"].insert(0, copy.deepcopy(d["keyring"]["entries"][0])),
     "entry k1 missing": lambda d: d["keyring"]["entries"].pop(0),
     "entry fingerprint corrupted": lambda d: d["keyring"]["entries"][0].__setitem__("derived_key_fingerprint_hex", "00" * 16),
     "compressed as JSON int": lambda d: k1(d).__setitem__("compressed", 0),
-    "format off-registry": lambda d: k1(d).__setitem__("format", "pickle"),
+    # AAD rebuilt for the bogus format so the AAD guard passes and only the FORMAT_REGISTRY check can reject it
+    # (stdlib lane; in the seal lane the changed AAD also fails the decrypt).
+    "format off-registry": lambda d: k1(d).update(
+        format="pickle",
+        aad_hex=ev.aad_v3(d["keyring"]["tenant_id"], k1(d)["cache_key"], fmt="pickle", compressed=k1(d)["compressed"]).hex(),
+    ),
     "aad corrupted": lambda d: k1(d).__setitem__("aad_hex", "03" + k1(d)["aad_hex"][2:].replace("6b", "6c", 1)),
     "cache_key substituted": lambda d: k1(d).__setitem__("cache_key", "keyring:attacker:entry"),
     "frozen keyring vector renamed": lambda d: k1(d).__setitem__("name", "renamed"),
@@ -86,13 +93,17 @@ STDLIB_CASES: dict[str, Callable[[dict], None]] = {
 SEAL_CASES: dict[str, Callable[[dict], None]] = {
     "ciphertext corrupted": lambda d: k1(d).__setitem__("ciphertext_hex", k1(d)["ciphertext_hex"][:-2] + "00"),
     "plaintext pinned wrong": lambda d: k1(d).__setitem__("plaintext_hex", "00"),
-    "decrypts at the wrong keyring entry": swap_k1_payload_for_k2,
+    # k1-labelled vector carrying k2's sealed bytes: decrypts, but at the wrong entry, and [k2] alone accepts it.
+    "decrypts at the wrong keyring entry": lambda d: k1(d).update({f: k2(d)[f] for f in PAYLOAD_FIELDS}),
+    # The current entry carrying k1's sealed bytes: encrypted_with is KEYRING_ORDER[0], so the current-only guard is
+    # skipped and only the entry-index guard can reject it — the case above is caught by both guards.
+    "current vector sealed under retired key": lambda d: k2(d).update({f: k1(d)[f] for f in PAYLOAD_FIELDS}),
 }
 
 
 def main() -> int:
     bad = 0
-    rc, out = run(lambda d: None)
+    rc, out = run(lambda _: None)
     if rc != 0:
         print(f"FAIL baseline fixture does not verify:\n{out}")
         return 1
