@@ -4,11 +4,11 @@
 
 | | |
 | :--- | :--- |
-| **Status** | Proposed (accepted on merge) |
+| **Status** | Accepted (protocol [#34](https://github.com/cachekit-io/protocol/pull/34), 2026-07-23); implemented in all three SDKs by 2026-08-15 |
 | **Date** | 2026-07-23 |
 | **Ticket** | LAB-516 (filed by the LAB-275 cross-SDK feature-gap audit) |
 | **Normative spec** | [`spec/encryption.md` → Key Rotation (Keyring)](../spec/encryption.md#key-rotation-keyring) — the spec section owns the rules; this record owns the rationale and runbooks. |
-| **Implementation** | Not yet shipped in any SDK — tracked as LAB-516 sub-issues. `ZeroKnowledgeEncryptor::rotate_key()` returns `NotImplemented` (`cachekit-core/src/encryption/core.rs:492`). The [feature matrix](../sdk-feature-matrix.md#encryption) rotation row reads ❌ fleet-wide as of the LAB-1400 consolidation and flips per SDK only as each implementation ships. |
+| **Implementation** | Shipped. Shared decrypt helper `Keyring` in cachekit-core 0.5.0 ([cachekit-core#67](https://github.com/cachekit-io/cachekit-core/pull/67), LAB-683 — also deleted the `rotate_key()` stub, `KeyRotationState` and `RotationAwareHeader`); SDK surfaces in [cachekit-py#261](https://github.com/cachekit-io/cachekit-py/pull/261) (LAB-684), [cachekit-rs#63](https://github.com/cachekit-io/cachekit-rs/pull/63) (LAB-686) and [cachekit-ts#103](https://github.com/cachekit-io/cachekit-ts/pull/103) (LAB-685). The [feature matrix](../sdk-feature-matrix.md#encryption) rotation row reads ✅ for all three; conformance is enforced by [`tools/encryption-verify.py`](../tools/encryption-verify.py) against the keyring vectors in [`test-vectors/encryption.json`](../test-vectors/encryption.json) (LAB-687). |
 
 ---
 

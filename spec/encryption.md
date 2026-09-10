@@ -342,13 +342,17 @@ by `tools/encryption-verify.py`.
 
 ## Key Rotation (Keyring)
 
-> [!WARNING]
-> **Status: specified, not yet implemented** (decision record:
-> [decisions/key-rotation.md](../decisions/key-rotation.md), 2026-07-23;
-> implementation tracked under LAB-516). Until an SDK ships this section, rotating
-> its master key invalidates every encrypted entry — fail-open readers take misses,
-> fail-closed readers take errors. The [feature matrix](../sdk-feature-matrix.md)
-> reflects per-SDK implementation status.
+> [!NOTE]
+> **Status: shipped in Python, Rust, and TypeScript** (decision record:
+> [decisions/key-rotation.md](../decisions/key-rotation.md), 2026-07-23; LAB-516).
+> The shared decrypt helper is `cachekit_core::encryption::keyring::Keyring`
+> ([cachekit-core#67](https://github.com/cachekit-io/cachekit-core/pull/67)); the SDK
+> surfaces are [cachekit-py#261](https://github.com/cachekit-io/cachekit-py/pull/261),
+> [cachekit-rs#63](https://github.com/cachekit-io/cachekit-rs/pull/63) and
+> [cachekit-ts#103](https://github.com/cachekit-io/cachekit-ts/pull/103). An SDK that
+> does not implement this section invalidates every encrypted entry when its master
+> key rotates — fail-open readers take misses, fail-closed readers take errors. The
+> [feature matrix](../sdk-feature-matrix.md) reflects per-SDK implementation status.
 >
 > Earlier revisions of this spec described a 32-byte `RotationAwareHeader` prepended
 > to ciphertext. **That header was never written by any SDK and is not part of the
