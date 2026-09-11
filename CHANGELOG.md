@@ -41,6 +41,22 @@ All notable changes to the CacheKit Protocol Specification.
   windows as a summed term alongside the local bound, transit, and clock error
   — a re-stamping tier can hand out a pre-`DELETE` copy that was never in
   flight (CodeRabbit finding on protocol#51).
+- **Third panel round (LAB-2531 F1–F4).** Re-serving-tier and SDK rules are
+  now fail-closed rather than enumerated: a tier MUST **decay** the header and
+  MUST NOT re-stamp it (the deployed tiers already decay — zero implementation
+  cost, and a pre-`DELETE` copy's local service now ends by the entry's
+  `fresh_until`); a positive value is legal only on a `fresh`-labelled response
+  that carried a positive value; every other shape (`stale`, `0` under any
+  label, unrecognized token, missing header) is emitted as `0` with the
+  freshness label passed through unchanged; unknown remaining freshness is `0`,
+  never omitted; SDK backfill is gated on the `fresh` label. `Vary:
+  Authorization` joins `Cache-Control: no-store` as a mandatory response header
+  (independent second control against cross-tenant HTTP caching). The value
+  grammar is length-guarded — 1–7 ASCII digits, checked before the range check,
+  so a wrapping fixed-width parse cannot land an over-cap value in range.
+  `evict_at` is stated as the store's bound with the end-to-end revocation
+  bound in Remaining Freshness; *coherence window* and *signal-capable server*
+  are defined at first use.
 
 ### Wire format — compressed-byte reproducibility scoped per-vector (LAB-1751)
 
