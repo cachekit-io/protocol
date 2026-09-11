@@ -58,12 +58,13 @@ interop mode. For all of them the SDK-level "namespace" is a **client-side
 convention only**; it is invisible to server-side isolation. Concretely, within
 one tenant:
 
-- Two TS/RS apps cannot be isolated from each other by API-key namespace grants —
-  all their keys land in `default`.
-- An API key restricted to `['default']` can read and write **all** TS/RS/interop
-  traffic in the tenant.
-- Per-namespace quotas cannot scope TS/RS keys — the GLOB pattern never matches an
-  unprefixed key.
+- Two TS/RS apps whose keys are SDK-generated cannot be isolated from each other
+  by API-key namespace grants — those keys are unprefixed and all land in `default`.
+- An API key that can reach `default` (granted it, or unrestricted) can read and
+  write **all** unprefixed traffic in the tenant — TS/RS SDK-generated keys and
+  interop keys alike.
+- Per-namespace quotas cannot scope unprefixed TS/RS SDK keys — the GLOB pattern
+  never matches a key with no `ns:` prefix.
 
 This asymmetry is real, it is security-relevant, and — critically — **it is
 undocumented**. Nothing in the SDK docs or
@@ -210,14 +211,26 @@ underlying isolation gap as a recorded risk rather than closing it. State this
 everywhere the docs land (LAB-646), because "documented" must not be misread as
 "fixed":
 
-- **Namespace ACLs do not isolate non-Python apps that share a tenant.** Two
-  TS/RS/PHP/interop apps in one tenant both write `default`; a per-API-key
-  `allowed_namespaces` grant cannot separate them, and per-namespace quotas
-  cannot scope them. **The only hard isolation boundary for non-Python callers is
-  a separate tenant or a separate API key** (or, for direct-API callers, the
-  `nsapi:` write space with its opt-in re-key cost). This is the mitigation to
-  publish — not "restrict the key to `['default']`", which does not isolate
-  anything.
+- **Unprefixed SDK keys cannot be isolated within a tenant.** Two
+  TS/RS/PHP/interop apps whose keys are SDK-generated both write `default`; a
+  per-API-key `allowed_namespaces` grant cannot separate them (dropping `default`
+  from the grant denies the app its own keys), and per-namespace quotas cannot
+  scope them. The isolation that *is* available:
+  - **A separate tenant** — the only unconditional boundary. A distinct auth
+    identity is a distinct keyspace, so one tenant's `default` is not another's.
+  - **A namespace-prefixed key scoped by `allowed_namespaces`** — Python's `ns:`
+    or a direct-API `nsapi:` key carries a real `{namespace}` that the ACL gates
+    for **both reads and writes** (`validateNamespaceAccess` runs unconditionally,
+    saas `apps/cache/src/index.ts`), so a key without that namespace granted is
+    denied. This is real within-tenant isolation — but only for *prefixed* keys;
+    moving currently-unprefixed traffic onto it is the opt-in re-key (billed-miss)
+    cost noted above.
+
+  What does **not** isolate, and must not be published as if it does: a second
+  API key that still emits *unprefixed* keys (both share `default`); and the
+  `ns:`/`nsapi:` **write-space split**, which blocks cross-class *writes*
+  (cache-poisoning defence) but leaves *reads* open to both classes — a
+  write-space control, not read isolation of shared `default` data.
 - **Cross-tenant separation is single-control.** For unprefixed and interop keys
   it rests entirely on auth-layer tenant scoping, with no key-level second layer.
   LAB-644 is a live threat to that control and must not be treated as unrelated

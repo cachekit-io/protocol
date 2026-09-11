@@ -17,8 +17,9 @@ All notable changes to the CacheKit Protocol Specification.
   (TS/RS adopt `ns:` — rejected: key-stability break, billed-miss migration,
   and it still leaves interop in `default`) and option 3 (per-key
   default-namespace server override — deferred, reopenable). Interop keys stay
-  in `default` by the existing spec pin (isolation from authentication, not key
-  parsing). Documentation-only: no spec key-format change, no server change.
+  in `default` by the existing spec pin (tenant isolation comes from
+  authentication, not key parsing). Documentation-only: no spec key-format
+  change, no server change.
   **Proposed (accepted on merge)** — the epic owner's merge is the ratification.
 
 ### Wire format — compressed-byte reproducibility scoped per-vector (LAB-1751)
