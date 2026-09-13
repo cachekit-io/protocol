@@ -51,6 +51,8 @@ Authorization: Bearer ck_live_xxxxxxxxxxxxxxxxxxxxxxxxx
 
 API keys follow the format `ck_live_...` (production) or `ck_test_...` (staging). The API key implicitly scopes all operations to a tenant. Multi-tenancy is enforced server-side.
 
+**HTTP intermediary caching is prohibited.** Servers MUST emit `Cache-Control: no-store` and `Vary: Authorization` on every response. The [cache key](cache-key-format.md) carries no tenant component — tenancy rides only in the `Authorization` header — so two tenants using the same namespace, function, and arguments produce byte-identical request paths, and a shared HTTP cache applying heuristic freshness (RFC 9111 §4.2.2) to an unmarked response could serve one tenant's bytes to another. `no-store` forbids storing the response at all; `Vary: Authorization` is the independent second control — a cache that wrongly stores despite `no-store` (or RFC 9111 §3.5's rule for authenticated requests) but honors `Vary` still cannot match tenant A's copy to tenant B's request. Any CacheKit-operated serving tier that caches responses (edge, colo) MUST partition its internal cache by tenant, never by URL alone; such tiers are part of the server, not HTTP intermediaries, and these headers govern what they emit, not what they may store.
+
 ---
 
 ## Content Type
@@ -90,6 +92,35 @@ Authorization: Bearer ck_live_xxx
 | Header | Description |
 | :--- | :--- |
 | `X-CacheKit-Freshness` | `fresh` or `stale` — lowercase, case-sensitive tokens. Emitted on every `200 OK` by servers implementing [stale-while-revalidate](#stale-while-revalidate). SDKs MUST treat an absent header as `fresh` (pre-SWR servers do not emit it) and an unrecognized value as `stale` (revalidation is the conservative action). Read behavior is specified in [Stale-While-Revalidate](#stale-while-revalidate). |
+| `X-CacheKit-Fresh-For` | Remaining freshness in whole seconds. Semantics: [Remaining Freshness](#remaining-freshness). |
+
+#### Remaining Freshness
+
+> Status: **specified** (LAB-557). Origin: without a remaining-freshness signal, an SDK that backfills a local cache (L1) from a read assigns its full configured TTL from time-of-read — an entry read near the end of its server-side freshness window is then served locally as fresh for up to another full TTL, past the server's `fresh_until` (and, with a [stale-grace window](#stale-while-revalidate), potentially past `evict_at`).
+
+`X-CacheKit-Fresh-For` tells the reader how long the served value remains fresh, so local caches can bound their own service window to the server's.
+
+**Server (emission):**
+
+- A **signal-capable server** is one that implements this section. It is independent of [stale-while-revalidate](#stale-while-revalidate) support: a bounded entry has a `fresh_until` whether or not it has a stale window, so a server may emit `X-CacheKit-Fresh-For` without offering one, and a pre-signal SWR server emits `X-CacheKit-Freshness` without it.
+- Emitted on **every** `GET` `200 OK` for an entry that has a freshness bound. An entry stored without `X-CacheKit-TTL` has **no expiry** ([PUT](#put-v1cachekey)): no `fresh_until`, no remainder to report, so the header is **omitted** — the server-side bound is unbounded, `min(local_ttl, ∞)` is the SDK's configured local TTL, and that is exactly the absent-header path below. When present, the value is a non-negative integer: `max(0, floor(fresh_until − now))`, computed against the **server's clock** at response time — the client never compares server timestamps against its own clock.
+- Stale-window responses (`X-CacheKit-Freshness: stale`) carry `X-CacheKit-Fresh-For: 0` — freshness is already exhausted. `X-CacheKit-Freshness: fresh` with `X-CacheKit-Fresh-For: 0` is also legal — an entry in its final sub-second of freshness floors to `0`. The response is served to the caller normally; the `0` governs only local caching (no backfill).
+- Omitted by the store for no-expiry entries, and by pre-signal servers for everything. The client cannot tell the two apart, by design: both mean "no server-side freshness bound applies to this read" and both lead to the same SDK action (configured local TTL, fresh service only). Because absence carries that meaning, a tier that implements this section MUST NOT produce it for a copy it cannot positively confirm has no expiry — the tier rule below.
+- **Re-serving tiers** — an edge or colo cache in front of the store that answers from a copy it read earlier — are part of the server. A tier's **coherence window** is the deployment-documented maximum time it may keep serving a copy after the store has changed or deleted the entry; a tier that refreshes its copy's lifetime from the tier below rather than from the store adds its window to the path's total, so windows **compound** along the serving path and a deployment's effective window is their sum, not its largest single tier. That governs the *bytes*. The *header* follows stricter, fail-closed rules:
+  - **Decay, never re-stamp.** A tier MUST emit the remaining freshness it received (or, for a copy it populated from a write, that write's own freshness bound) minus the seconds elapsed since, flooring at `0`. It MUST NOT emit a value larger than that decayed remainder — its own copy TTL included — under any label. The deployed tiers decay, so the rule costs a conforming implementation nothing, and it keeps a pre-`DELETE` copy's local service inside the entry's `fresh_until`.
+  - **Omit only on positive knowledge of no expiry; otherwise `0`.** A tier MAY omit the header only for a copy it positively knows has no expiry: a signal-capable store below omitted it (such a store omits only for no-expiry entries), or the tier populated the copy from a write that carried no `X-CacheKit-TTL`. For every other copy whose remainder it does not know — populated without a hint, a header lost in transit, or a store below that is pre-signal and therefore omits for bounded entries too — the tier MUST emit `X-CacheKit-Fresh-For: 0`. It MUST NOT omit a header it received, nor drop it for such a copy: omission would claim "no bound" for an entry that may have one and silently restore the unbounded backfill this header exists to kill. A tier MUST therefore record at populate whether a copy is unbounded or merely unhinted; a tier that cannot tell the two apart MUST emit `0`. A tier fronting a pre-signal store is in exactly that position — it emits `0`, it does not pass the absence through; the cost is no local backfill behind that tier until the store signals, the fail-closed posture a mixed deployment should have. Whether the store below signals is a deployment fact the tier is configured with, never inferred per response.
+  - **Positive only for `fresh` + positive.** A tier MAY emit a positive value only on a response the tier below labelled exactly `X-CacheKit-Freshness: fresh` (or left unlabelled — the pre-SWR `fresh` default) and stamped with a strictly positive `X-CacheKit-Fresh-For`, and then only the decayed remainder. Every other shape — `stale`, `X-CacheKit-Fresh-For: 0` under any label, an unrecognized freshness token, or a missing `X-CacheKit-Fresh-For` on any entry not positively known to be no-expiry — MUST be emitted with `X-CacheKit-Fresh-For: 0` and its freshness label passed through unchanged (a `fresh` `0` stays `fresh`; a `stale` stays `stale`). Stamping a positive bound onto a stale, exhausted, or unknown value resurrects an expired (or revoked) entry as locally-cacheable fresh — the exact hole this header closes.
+- `HEAD` does **not** carry this header — an existence check returns no payload, so there is nothing to backfill locally (the `X-CacheKit-Freshness` label on `HEAD` remains informational, per [Stale-While-Revalidate](#stale-while-revalidate)). Correspondingly, a `HEAD` response MUST NOT create, refresh, or extend any local entry's service bound.
+
+**SDK (consumption):**
+
+- On a `GET` `200 OK` labelled `X-CacheKit-Freshness: fresh` (or unlabelled) with the header present, a local cache (L1) backfill MUST bound the entry's local lifetime to at most the header value: `min(local_ttl, fresh_for)`. A value of `0` means the entry MUST NOT be backfilled at all. A `stale` or unrecognized freshness label forbids backfill regardless of the number ([Reading a stale entry](#reading-a-stale-entry)) — a positive `X-CacheKit-Fresh-For` on a `stale` response is a server bug, not a license.
+- The header value is a hard local **service** bound, not merely a freshness bound: once it elapses, the local copy MUST NOT be served in any form — including by client-side stale-while-revalidate or any local stale-grace policy. (Serving server-returned stale bytes per [Reading a stale entry](#reading-a-stale-entry) is unaffected — this rule governs only the local copy.) **Why there is no local stale service, stated once:** the client receives no remaining-eviction signal, so a locally-stale copy could not honor the store's [`evict_at` bound](#reading-a-stale-entry) — and one is deliberately not provided, because it would let clients replicate the stale window locally, invisibly to server-side revalidation single-flight and metering. Stale service is the server's job: a subsequent read hits the server, which serves the stale window itself (`X-CacheKit-Freshness: stale`, `X-CacheKit-Fresh-For: 0`) until `evict_at`. Rules elsewhere refer back here rather than restating this.
+- Absent header on a `GET` `200 OK` = no server-side freshness bound for this read — a no-expiry entry, or a pre-signal server. Legacy behavior: the SDK's configured local TTL applies unchanged. This makes the header purely additive — old SDKs ignore it, and new SDKs against old servers behave exactly as before. Absence licenses only *fresh* service for that configured lifetime, never local stale service (above).
+- The value MUST be 1–7 ASCII digits and at most `2,592,000` (the [30-day TTL cap](#put-v1cachekey), itself seven digits). Anything else — empty, non-digit, signed, longer than seven digits, or over the cap — MUST be treated as `0` (do not extend local service — the conservative action, mirroring the unrecognized-`X-CacheKit-Freshness` → `stale` rule); a larger value is protocol-impossible, a buggy or misconfigured tier rather than a real bound. The length check MUST run first, so the range check never depends on a fixed-width integer conversion that could wrap an over-cap value back into range (a wrapping `atoi`/`strtoul` turns `4297559296` into `2,592,000`).
+- Network transit slightly overstates remaining freshness at the client (the value was computed at response time). This is accepted: the error is bounded by transit latency, the same class HTTP `Age` handling tolerates, and is negligible against whole-second granularity.
+- The local deadline SHOULD be measured against a clock that keeps counting across system suspend (wall-clock anchored, or a `CLOCK_BOOTTIME`-class monotonic source): a suspend-blind monotonic clock stops while the host sleeps and serves past the bound after resume. This is implementation guidance, not wire contract — the same clock discipline applies to all local TTL accounting.
+- An issued `fresh_for` is a snapshot, not a lease the server can recall: a later `DELETE`, or a fresh-window `PATCH /ttl` that shortens the entry, does not reach copies already backfilled — remote local caches compliantly serve until their bounded lifetime expires, and a re-serving tier may compliantly hand out a copy it cached before the `DELETE` for the rest of its coherence window ([emission](#remaining-freshness) above). `evict_at` is therefore the **store's** service bound, not an end-to-end one. Revocation propagation is bounded by the **sum** of the serving path's compounded coherence windows, the largest locally applied service bound, in-flight response transit, and clock or suspend error — a `GET` response already in flight when the `DELETE` lands is likewise still backfilled on arrival. For a bounded entry the local term is the decayed header, so it ends no later than the served entry's `fresh_until`. For a **no-expiry** entry — or any read served without the header — there is no `fresh_until`: the local term is the reader's full configured local TTL, re-anchored on every read, so a revoked no-expiry value outlives its `DELETE` by the largest local TTL in the fleet with no server-side ceiling, and a `PATCH /ttl` or `DELETE` that later bounds or removes a formerly-no-expiry entry cannot reach copies already distributed without the header. Security-sensitive caches MUST size TTL (and local TTL) to their revocation tolerance, or version their keys (see the invalidation-race note in [Semantics notes](#semantics-notes)); keys whose TTL is a revocation boundary MUST be stored with an explicit `X-CacheKit-TTL` — a no-expiry entry has no revocation tolerance to size to.
 
 ---
 
@@ -109,7 +140,7 @@ X-CacheKit-TTL: 3600
 
 | Header | Required | Description |
 | :--- | :---: | :--- |
-| `X-CacheKit-TTL` | No | Time-to-live in seconds. Positive integer, minimum 1, maximum 2,592,000 (30 days). Omit to use server default. |
+| `X-CacheKit-TTL` | No | Time-to-live in seconds. Positive integer, minimum 1, maximum 2,592,000 (30 days). Omit for **no expiry** — the entry has no `fresh_until` and no `evict_at`, is served `fresh` until deleted or overwritten, and carries no `X-CacheKit-Fresh-For`; servers MUST NOT substitute a hidden default. |
 | `X-CacheKit-Stale-TTL` | No | Stale-grace window in seconds after freshness expiry. Requires an explicit `X-CacheKit-TTL` on the same request. Validation and semantics: [Stale-While-Revalidate](#stale-while-revalidate). Pre-SWR servers ignore this header. |
 
 > [!IMPORTANT]
@@ -117,14 +148,14 @@ X-CacheKit-TTL: 3600
 >
 > | Condition | SDK Behavior | Server Behavior |
 > | :--- | :--- | :--- |
-> | TTL omitted | Use client default TTL. If no client default, omit `X-CacheKit-TTL` header. | Apply tenant default TTL. |
+> | TTL omitted | Use client default TTL. If no client default, omit `X-CacheKit-TTL` header. | Store with **no expiry**. Servers MUST NOT apply a hidden tenant default — validation must not depend on defaults clients cannot see (the same rule as `X-CacheKit-Stale-TTL`). |
 > | TTL = 0 | **Reject** — return error to caller. Zero is not a valid TTL. | **Reject** — return `400 Bad Request`. |
 > | TTL < 1 second | **Round up to 1.** Sub-second durations MUST be ceiled, never truncated to 0. | N/A (header is integer seconds). |
 > | TTL > 2,592,000 | **Reject** — return error to caller. | **Reject** — return `400 Bad Request`. |
 > | TTL negative | **Reject** — return error to caller. | **Reject** — return `400 Bad Request`. |
 > | TTL non-integer | N/A (SDK converts duration to integer seconds). | **Reject** — return `400 Bad Request`. |
 >
-> **Rationale:** TTL=0 is ambiguous across cache systems (Redis rejects it, Memcached treats it as "never expire", HTTP treats it as "immediately stale"). CacheKit defines TTL=0 as an error to prevent silent data loss or unbounded storage. Sub-second durations are ceiled to 1 rather than truncated to 0 to avoid the same ambiguity. The 30-day maximum prevents unbounded storage accumulation; longer-lived entries should use explicit renewal patterns via `PATCH /v1/cache/{key}/ttl`.
+> **Rationale:** TTL=0 is ambiguous across cache systems (Redis rejects it, Memcached treats it as "never expire", HTTP treats it as "immediately stale"). CacheKit defines TTL=0 as an error to prevent silent data loss (the Redis and HTTP readings) or an unintended no-expiry entry (the Memcached reading) — no expiry is requested by omitting the header, never by `0`. Sub-second durations are ceiled to 1 rather than truncated to 0 to avoid the same ambiguity. The 30-day maximum bounds the *value range* of a stated TTL (and with it the [`X-CacheKit-Fresh-For`](#remaining-freshness) grammar); it is not a storage-lifetime ceiling — omitting the header stores a no-expiry entry, and nothing in this spec bounds how long or how many such entries accumulate (storage hygiene is the operator's control, tracked as LAB-279). Entries that need a long but bounded life should renew explicitly via `PATCH /v1/cache/{key}/ttl`.
 >
 > **Migration:** The `X-TTL` header is deprecated. The server MUST accept both `X-CacheKit-TTL` and `X-TTL` during the transition period, preferring `X-CacheKit-TTL` when both are present. SDKs MUST send `X-CacheKit-TTL` only. The `X-TTL` header will be removed in protocol version 2.0 (targeted at SDK 1.0 milestone).
 
@@ -170,7 +201,7 @@ Authorization: Bearer ck_live_xxx
 | `200 OK` | Key exists |
 | `404 Not Found` | Key does not exist |
 
-Servers implementing [stale-while-revalidate](#stale-while-revalidate) emit the same `X-CacheKit-Freshness` response header as `GET`.
+Servers implementing [stale-while-revalidate](#stale-while-revalidate) emit the same `X-CacheKit-Freshness` response header as `GET`. `X-CacheKit-Fresh-For` is **not** emitted on `HEAD` ([Remaining Freshness](#remaining-freshness) — no payload, nothing to backfill).
 
 ---
 
@@ -197,11 +228,13 @@ evict_at    = fresh_until + stale_ttl
 | :--- | :--- |
 | `now < fresh_until` | `200 OK`, `X-CacheKit-Freshness: fresh` |
 | `fresh_until ≤ now < evict_at` | `200 OK` **with the stored bytes**, `X-CacheKit-Freshness: stale` |
-| `now ≥ evict_at` | `404 Not Found`. The server MUST NOT serve an entry past `evict_at`. |
+| `now ≥ evict_at` | `404 Not Found`. The store MUST NOT serve an entry past `evict_at`. This is the **store's** bound: copies already handed to re-serving tiers or backfilled into local caches run to their own bounded lifetimes — the end-to-end revocation bound is in [Remaining Freshness](#remaining-freshness). |
 
 All lifecycle times are computed against the **server's clock**; SDKs MUST NOT derive freshness for backed entries from their own clocks.
 
 Without `X-CacheKit-Stale-TTL` (or with `0`), `evict_at = fresh_until` and server behavior is identical to the pre-SWR protocol.
+
+Without `X-CacheKit-TTL`, the entry has **no expiry**: no `fresh_until`, no `evict_at`. It is served `200 OK` `fresh` until deleted or overwritten, never enters the stale window, and carries no `X-CacheKit-Fresh-For` ([Remaining Freshness](#remaining-freshness)). `X-CacheKit-Stale-TTL` without `X-CacheKit-TTL` is rejected ([validation](#validation)) — an entry that never expires has nothing to be stale relative to. Never expiring has two consequences a writer must weigh: the entry's revocation bound has no server-side ceiling, so read the revocation bound in [Remaining Freshness](#remaining-freshness) before storing a revocation-sensitive key without a TTL; and a copy a mispartitioned tier stores under the wrong tenant never self-heals, so the [tenant-partitioning rule](#authentication) is the only control for it.
 
 ### Validation
 
@@ -217,7 +250,7 @@ These rules are normative for both SDKs and the SaaS backend, mirroring the [TTL
 
 ### Write semantics
 
-- **`PUT` fully replaces the entry's timing metadata.** Both windows derive from the new request alone; a `PUT` that omits `X-CacheKit-Stale-TTL` (or sends `0`) leaves the entry with **no** stale window, regardless of what the previous entry had. A revalidation `PUT` therefore MUST re-send the stale window it intends to keep.
+- **`PUT` fully replaces the entry's timing metadata.** Both windows derive from the new request alone; a `PUT` that omits `X-CacheKit-Stale-TTL` (or sends `0`) leaves the entry with **no** stale window, regardless of what the previous entry had. A revalidation `PUT` therefore MUST re-send both the `X-CacheKit-TTL` and the stale window it intends to keep — omitting `X-CacheKit-TTL` on a recompute does not carry the previous bound forward, it stores a **no-expiry** entry ([PUT](#put-v1cachekey)).
 - **`PATCH /v1/cache/{key}/ttl` within the fresh window** resets `fresh_until = now + ttl` and preserves the entry's stored stale window; the combined total is re-validated against the 30-day cap.
 - **`PATCH /v1/cache/{key}/ttl` on an entry past `fresh_until` MUST return `409 Conflict`.** A stale entry regains freshness only via a `PUT` of recomputed bytes — otherwise a routine TTL-renewal job could indefinitely resurrect stale data without revalidation, defeating the `evict_at` bound.
 
@@ -228,7 +261,7 @@ On a `200` with `X-CacheKit-Freshness: stale`:
 - An SDK MUST NOT treat the response as a protocol error.
 - By default it SHOULD return the bytes to the caller immediately — a stale response is never a blocking miss.
 - An SDK MAY instead treat a stale hit as a **miss** by local policy (e.g. security-sensitive caches where TTL is a revocation boundary) and take the ordinary synchronous miss path. Such caches SHOULD NOT set `X-CacheKit-Stale-TTL` on write in the first place.
-- Local caches (L1) MUST NOT record a stale-flagged response as fresh, and local caching MUST NOT extend service of an entry past the server's `evict_at`.
+- Local caches (L1) MUST NOT backfill a stale-flagged response at all — not as fresh, not as locally-stale — regardless of any `X-CacheKit-Fresh-For` value (signal-capable servers mark these `0`; the rule holds with or without the header, and the rationale is stated once under [Remaining Freshness](#remaining-freshness)). On a response carrying [`X-CacheKit-Fresh-For`](#remaining-freshness), local caching MUST NOT extend service of an entry past the store's `evict_at` — for *fresh*-labelled reads near the freshness boundary, the header is the mechanism that lets local caches honor this bound (LAB-557). A response without it comes from a pre-signal server and follows the legacy absence rule in that section: the configured local TTL applies unchanged and may outlive `evict_at` — the origin gap the header exists to close.
 - Revalidation is triggered only by `GET`. `HEAD` freshness is informational; an existence check MUST NOT fire a background recompute.
 
 ### Revalidation flow (SDK)
@@ -254,7 +287,7 @@ An SDK that serves a stale hit and owns revalidation (the recompute is the wrapp
 - **Metering:** a stale-window `GET` is a cache **hit** (`200`) for metered-misses billing; the revalidation `PUT` is an ordinary write. In the [SDK metrics headers](#optional-metrics-headers), a stale serve increments `X-CacheKit-L2-Hits`; a background revalidation MUST NOT increment `X-CacheKit-Misses`.
 - **Invalidation race:** an explicit `DELETE /v1/cache/{key}` concurrent with an in-flight revalidation may be overwritten by the revalidation `PUT` (last-write-wins) — the same race as today's concurrent miss-path recompute. Callers that need durable invalidation must version their keys.
 - **Zero-knowledge:** no change to the wire format, ByteStorage envelope, encryption, or AAD; the value bytes remain opaque.
-- **`GET /v1/cache/{key}/ttl`:** the returned `ttl` is the remaining seconds until **eviction** (`evict_at`).
+- **`GET /v1/cache/{key}/ttl`:** the returned `ttl` is the remaining seconds until **eviction** (`evict_at`), or `null` for a no-expiry entry (mixed-reader caveat under [GET /v1/cache/{key}/ttl](#get-v1cachekeyttl)).
 - **Compatibility:** additive for servers — a pre-SWR server ignores `X-CacheKit-Stale-TTL` (the entry evicts at `fresh_until`, no freshness header is emitted) and SDK behavior is exactly pre-SWR. It is **not** transparent to mixed readers: enabling `stale_ttl` on a key affects every reader of that key, and a pre-SWR SDK will consume stale-window values as fresh (`200`, no header) where it previously saw a miss. Deployments MUST NOT enable `stale_ttl` on keys whose readers rely on hard TTL expiry (pre-SWR SDKs or security-sensitive consumers).
 
 ---
@@ -326,11 +359,12 @@ X-CacheKit-Lock-Id: uuid-string
 
 ### GET /v1/cache/{key}/ttl
 
-Get remaining TTL for a key. The returned `ttl` is the remaining seconds until **eviction** — for entries with a [stale-grace window](#stale-while-revalidate), that is `evict_at`, not `fresh_until`.
+Get remaining TTL for a key. The returned `ttl` is the remaining seconds until **eviction** — for entries with a [stale-grace window](#stale-while-revalidate), that is `evict_at`, not `fresh_until`. A **no-expiry** entry ([PUT](#put-v1cachekey)) returns `200 OK` with `{"ttl": null}`: the key exists, so `404` MUST NOT be returned for it, and `null` — not a negative sentinel — is the representation, because the field is typed as seconds and every SDK already models no expiry as its null / `None` / `Option::None`. SDKs MUST accept `null` and surface it as their no-expiry value. This is **not** transparent to readers that predate it: an SDK that asserts an integer `ttl`, or coerces a non-integer to `0`, reads an immortal key as missing or as expiring now. Deployments MUST NOT store no-expiry entries for keys whose `/ttl` readers predate `null` support — the same mixed-reader rule as `stale_ttl` ([Semantics notes](#semantics-notes)).
 
 | Status | Meaning | Response Body |
 | :---: | :--- | :--- |
 | `200 OK` | TTL returned | `{"ttl": 3542}` |
+| `200 OK` | Key exists with no expiry | `{"ttl": null}` |
 | `404 Not Found` | Key does not exist | — |
 
 ---
@@ -348,7 +382,7 @@ Content-Type: application/json
 {"ttl": 7200}
 ```
 
-The `ttl` field follows the same validation rules as `X-CacheKit-TTL`: positive integer, minimum 1, maximum 2,592,000. For entries stored with a stale-grace window, see [SWR write semantics](#write-semantics): a PATCH within the fresh window renews it; a PATCH on a stale entry MUST return `409 Conflict`.
+The `ttl` field follows the same validation rules as `X-CacheKit-TTL`: positive integer, minimum 1, maximum 2,592,000. For entries stored with a stale-grace window, see [SWR write semantics](#write-semantics): a PATCH within the fresh window renews it; a PATCH on a stale entry MUST return `409 Conflict`. A `PATCH` on a no-expiry entry is within the fresh window by definition and bounds it: `fresh_until = now + ttl`, no stale window.
 
 | Status | Meaning |
 | :---: | :--- |
