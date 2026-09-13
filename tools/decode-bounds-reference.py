@@ -154,7 +154,7 @@ def build() -> dict:
 def check(condition: bool, name: str, detail: str) -> None:  # noqa: FBT001
     """Fail closed even under ``python -O`` (asserts would be stripped)."""
     if not condition:
-        raise ValueError(f"{name}: {detail}")
+        raise ValueError(f"{name}: {detail}")  # noqa: TRY003
 
 
 def verify(document: dict, *, require_extras: bool = False) -> tuple[int, str]:
@@ -176,7 +176,7 @@ def verify(document: dict, *, require_extras: bool = False) -> tuple[int, str]:
         import msgpack  # type: ignore[import-not-found]
     except ImportError:
         if require_extras:
-            raise ValueError("--require-extras set but msgpack is not importable") from None
+            raise ValueError("--require-extras set but msgpack is not importable") from None  # noqa: TRY003
         return total, "stdlib only (msgpack absent)"
 
     for v in document["reject_vectors"]:
@@ -189,8 +189,8 @@ def verify(document: dict, *, require_extras: bool = False) -> tuple[int, str]:
         except ValueError:
             continue
         except (MemoryError, RecursionError) as e:
-            raise ValueError(f"{v['name']}: msgpack-python violated failure_mode ({type(e).__name__})") from e
-        raise ValueError(f"{v['name']}: msgpack-python decoded a reject vector")
+            raise ValueError(f"{v['name']}: msgpack-python violated failure_mode ({type(e).__name__})") from e  # noqa: TRY003
+        raise ValueError(f"{v['name']}: msgpack-python decoded a reject vector")  # noqa: TRY003
     for v in document["accept_vectors"]:
         msgpack.unpackb(bytes.fromhex(v["input_hex"]))
     return total, f"msgpack-python {msgpack.version} rejects/accepts as required"

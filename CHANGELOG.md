@@ -12,9 +12,10 @@ All notable changes to the CacheKit Protocol Specification.
   closed with a catchable error. Follow-up to the LAB-2487 measurements.
 - New [`test-vectors/decode-bounds.json`](test-vectors/decode-bounds.json)
   (13 reject + 2 accept) with [`tools/decode-bounds-reference.py`](tools/decode-bounds-reference.py)
-  and its mutation suite; to be vendored and CI-executed by
+  and its mutation suite; vendored and CI-executed by
   [cachekit-py#276](https://github.com/cachekit-io/cachekit-py/pull/276) and
-  [cachekit-rs#73](https://github.com/cachekit-io/cachekit-rs/pull/73) (both open).
+  [cachekit-rs#73](https://github.com/cachekit-io/cachekit-rs/pull/73) (merged 2026-09-13) and
+  [cachekit-ts#121](https://github.com/cachekit-io/cachekit-ts/pull/121) (open).
 - [`spec/wire-format.md` → Security Limits](spec/wire-format.md#security-limits)
   cross-references the rules for the envelope bytes and the payload inside them.
 - The single shared depth value stays [protocol#20](https://github.com/cachekit-io/protocol/issues/20)'s
