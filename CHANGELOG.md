@@ -9,8 +9,9 @@ All notable changes to the CacheKit Protocol Specification.
 - **`X-CacheKit-Fresh-For` remaining-freshness response header (LAB-557).**
   `GET /v1/cache/{key}` `200 OK` responses now carry the entry's remaining
   freshness in whole seconds (server-clock delta; `0` on stale-window
-  responses; emitted on every `GET` `200 OK` — TTL is mandatory, so a
-  "no expiry" entry cannot exist; omitted only by pre-signal servers), so
+  responses; emitted on every `GET` `200 OK` for a bounded entry; omitted for
+  no-expiry entries and by pre-signal servers — both mean "no server bound",
+  same SDK action), so
   SDK local caches (L1) can bound backfill to `min(local_ttl, fresh_for)`
   instead of restarting the freshness clock at time-of-read — an entry read
   near the end of its server-side window could previously be served fresh from
@@ -34,9 +35,8 @@ All notable changes to the CacheKit Protocol Specification.
   so byte-identical URLs across tenants make heuristic HTTP caching
   (RFC 9111 §4.2.2) a cross-tenant read; CacheKit-operated tiers MUST partition
   internal caches by tenant); `fresh` + `Fresh-For: 0` documented as legal
-  (final sub-second floors to `0` — serve, don't backfill); the dead
-  "no expiry" emission branch removed (it failed open into pre-signal legacy
-  behavior); local deadlines SHOULD use a suspend-counting clock. The
+  (final sub-second floors to `0` — serve, don't backfill); local deadlines
+  SHOULD use a suspend-counting clock. The
   revocation-propagation bound names the serving path's compounded coherence
   windows as a summed term alongside the local bound, transit, and clock error
   — a re-stamping tier can hand out a pre-`DELETE` copy that was never in
@@ -49,8 +49,8 @@ All notable changes to the CacheKit Protocol Specification.
   unlabelled — the pre-SWR `fresh` default) response that carried a positive
   value; every other shape (`stale`, `0` under any
   label, unrecognized token, missing header) is emitted as `0` with the
-  freshness label passed through unchanged; unknown remaining freshness is `0`,
-  never omitted; SDK backfill is gated on the `fresh` (or unlabelled) label.
+  freshness label passed through unchanged; a bounded entry whose remainder a
+  tier has lost is `0`, never omitted; SDK backfill is gated on the `fresh` (or unlabelled) label.
   `Vary: Authorization` joins `Cache-Control: no-store` as a mandatory response
   header (independent second control against cross-tenant HTTP caching). The
   value grammar is length-guarded — 1–7 ASCII digits, checked before the range
@@ -60,6 +60,21 @@ All notable changes to the CacheKit Protocol Specification.
   rule is scoped to responses that carry the header — a pre-signal response
   keeps the legacy local TTL, which is the origin gap the header closes;
   *coherence window* and *signal-capable server* are defined at first use.
+- **No-expiry entries admitted (LAB-557 — Ray's ruling on the Feature Design
+  review).** The spec described a tenant-default TTL that no server
+  implements: saas has stored `expires_at NULL` for an omitted
+  `X-CacheKit-TTL` since day one, and Redis, Memcached and File all admit
+  unbounded entries. `PUT` without `X-CacheKit-TTL` now means **no expiry** —
+  no `fresh_until`, no `evict_at`, served `fresh` until deleted or
+  overwritten, never stale — and servers MUST NOT substitute a hidden default.
+  `X-CacheKit-Fresh-For` is omitted for such entries (the server bound is
+  unbounded, so the SDK's configured local TTL — the absent-header path — is
+  the right bound), and the re-serving-tier rule splits into "no bound →
+  omit, mirroring the store" and "bound unknown → `0`"; a tier that cannot
+  tell the two apart MUST emit `0`. `GET /v1/cache/{key}/ttl` returns
+  `200 {"ttl": null}` for a no-expiry key — never `404`, never a negative
+  sentinel — and `PATCH /ttl` bounds it. The 30-day maximum is restated as a
+  bound on a stated TTL's value range, not a storage-lifetime ceiling.
 
 ### Wire format — compressed-byte reproducibility scoped per-vector (LAB-1751)
 
