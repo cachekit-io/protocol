@@ -69,12 +69,22 @@ All notable changes to the CacheKit Protocol Specification.
   overwritten, never stale — and servers MUST NOT substitute a hidden default.
   `X-CacheKit-Fresh-For` is omitted for such entries (the server bound is
   unbounded, so the SDK's configured local TTL — the absent-header path — is
-  the right bound), and the re-serving-tier rule splits into "no bound →
-  omit, mirroring the store" and "bound unknown → `0`"; a tier that cannot
-  tell the two apart MUST emit `0`. `GET /v1/cache/{key}/ttl` returns
-  `200 {"ttl": null}` for a no-expiry key — never `404`, never a negative
-  sentinel — and `PATCH /ttl` bounds it. The 30-day maximum is restated as a
-  bound on a stated TTL's value range, not a storage-lifetime ceiling.
+  the right bound), and the re-serving-tier rule becomes "omit only on
+  positive knowledge of no expiry; otherwise `0`": a tier may omit only when
+  a signal-capable store below omitted, or it populated the copy from a write
+  with no TTL; a tier fronting a pre-signal store emits `0` rather than
+  passing the absence through (panel round on this commit — the pass-through
+  re-opened the origin gap for bounded entries behind such a tier). `GET
+  /v1/cache/{key}/ttl` returns `200 {"ttl": null}` for a no-expiry key —
+  never `404`, never a negative sentinel — with a mixed-reader caveat for SDKs
+  that predate `null`; `PATCH /ttl` bounds it. The revocation bound is stated
+  for no-expiry entries (no `fresh_until`, so the local term is the full
+  configured local TTL with no server ceiling), revocation-sensitive keys MUST
+  carry an explicit `X-CacheKit-TTL`, and a revalidation `PUT` MUST re-send
+  the TTL as well as the stale window or it immortalizes a bounded key. The
+  30-day maximum is restated as a bound on a stated TTL's value range, not a
+  storage-lifetime ceiling — accumulation of no-expiry entries is unbounded by
+  this spec (hygiene tracked as LAB-279).
 
 ### Wire format — compressed-byte reproducibility scoped per-vector (LAB-1751)
 
