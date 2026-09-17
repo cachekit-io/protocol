@@ -11,10 +11,13 @@ All notable changes to the CacheKit Protocol Specification.
   `cache.secure.wrap()` and `cache.withExecutionContext(ctx).secure.wrap()` now
   throw `ConfigurationError` at wrap time on any instance without `encryption`
   configured ([cachekit-ts#123](https://github.com/cachekit-io/cachekit-ts/pull/123));
-  before, both were unconditional aliases for `wrap()` that stored plaintext
-  (CWE-311). All three SDKs now refuse a missing key on the secure entry point —
-  py raises at decoration time, rs `secure()` returns `Err`, ts throws at wrap
-  time — with no opt-in to run unencrypted in any of them. The "Intent-preset
+  before, both were unconditional aliases for `wrap()`, so on an instance
+  without configured encryption a "secure" registration stored plaintext
+  (CWE-311) — on an encrypted instance they always encrypted. All three SDKs
+  now refuse a missing key on the secure entry point — py raises at decoration
+  time, rs `secure()` returns `Err`, ts throws at wrap time — with no opt-in to
+  run the secure entry point unencrypted in any of them; ts callers who want
+  plaintext call `wrap()` explicitly. The "Intent-preset
   semantics" warning is rewritten to the enforced contract, the "cells that
   reversed" summary and the Rust builder-stub cross-reference are updated to
   match, and the stale `cache-core.ts:832` / `:873` / `:486`, `cache.ts:87` and
