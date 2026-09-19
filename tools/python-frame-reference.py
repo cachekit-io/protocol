@@ -26,12 +26,22 @@ Modes:
               legacy (array-of-ints) wheel rebuilds the legacy original — the
               vector a wheel cannot produce is simply not touched. Every
               generated frame is round-tripped through the real cachekit-py
-              deserialization path before being written, and the default-path
-              pair is checked to differ ONLY in envelope encoding — a
-              mismatch prints a stderr warning (not a hard failure: the
-              legacy wheel is gone, so a legitimate write-path change can
-              never be reflected in that frozen vector, and treating the
-              divergence as fatal would deadlock `generate` forever).
+              deserialization path before being written, and every vector
+              declaring `twin_of` is checked against its base (stderr warning
+              only — see "Twin declarations" below; `verify` is the gate).
+
+Twin declarations (LAB-3967):
+    A frame vector may carry `"twin_of": "<vector name>"` — the operator's
+    standing claim that it differs from the named base ONLY in envelope
+    encoding (value, frame-prefix bytes, compressed bytes, checksum, size,
+    format and inner msgpack all identical). The claim lives in the fixture,
+    not in this code, because from the bytes alone "the wheel drifted" and
+    "the protocol legitimately moved while the legacy vector stayed frozen"
+    are indistinguishable. `generate` never adds or removes the field; a
+    rebuild carries it over. When the default write path genuinely moves,
+    the exit is to drop `twin_of` from the regenerated vector in the same
+    commit — a reviewable fixture diff — and `verify` stays green with every
+    byte comparison intact and both encodings still observed.
 
 The independent parser below implements exactly the layout documented in
 spec/wire-format.md:
@@ -57,6 +67,17 @@ VECTOR_PATH = Path(__file__).resolve().parent.parent / "test-vectors" / "python-
 MAGIC = b"CK"
 FRAME_VERSION = 3
 PREFIX_LEN = 7  # magic(2) + version(1) + header_len(4)
+
+# Generator-owned text for the `_bin` default-path vector. It describes; it makes
+# no twin claim — that claim is the operator-owned `twin_of` field, so dropping
+# the field is a durable exit the next `generate` cannot revert by rewriting text.
+BIN_DESCRIPTION = (
+    "Default @cache write (StandardSerializer, integrity on) from a protocol 1.1 wheel: the "
+    "ByteStorage envelope's compressed_data is msgpack bin (serde_bytes) instead of the legacy "
+    "array of integers. Readers MUST accept both encodings; the legacy encoding stays pinned by "
+    "default_saas_write_msgpack_bytestorage. When this vector carries 'twin_of', that field — not "
+    "this text — is the claim that the two differ only in envelope encoding, and verify enforces it."
+)
 
 
 def _load_wire_format_codec() -> ModuleType:
@@ -116,10 +137,61 @@ def parse_frame(frame: bytes) -> tuple[dict, bytes]:
     return header, frame[header_end:]
 
 
+_TWIN_ENVELOPE_FIELDS = ("compressed_data_hex", "checksum_hex", "original_size", "format", "inner_msgpack_hex")
+
+
+def _frame_prefix_hex(vec: dict) -> str:
+    """Everything before the payload: magic, version, header length, header bytes."""
+    return vec["frame_hex"][: len(vec["frame_hex"]) - len(vec["expected_payload_hex"])]
+
+
+def _twin_divergence(twin: dict, by_name: dict[str, dict]) -> str | None:
+    """Why `twin` is not an encoding-only twin of its `twin_of` base; None when the claim holds.
+
+    "Differs ONLY in envelope encoding" entails "differs in envelope encoding":
+    a declaration pointing at itself, or at a same-encoding copy under another
+    name, is vacuous and fails here rather than passing green. The frame prefix
+    is compared at the BYTE level, not as parsed JSON — a wheel that reorders or
+    reformats the header JSON is a byte-level non-twin that a dict compare would
+    wave through. Shared by verify() (hard fail) and generate() (warning), so
+    the two can never drift apart on what "twin" means.
+    """
+    base = by_name.get(twin["twin_of"])
+    if base is None:
+        return f"twin_of names unknown vector {twin['twin_of']!r}"
+    for side in (twin, base):
+        missing = [k for k in ("value_json", "expected_payload_hex", "payload_envelope") if k not in side]
+        if missing:
+            return f"twin_of requires envelope vectors on both sides; {side['name']!r} lacks {', '.join(missing)}"
+    twin_env, base_env = twin["payload_envelope"], base["payload_envelope"]
+    if twin_env.get("envelope_encoding") == base_env.get("envelope_encoding"):
+        return (
+            f"declared twin_of {base['name']!r} but both carry envelope_encoding "
+            f"{twin_env.get('envelope_encoding')!r} — a twin must differ from its base in encoding"
+        )
+    mismatches: list[str] = []
+    if twin["value_json"] != base["value_json"]:
+        mismatches.append("value_json")
+    if _frame_prefix_hex(twin) != _frame_prefix_hex(base):
+        mismatches.append("frame prefix (magic/version/header bytes)")
+    mismatches += [
+        f"payload_envelope.{field}" for field in _TWIN_ENVELOPE_FIELDS if twin_env[field] != base_env[field]
+    ]
+    if not mismatches:
+        return None
+    return f"declared twin_of {base['name']!r} but differs beyond envelope encoding: " + ", ".join(mismatches)
+
+
 def verify() -> int:
     doc = _load_fixture()
     failures = 0
     observed_encodings: set[str] = set()
+    by_name = {v["name"]: v for v in doc["frame_vectors"]}
+    if len(by_name) != len(doc["frame_vectors"]):
+        # twin_of resolves by name; a duplicate would silently shadow the real
+        # base. _upsert refuses duplicates at generate time — verify must too.
+        print("FAIL fixture: duplicate frame vector names")
+        failures += 1
 
     for vec in doc["frame_vectors"]:
         name = vec["name"]
@@ -191,6 +263,13 @@ def verify() -> int:
                 vec_failed += 1
             if payload[: det["checksum_len"]].hex() != det["checksum_hex"]:
                 print(f"FAIL {name}: Arrow envelope checksum prefix mismatch")
+                vec_failed += 1
+        if "twin_of" in vec:
+            # CI gate for the twin claim (LAB-3967). Hard fail: the operator's
+            # exit is dropping the declaration, never loosening this compare.
+            why = _twin_divergence(vec, by_name)
+            if why:
+                print(f"FAIL {name}: {why}")
                 vec_failed += 1
         failures += vec_failed
         if not vec_failed:
@@ -273,12 +352,7 @@ def _build_default_path_vector() -> dict:
     _require(default_header["m"] == meta and default_header["s"] == ser_name, "frame header disagrees with unwrap metadata")
     if encoding == "bin":
         name = "default_saas_write_msgpack_bytestorage_bin"
-        description = (
-            "Protocol 1.1 twin of default_saas_write_msgpack_bytestorage: same value, same "
-            "default @cache write path, but the ByteStorage envelope's compressed_data is "
-            "msgpack bin (serde_bytes) instead of an array of integers. Readers MUST accept "
-            "both encodings; the legacy encoding stays pinned by the legacy vector's bytes."
-        )
+        description = BIN_DESCRIPTION
         encoding_note = (
             "rmp_serde positional fixarray(4); compressed_data encodes as msgpack bin "
             "(serde_bytes, protocol 1.1); checksum [u8;8] stays an array of integers"
@@ -318,18 +392,23 @@ def _upsert(committed: list[dict], built: list[dict], generator_stamp: str) -> l
     Never removes anything: a vector this run did not rebuild stays exactly as
     committed, so dropping a committed vector is structurally impossible. A
     rebuilt vector whose content matches the committed one (ignoring its
-    per-vector 'generator' provenance) keeps the committed entry byte-untouched
-    — a no-op `generate` leaves the fixture byte-identical. Returns the names
-    of the vectors actually rewritten or added.
+    per-vector 'generator' provenance and any operator-owned 'twin_of'
+    declaration) keeps the committed entry byte-untouched — a no-op `generate`
+    leaves the fixture byte-identical. A rewrite carries 'twin_of' over
+    unchanged: the wheel knows nothing about it, and generate never adds or
+    drops it — that is the operator's reviewable move. Returns the names of
+    the vectors actually rewritten or added.
     """
     index = {v["name"]: i for i, v in enumerate(committed)}
     _require(len(index) == len(committed), "committed fixture has duplicate vector names")
     changed: list[str] = []
     for vec in built:
         i = index.get(vec["name"])
-        if i is not None and {k: v for k, v in committed[i].items() if k != "generator"} == vec:
+        old = committed[i] if i is not None else {}
+        if i is not None and {k: v for k, v in old.items() if k not in ("generator", "twin_of")} == vec:
             continue
-        stamped = {**vec, "generator": generator_stamp}
+        carried = {"twin_of": old["twin_of"]} if "twin_of" in old else {}
+        stamped = {**vec, **carried, "generator": generator_stamp}
         if i is None:
             index[vec["name"]] = len(committed)
             committed.append(stamped)
@@ -339,61 +418,29 @@ def _upsert(committed: list[dict], built: list[dict], generator_stamp: str) -> l
     return changed
 
 
-def _require_twin_equivalence(frame_vectors: list[dict]) -> None:
-    """Warn when the default-path pair differs beyond envelope encoding.
+def _warn_twin_divergence(frame_vectors: list[dict]) -> None:
+    """Warn (never raise) when a declared twin diverges from its base beyond encoding.
 
-    The `_bin` twin's description asserts the encoding is the sole delta from
-    the legacy vector. Check it rather than trusting the wheel: a wheel that
-    also changed the LZ4 level, msgpack key order, or the frame header would
-    otherwise upsert a vector that lies about what it isolates, into a
-    fixture downstream SDKs pin (LAB-903).
-
-    This is a warning, not a `_require()` invariant: the legacy (array-of-ints)
-    wheel is gone from every installable release, so `legacy` can never be
-    regenerated. A hard failure here would mean any FUTURE default-write-path
-    change — however legitimate — permanently deadlocks `generate`, because
-    the newly-rebuilt `_bin` twin can then never again match a legacy vector
-    frozen at the OLD write path. Surfacing the divergence lets a human decide
-    whether it's a codec/wheel regression (don't commit) or a genuine protocol
-    evolution (commit, and update the twin's description to stop claiming an
-    encoding-only delta) — `generate` itself cannot tell those apart.
-
-    No-op when either default-path twin is absent (partial fixture): generate()
-    only ever rebuilds the encoding the wheel emits, so nothing is comparable
-    until both exist. Completeness is gated by verify(), not here.
+    A warning, not a `_require()` invariant: the legacy (array-of-ints) wheel is
+    gone from every installable release, so the legacy vector can never be
+    regenerated, and a hard failure here would permanently deadlock `generate`
+    the first time the default write path legitimately moves (LAB-1203).
+    verify() is the gate; this is the operator's early sight of what
+    verify will reject, with the two legitimate exits spelled out.
     """
     by_name = {v["name"]: v for v in frame_vectors}
-    legacy = by_name.get("default_saas_write_msgpack_bytestorage")
-    twin = by_name.get("default_saas_write_msgpack_bytestorage_bin")
-    if legacy is None or twin is None:
-        # Partial fixture (fresh bootstrap, or a deliberately removed vector).
-        # verify's coverage floor pins ENCODINGS, not these names — it fails
-        # the fixture until both int-array and bin are observed, which today
-        # only this pair carries. _upsert never removes, so an established
-        # fixture can never regress into this branch.
-        print("note: default-path twin pair incomplete; equivalence proof skipped", file=sys.stderr)
-        return
-    mismatches: list[str] = []
-    if twin["value_json"] != legacy["value_json"]:
-        mismatches.append("value_json differs from the legacy vector")
-    # Header equality must hold at the BYTE level, not just as parsed JSON — a
-    # wheel that reorders or reformats the header JSON would otherwise slip a
-    # byte-level non-twin past a dict compare. The frame prefix is everything
-    # before the payload: magic, version, header length, header bytes.
-    legacy_prefix = legacy["frame_hex"][: len(legacy["frame_hex"]) - len(legacy["expected_payload_hex"])]
-    twin_prefix = twin["frame_hex"][: len(twin["frame_hex"]) - len(twin["expected_payload_hex"])]
-    if twin_prefix != legacy_prefix:
-        mismatches.append("frame prefix (magic/version/header bytes) differs from the legacy vector")
-    for field in ("compressed_data_hex", "checksum_hex", "original_size", "format", "inner_msgpack_hex"):
-        if twin["payload_envelope"][field] != legacy["payload_envelope"][field]:
-            mismatches.append(f"payload_envelope.{field} differs from the legacy vector")
-    if mismatches:
-        print(
-            "warning: default-path twin diverges from the legacy vector beyond envelope "
-            "encoding (legacy wheel is unreproducible, so this cannot be auto-resolved) — "
-            "review before committing:\n  " + "\n  ".join(mismatches),
-            file=sys.stderr,
-        )
+    for vec in frame_vectors:
+        if "twin_of" not in vec:
+            continue
+        why = _twin_divergence(vec, by_name)
+        if why:
+            print(
+                f"warning: {vec['name']}: {why}\n"
+                "  `verify` will FAIL this fixture. Two legitimate exits: fix the wheel/codec so the "
+                "rebuilt vector matches its base again, or — if the default write path genuinely "
+                "moved — drop 'twin_of' from this vector in the same commit as the regenerated bytes.",
+                file=sys.stderr,
+            )
 
 
 def _build_error_vectors(raw_frame: bytes) -> list[dict]:
@@ -454,11 +501,8 @@ def _build_error_vectors(raw_frame: bytes) -> list[dict]:
 
 
 def generate() -> int:
-    import msgpack  # third-party; generation only
-
-    from cachekit.serializers.wrapper import SerializationWrapper
-
     import cachekit
+    from cachekit.serializers.wrapper import SerializationWrapper
 
     doc = _load_fixture()
     built: list[dict] = []
@@ -541,7 +585,7 @@ def generate() -> int:
     unstamped = {v["name"] for v in doc["frame_vectors"] + doc["error_vectors"] if "generator" not in v}
     changed = _upsert(doc["frame_vectors"], built, generator_stamp)
     changed += _upsert(doc["error_vectors"], built_errors, generator_stamp)
-    _require_twin_equivalence(doc["frame_vectors"])
+    _warn_twin_divergence(doc["frame_vectors"])
 
     if not changed:
         print(
