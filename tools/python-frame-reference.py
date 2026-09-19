@@ -27,7 +27,11 @@ Modes:
               vector a wheel cannot produce is simply not touched. Every
               generated frame is round-tripped through the real cachekit-py
               deserialization path before being written, and the default-path
-              pair must differ ONLY in envelope encoding.
+              pair is checked to differ ONLY in envelope encoding — a
+              mismatch prints a stderr warning (not a hard failure: the
+              legacy wheel is gone, so a legitimate write-path change can
+              never be reflected in that frozen vector, and treating the
+              divergence as fatal would deadlock `generate` forever).
 
 The independent parser below implements exactly the layout documented in
 spec/wire-format.md:
@@ -336,13 +340,23 @@ def _upsert(committed: list[dict], built: list[dict], generator_stamp: str) -> l
 
 
 def _require_twin_equivalence(frame_vectors: list[dict]) -> None:
-    """The default-path pair must differ ONLY in envelope encoding.
+    """Warn when the default-path pair differs beyond envelope encoding.
 
     The `_bin` twin's description asserts the encoding is the sole delta from
-    the legacy vector. Prove it rather than trusting the wheel: a wheel that
+    the legacy vector. Check it rather than trusting the wheel: a wheel that
     also changed the LZ4 level, msgpack key order, or the frame header would
-    upsert a vector that lies about what it isolates, into a fixture
-    downstream SDKs pin (LAB-903).
+    otherwise upsert a vector that lies about what it isolates, into a
+    fixture downstream SDKs pin (LAB-903).
+
+    This is a warning, not a `_require()` invariant: the legacy (array-of-ints)
+    wheel is gone from every installable release, so `legacy` can never be
+    regenerated. A hard failure here would mean any FUTURE default-write-path
+    change — however legitimate — permanently deadlocks `generate`, because
+    the newly-rebuilt `_bin` twin can then never again match a legacy vector
+    frozen at the OLD write path. Surfacing the divergence lets a human decide
+    whether it's a codec/wheel regression (don't commit) or a genuine protocol
+    evolution (commit, and update the twin's description to stop claiming an
+    encoding-only delta) — `generate` itself cannot tell those apart.
 
     No-op when either default-path twin is absent (partial fixture): generate()
     only ever rebuilds the encoding the wheel emits, so nothing is comparable
@@ -359,18 +373,26 @@ def _require_twin_equivalence(frame_vectors: list[dict]) -> None:
         # fixture can never regress into this branch.
         print("note: default-path twin pair incomplete; equivalence proof skipped", file=sys.stderr)
         return
-    _require(twin["value_json"] == legacy["value_json"], "twin value_json differs from the legacy vector")
+    mismatches: list[str] = []
+    if twin["value_json"] != legacy["value_json"]:
+        mismatches.append("value_json differs from the legacy vector")
     # Header equality must hold at the BYTE level, not just as parsed JSON — a
     # wheel that reorders or reformats the header JSON would otherwise slip a
     # byte-level non-twin past a dict compare. The frame prefix is everything
     # before the payload: magic, version, header length, header bytes.
     legacy_prefix = legacy["frame_hex"][: len(legacy["frame_hex"]) - len(legacy["expected_payload_hex"])]
     twin_prefix = twin["frame_hex"][: len(twin["frame_hex"]) - len(twin["expected_payload_hex"])]
-    _require(twin_prefix == legacy_prefix, "twin frame prefix (magic/version/header bytes) differs from the legacy vector")
+    if twin_prefix != legacy_prefix:
+        mismatches.append("frame prefix (magic/version/header bytes) differs from the legacy vector")
     for field in ("compressed_data_hex", "checksum_hex", "original_size", "format", "inner_msgpack_hex"):
-        _require(
-            twin["payload_envelope"][field] == legacy["payload_envelope"][field],
-            f"twin payload_envelope.{field} differs from the legacy vector — encoding must be the ONLY delta",
+        if twin["payload_envelope"][field] != legacy["payload_envelope"][field]:
+            mismatches.append(f"payload_envelope.{field} differs from the legacy vector")
+    if mismatches:
+        print(
+            "warning: default-path twin diverges from the legacy vector beyond envelope "
+            "encoding (legacy wheel is unreproducible, so this cannot be auto-resolved) — "
+            "review before committing:\n  " + "\n  ".join(mismatches),
+            file=sys.stderr,
         )
 
 

@@ -99,9 +99,19 @@ All notable changes to the CacheKit Protocol Specification.
   drop-refusal guard and both wheel-direction refusals, and folds the
   append-only `generate-bin-twin` mode into `generate` (a protocol 1.1 wheel
   rebuilds the `_bin` twin, a legacy wheel the legacy original; whenever both
-  default-path vectors are present the pair is still proven to differ only in
-  envelope encoding before writing, and a partial fixture missing either twin
-  skips that proof with a stderr note rather than aborting).
+  default-path vectors are present the pair is checked to differ only in
+  envelope encoding, and a partial fixture missing either twin skips that
+  check with a stderr note rather than aborting). That check is a stderr
+  **warning**, not a hard failure (fix-loop, 2026-09-19, adversarial finding):
+  the legacy wheel is gone from every installable release, so `legacy` can
+  never be regenerated — a `_require()` there would permanently deadlock
+  `generate` the first time the default write path legitimately changes for
+  reasons other than the encoding flip. A human reviews the reported diff and
+  decides whether it's a codec/wheel regression or a genuine protocol
+  evolution; `generate` itself cannot tell the two apart. Pinned by
+  `tools/test_python_frame_reference.py` (new; wired into `verify.yml`
+  alongside the frame reference verify step), which asserts the divergence
+  path warns and does not raise.
   The ByteStorage envelope codec is no longer reimplemented there: encode/decode
   come from `tools/wire-format-reference.py`, the one shared implementation of
   the encoding these fixtures pin. Rewritten vectors carry per-vector
