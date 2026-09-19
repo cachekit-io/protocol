@@ -202,6 +202,22 @@ All notable changes to the CacheKit Protocol Specification.
 
 ### Specs
 
+- SaaS API aligned with the deployed server (LAB-677). `DELETE /v1/cache/{key}`
+  is idempotent — `200 {"success": true}` whether or not the key existed, never
+  `404`. `GET /v1/cache/health` returns `{"status","cache_entries","active_locks"}`,
+  not `{"version"}`. Omitting `X-CacheKit-TTL` stores a **no-expiry** entry (no
+  tenant-default TTL exists); the no-expiry contract is now written down —
+  permanently fresh, exempt from age-based eviction only, capacity eviction and
+  namespace quotas still apply. `PATCH /v1/cache/{key}/ttl` never `404`s (no-op on
+  an absent key). Authentication: accepted key prefixes are `ck_sdk_` / `ck_api_` /
+  `ck_live_` (`ck_test_` removed — it never authenticated); `X-CacheKit-L1-Status`
+  moved to Required Headers as mandatory for `ck_sdk_` keys (`400` otherwise);
+  the `ns:`/`nsapi:` write-space split documented, including that unprefixed
+  cache keys are a shared write space; `OPTIONS` (any path) and `GET /v1/health`
+  documented as the two pre-authentication routes. **`HEAD` on a missing key
+  stays `404`** (RFC 9110 §9.3.2) — the deployed server's `200` is recorded as a
+  known server deviation, not adopted; SDKs keep branching on status.
+
 - StorageEnvelope `compressed_data` canonical encoding flipped from MessagePack
   array-of-ints to `bin` (LAB-783 /
   [cachekit-core#54](https://github.com/cachekit-io/cachekit-core/issues/54)):
