@@ -207,16 +207,20 @@ All notable changes to the CacheKit Protocol Specification.
   `404`. `GET /v1/cache/health` returns `{"status","cache_entries","active_locks"}`,
   not `{"version"}`. Omitting `X-CacheKit-TTL` stores a **no-expiry** entry (no
   tenant-default TTL exists); the no-expiry contract is now written down —
-  permanently fresh, exempt from age-based eviction only, capacity eviction and
-  namespace quotas still apply. `PATCH /v1/cache/{key}/ttl` never `404`s (no-op on
-  an absent key). Authentication: accepted key prefixes are `ck_sdk_` / `ck_api_` /
+  permanently fresh while present, never age-evicted, and **no default capacity
+  bound** on the write path (capacity eviction runs only under a provisioned
+  tenant or namespace quota). `PATCH /v1/cache/{key}/ttl` never `404`s (no-op on
+  an absent key). `GET /v1/cache/{key}/ttl` returns `404` for a no-expiry entry
+  on the deployed server — classified "TTL unavailable", not a cache miss. Authentication: accepted key prefixes are `ck_sdk_` / `ck_api_` /
   `ck_live_` (`ck_test_` removed — it never authenticated); `X-CacheKit-L1-Status`
   moved to Required Headers as mandatory for `ck_sdk_` keys (`400` otherwise);
-  the `ns:`/`nsapi:` write-space split documented, including that unprefixed
-  cache keys are a shared write space; `OPTIONS` (any path) and `GET /v1/health`
-  documented as the two pre-authentication routes. **`HEAD` on a missing key
-  stays `404`** (RFC 9110 §9.3.2) — the deployed server's `200` is recorded as a
-  known server deviation, not adopted; SDKs keep branching on status.
+  the `ns:`/`nsapi:` write-space split documented — each class may also mutate
+  unprefixed (`default`) keys, which are a shared write space; `OPTIONS` (any
+  path) documented as the CORS-preflight authentication exception. Stale-while-
+  revalidate marked shipped; the never-emitted `201` dropped from the status
+  table. **`HEAD` on a missing key stays `404`** (RFC 9110 §9.3.2) — the deployed
+  server's `200` is recorded as a known server deviation, not adopted, with one
+  interim SDK rule for the window (LAB-2516); SDKs keep branching on status.
 
 - StorageEnvelope `compressed_data` canonical encoding flipped from MessagePack
   array-of-ints to `bin` (LAB-783 /
