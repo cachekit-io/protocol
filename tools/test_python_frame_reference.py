@@ -211,7 +211,7 @@ raised, err = warn_output([SYNTH_LEGACY, {**SYNTH_LEGACY, "name": BIN_NAME}])
 check("generate: no declaration -> silent", not raised and err == "")
 raised, err = warn_output([SYNTH_LEGACY, SYNTH_TWIN])
 check("generate: identical declared twin -> silent", not raised and err == "")
-diverged = {**SYNTH_TWIN, "payload_envelope": {**SYNTH_LEGACY["payload_envelope"], "inner_msgpack_hex": "ff"}}
+diverged = {**SYNTH_TWIN, "payload_envelope": {**SYNTH_TWIN["payload_envelope"], "inner_msgpack_hex": "ff"}}
 raised, err = warn_output([SYNTH_LEGACY, diverged])
 check("generate: diverged declared twin -> does not raise (no generator deadlock)", not raised)
 check("generate: warning names the diverging field", "inner_msgpack_hex" in err)
