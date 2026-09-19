@@ -207,9 +207,9 @@ All notable changes to the CacheKit Protocol Specification.
   `404`. `GET /v1/cache/health` returns `{"status","cache_entries","active_locks"}`,
   not `{"version"}`. Omitting `X-CacheKit-TTL` stores a **no-expiry** entry (no
   tenant-default TTL exists); the no-expiry contract is now written down —
-  permanently fresh while present, never age-evicted, and **no default capacity
-  bound** on the write path (capacity eviction runs only under a provisioned
-  tenant or namespace quota). `PATCH /v1/cache/{key}/ttl` never `404`s (no-op on
+  permanently fresh while present, never age-evicted, and eligible for whatever
+  capacity eviction the deployment applies — "no expiry" is not a durability
+  guarantee; a deployment needing a ceiling provisions a quota. `PATCH /v1/cache/{key}/ttl` never `404`s (no-op on
   an absent key). `GET /v1/cache/{key}/ttl` returns `404` for a no-expiry entry
   on the deployed server — classified "TTL unavailable", not a cache miss. Authentication: accepted key prefixes are `ck_sdk_` / `ck_api_` /
   `ck_live_` (`ck_test_` removed — it never authenticated); `X-CacheKit-L1-Status`
@@ -219,8 +219,10 @@ All notable changes to the CacheKit Protocol Specification.
   path) documented as the CORS-preflight authentication exception. Stale-while-
   revalidate marked shipped; the never-emitted `201` dropped from the status
   table. **`HEAD` on a missing key stays `404`** (RFC 9110 §9.3.2) — the deployed
-  server's `200` is recorded as a known server deviation, not adopted, with one
-  interim SDK rule for the window (LAB-2516); SDKs keep branching on status.
+  server's `200` is recorded as a known server deviation, not adopted, and the
+  spec defines no client workaround: SDKs keep branching on status, and callers
+  needing a reliable existence check against the deployed server use `GET`
+  until it is corrected.
 
 - StorageEnvelope `compressed_data` canonical encoding flipped from MessagePack
   array-of-ints to `bin` (LAB-783 /
