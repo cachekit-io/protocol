@@ -69,6 +69,7 @@ layer's own store/retrieve flows are specified in
 | [spec/encryption.md](spec/encryption.md) | AES-256-GCM encryption, HKDF-SHA256 key derivation, AAD v0x03, counter-based nonces, key rotation |
 | [spec/saas-api.md](spec/saas-api.md) | REST API endpoints, binary wire protocol, error codes, metrics headers |
 | [spec/interop-mode.md](spec/interop-mode.md) | Cross-SDK cache sharing — language-neutral key format, canonical argument normalization *(normative; shipped opt-in in all three SDKs — see the [feature matrix](sdk-feature-matrix.md#compliance-status) for per-SDK version floors)* |
+| [spec/interop-v2.md](spec/interop-v2.md) | Interop v2 compressed-values profile — opt-in LZ4-block + AES-256-GCM cross-SDK values *(DRAFT; no SDK implements it yet)* |
 | [spec/file-backend-format.md](spec/file-backend-format.md) | Shared local File backend filename, header, expiry, and fail-closed flag negotiation |
 | [sdk-feature-matrix.md](sdk-feature-matrix.md) | Feature parity tracking across Python, Rust, TypeScript, and PHP SDKs |
 | [decisions/key-rotation.md](decisions/key-rotation.md) | Decision records — master-key rotation via client-side keyring (rationale, rejected options, operator runbooks) |
