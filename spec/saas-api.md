@@ -57,12 +57,12 @@ The server accepts exactly three key prefixes; any other prefix fails authentica
 | `ck_api_` | Direct-API key | May mutate `nsapi:`-prefixed and unprefixed (`default`) cache keys; never `ns:`. |
 | `ck_live_` | Legacy | Predates the sdk/api write-space split; exempt from it (may mutate both key classes). |
 
-The write-space split applies to mutations only (`PUT`, `DELETE`, lock, TTL refresh); reads are open to all key classes within the tenant's namespace grants. Violations return `403 Forbidden`. The API key implicitly scopes all operations to a tenant. Multi-tenancy is enforced server-side.
+The write-space split applies to mutations only (`PUT`, `DELETE`, lock, TTL refresh); reads are open to all key classes within the tenant's namespace grants. Namespace grants gate mutations the same way they gate reads — a key class denied a namespace gets `403` on it regardless of the write-space split below. Violations return `403 Forbidden`. The API key implicitly scopes all operations to a tenant. Multi-tenancy is enforced server-side.
 
 > [!WARNING]
-> **The split covers `ns:`- and `nsapi:`-prefixed cache keys only.** A cache key with neither prefix maps to the tenant's `default` namespace and belongs to a **shared write space**: any key class may create, overwrite, delete, or lock it. The split is an intra-tenant guard for namespaced keys, not a general write-isolation guarantee between key classes.
+> **The split covers `ns:`- and `nsapi:`-prefixed cache keys only.** A cache key with neither prefix maps to the tenant's `default` namespace and belongs to a **shared write space**: any key class whose namespace grants include `default` may create, overwrite, delete, or lock it. The split is an intra-tenant guard for namespaced keys, not a general write-isolation guarantee between key classes.
 
-**CORS preflight exception.** `OPTIONS` on any path is answered `204 No Content` before authentication; no `Authorization` or `X-CacheKit-L1-Status` header is required or inspected. Every other `/v1/cache/*` request is authenticated before any other check, and `401` precedes every other error. This specification governs `/v1/cache/*` only.
+**CORS preflight exception.** `OPTIONS` on any path is answered `204 No Content` before authentication; no `Authorization` or `X-CacheKit-L1-Status` header is required or inspected. Every other `/v1/cache/*` request is authenticated before any other check, and `401` precedes every other error. `/v1/cache/*` is **not browser-callable**: `Authorization` and `X-CacheKit-L1-Status` are both required headers, and neither is on the deployed CORS allow-list — a passing preflight does not mean the follow-up request will succeed from a browser. This specification governs `/v1/cache/*` only.
 
 ---
 
@@ -102,7 +102,7 @@ Authorization: Bearer ck_live_xxx
 
 | Header | Description |
 | :--- | :--- |
-| `X-CacheKit-Freshness` | `fresh` or `stale` — lowercase, case-sensitive tokens. Emitted on every `200 OK` by servers implementing [stale-while-revalidate](#stale-while-revalidate). SDKs MUST treat an absent header as `fresh` (pre-SWR servers do not emit it) and an unrecognized value as `stale` (revalidation is the conservative action). Read behavior is specified in [Stale-While-Revalidate](#stale-while-revalidate). |
+| `X-CacheKit-Freshness` | `fresh` or `stale` — lowercase, case-sensitive tokens. Emitted on every `GET` `200 OK` by servers implementing [stale-while-revalidate](#stale-while-revalidate). For `GET` responses, SDKs MUST treat an absent header as `fresh` (pre-SWR servers do not emit it) and an unrecognized value as `stale` (revalidation is the conservative action); read behavior is specified in [Stale-While-Revalidate](#stale-while-revalidate). This `absent → fresh` defaulting is `GET`-only — `HEAD` has its own [interim existence rule](#head-v1cachekey) that inspects raw header presence, which MUST be checked before this default is applied, or the default silently swallows the interim rule's signal. |
 
 ---
 
@@ -139,7 +139,7 @@ X-CacheKit-TTL: 3600
 >
 > **No-expiry contract.** An entry stored without `X-CacheKit-TTL` has no `fresh_until` and no `evict_at`:
 > - **Reads:** permanently **fresh** — while the entry is present, `GET` and `HEAD` return `200 OK` with `X-CacheKit-Freshness: fresh`. It never enters a stale window. Presence ends only on explicit `DELETE`, overwrite, or capacity eviction (below).
-> - **Storage bound: none by default.** No-expiry entries are never age-evicted, and the deployed server applies **no default capacity bound** on its write path. Capacity eviction runs only where a tenant or namespace quota has been provisioned for that tenant; without one, no-expiry entries accumulate until explicitly deleted or overwritten. A deployment that needs a storage ceiling MUST provision a quota or set `X-CacheKit-TTL`.
+> - **Storage bound: none by default.** No-expiry entries are never age-evicted. Whether a deployment enforces any capacity bound at all is deployment-configured and outside this protocol's scope; `api.cachekit.io` currently provisions no default capacity bound, so no-expiry entries accumulate until explicitly deleted, overwritten, or a tenant/namespace quota is provisioned. A deployment that needs a storage ceiling MUST provision a quota or set `X-CacheKit-TTL`.
 > - **`GET /v1/cache/{key}/ttl`:** see the [endpoint](#get-v1cachekeyttl).
 > - **`PATCH /v1/cache/{key}/ttl`:** `200`; gives the entry its first expiry (`fresh_until = now + ttl`) — the one way to bound an existing no-expiry entry without rewriting it.
 >
@@ -188,12 +188,14 @@ Authorization: Bearer ck_live_xxx
 | Status | Meaning | SDK Behavior |
 | :---: | :--- | :--- |
 | `200 OK` | Key exists | Return `true` |
-| `404 Not Found` | Key does not exist (or is past `evict_at`) | Return `false` |
+| `404 Not Found` | Key does not exist (or is past `evict_at`) | Return `false` — **before branching on this, read the known server deviation below**: the deployed server does not currently emit `404` here |
 
-`HEAD` MUST return the status `GET` would return for the same key ([RFC 9110 §9.3.2](https://www.rfc-editor.org/rfc/rfc9110#section-9.3.2)), with no body. Servers implementing [stale-while-revalidate](#stale-while-revalidate) emit the same `X-CacheKit-Freshness` response header as `GET` on a `200`; on `HEAD` the header is informational and MUST NOT be used to infer existence — the status code is the existence signal.
+`HEAD` MUST return the status `GET` would return for the same key ([RFC 9110 §9.3.2](https://www.rfc-editor.org/rfc/rfc9110#section-9.3.2)), with no body. Servers implementing [stale-while-revalidate](#stale-while-revalidate) emit the same `X-CacheKit-Freshness` response header as `GET` on a `200`; on `HEAD` the header is informational and MUST NOT be used to infer existence — the status code is the existence signal — **except under the narrowly-scoped interim rule below**, which is a workaround for a known server defect, not a general license to infer existence from the header.
 
 > [!WARNING]
-> **Known server deviation (LAB-2516).** The deployed server currently answers `HEAD` for a missing **or expired/evicted** key with `200 OK` and no `X-CacheKit-Freshness` header instead of `404`. This is a server defect against this section, not a spec change: SDKs MUST keep branching on the status code as specified. **Interim rule while the deviation stands:** an SDK SHOULD treat a `HEAD` `200` that carries no `X-CacheKit-Freshness` header as *absent* — the deployed server sets that header on every present key, so the heuristic is exact against it (it is not safe against a server that omits the header for present keys) — and SHOULD remove the heuristic once the server is corrected. An SDK that does not apply it reports `true` for absent keys against `api.cachekit.io` until then.
+> **Known server deviation (LAB-2516).** The deployed server currently answers `HEAD` for a missing **or expired/evicted** key with `200 OK` and no `X-CacheKit-Freshness` header instead of `404`. This is a server defect against this section, not a spec change: SDKs MUST keep branching on the status code as specified.
+>
+> **Interim rule, scoped to the standard hosts only.** When the SDK's resolved base URL is `api.cachekit.io` or `api.staging.cachekit.io` (i.e. `CACHEKIT_ALLOW_CUSTOM_HOST` is not in effect), an SDK SHOULD treat a `HEAD` `200` that carries no raw `X-CacheKit-Freshness` header as *absent* — check header presence before any `GET`-oriented `absent → fresh` default (see [Response headers](#get-v1cachekey)) is applied, or the default masks the check. The deployed server sets the header on every present key at these hosts, so the heuristic is exact against them. It is **not** safe against a server that omits the header for present keys, so an SDK pointed at a custom host MUST NOT apply this heuristic by default — it MAY be offered as an explicit per-caller opt-in for someone who has verified their own server's behavior. SDKs SHOULD remove the heuristic once the standard hosts are corrected. An SDK that does not apply it reports `true` for absent keys against the standard hosts until then.
 
 ---
 
@@ -224,7 +226,7 @@ evict_at    = fresh_until + stale_ttl
 
 All lifecycle times are computed against the **server's clock**; SDKs MUST NOT derive freshness for backed entries from their own clocks.
 
-Without `X-CacheKit-Stale-TTL` (or with `0`), `evict_at = fresh_until` and server behavior is identical to the pre-SWR protocol.
+Without `X-CacheKit-Stale-TTL` (or with `0`), `evict_at = fresh_until` — the eviction boundary collapses to the pre-SWR hard-expiry point. This is an **arithmetic** equivalence only: a server implementing SWR still emits `X-CacheKit-Freshness` on every `200` regardless of whether `stale_ttl` was set; header emission is never conditioned on it.
 
 ### Validation
 
@@ -438,7 +440,7 @@ SDKs SHOULD send cache metrics headers for rate limiting and observability:
 | `400` | Bad Request | Client error (invalid key format, missing headers) |
 | `401` | Unauthorized | Invalid or missing API key |
 | `403` | Forbidden | API key lacks permission for this operation/namespace |
-| `404` | Not Found | Cache miss (`GET`/`HEAD /v1/cache/{key}`); TTL unavailable on `GET /v1/cache/{key}/ttl` (key missing, evicted, or [no-expiry](#get-v1cachekeyttl)). Never emitted by `DELETE /v1/cache/{key}` or `PATCH /v1/cache/{key}/ttl` — both are no-ops on an absent key. |
+| `404` | Not Found | Cache miss (`GET`/`HEAD /v1/cache/{key}`, subject to [HEAD's known server deviation](#head-v1cachekey)); TTL unavailable on `GET /v1/cache/{key}/ttl` (key missing, evicted, or [no-expiry](#get-v1cachekeyttl)). Never emitted by `DELETE /v1/cache/{key}` or `PATCH /v1/cache/{key}/ttl` — both are no-ops on an absent key. |
 | `409` | Conflict | `PATCH /v1/cache/{key}/ttl` on a stale entry past `fresh_until`; refresh requires a `PUT` of recomputed bytes ([SWR write semantics](#write-semantics)) |
 | `413` | Payload Too Large | Value exceeds max stored value size (25 MB). Permanent — do not retry; surface "value too large" |
 | `429` | Too Many Requests | Rate limited |
@@ -454,7 +456,7 @@ SDKs should classify errors for circuit breaker integration:
 | :--- | :--- | :--- |
 | **Transient** | `429`, `500`, `502`, `503`, network timeouts | Retry with backoff |
 | **Permanent** | `400`, `401`, `403`, `409`, `413` | Do not retry, surface to caller. For `409` (`PATCH /ttl` past `fresh_until`): do not re-`PATCH` — recompute and `PUT` ([write semantics](#write-semantics)) |
-| **Cache miss** | `404` on `GET`/`HEAD /v1/cache/{key}` | Not an error — return `None`/`null` (`GET`) or `false` (`HEAD`) |
+| **Cache miss** | `404` on `GET`/`HEAD /v1/cache/{key}` (see [HEAD's known server deviation](#head-v1cachekey)) | Not an error — return `None`/`null` (`GET`) or `false` (`HEAD`) |
 | **TTL unavailable** | `404` on `GET /v1/cache/{key}/ttl` | Not an error — the key is missing, evicted, or has no expiry; return `None`/`null` for the TTL |
 
 ---
