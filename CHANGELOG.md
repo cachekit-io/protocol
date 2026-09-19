@@ -111,9 +111,10 @@ All notable changes to the CacheKit Protocol Specification.
   across rebuilds and never adds or drops it; the generator's `_bin`
   description no longer makes the twin claim in prose (the field is the claim),
   so the exit survives the next `generate`. A declaration that cannot hold —
-  pointing at itself, at a same-encoding copy, at an envelope-less vector, or
-  into a fixture with duplicate vector names — fails rather than passing
-  vacuously. Pinned by `tools/test_python_frame_reference.py` (mutation suite
+  pointing at itself, at a same-encoding copy, at an envelope-less or
+  partial-envelope vector, or into a fixture with duplicate vector names —
+  fails rather than passing vacuously (a missing envelope field is a `FAIL`
+  line, never a traceback). Pinned by `tools/test_python_frame_reference.py` (mutation suite
   over the committed fixture). **Fixture sha256 changes** — JSON metadata only
   (`twin_of` added, `_bin` description reworded); every `frame_hex`,
   `expected_payload_hex`, `expected_header` and `payload_envelope` byte is

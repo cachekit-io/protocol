@@ -156,6 +156,23 @@ rc, out = run_verify(doc)
 check("twin_of pointing at an envelope-less vector: verify exits 1", rc == 1)
 check("twin_of pointing at an envelope-less vector: names the missing fields", "lacks" in out and "payload_envelope" in out)
 
+# --- a partial envelope is a clean FAIL line, never a KeyError traceback ---
+# inner_msgpack_hex is read by NO other verify check, so only the twin gate can trip on it.
+doc, _ = mutated(lambda t: t["payload_envelope"].pop("inner_msgpack_hex"))
+rc, out = run_verify(doc)
+check("twin lacking an envelope subfield: verify exits 1", rc == 1)
+check("twin lacking an envelope subfield: failure names it", "lacks payload_envelope.inner_msgpack_hex" in out)
+
+# JSON null on BOTH sides must not compare equal and pass the claim vacuously.
+doc, twin = mutated(lambda t: t["payload_envelope"].__setitem__("inner_msgpack_hex", None))
+next(v for v in doc["frame_vectors"] if v["name"] == LEGACY_NAME)["payload_envelope"]["inner_msgpack_hex"] = None
+rc, out = run_verify(doc)
+check("null envelope subfield on both sides: verify exits 1", rc == 1 and "lacks payload_envelope.inner_msgpack_hex" in out)
+
+doc, _ = mutated(lambda t: t.__setitem__("twin_of", [LEGACY_NAME]))
+rc, out = run_verify(doc)
+check("non-string twin_of: verify exits 1 with a FAIL line", rc == 1 and "must be a vector-name string" in out)
+
 # --- a duplicate name cannot shadow the base ---
 doc, twin = mutated(reorder_header_keys)
 doc["frame_vectors"].append({**copy.deepcopy(twin), "name": LEGACY_NAME})
@@ -218,6 +235,9 @@ check("generate: warning names the diverging field", "inner_msgpack_hex" in err)
 check("generate: warning spells out the drop-twin_of exit", "drop 'twin_of'" in err)
 raised, err = warn_output([diverged])
 check("generate: dangling twin_of -> warns, does not raise", not raised and "unknown vector" in err)
+# Reachable only via generate: verify() indexes frame_hex for every vector before the twin gate runs.
+raised, err = warn_output([{k: v for k, v in SYNTH_LEGACY.items() if k != "frame_hex"}, SYNTH_TWIN])
+check("generate: base lacking frame_hex -> warns, does not raise", not raised and "lacks frame_hex" in err)
 
 # --- _upsert: the declaration survives a rebuild and never causes churn ---
 committed = [copy.deepcopy(SYNTH_TWIN) | {"generator": "old wheel"}]

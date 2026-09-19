@@ -154,13 +154,20 @@ def _twin_divergence(twin: dict, by_name: dict[str, dict]) -> str | None:
     is compared at the BYTE level, not as parsed JSON — a wheel that reorders or
     reformats the header JSON is a byte-level non-twin that a dict compare would
     wave through. Shared by verify() (hard fail) and generate() (warning), so
-    the two can never drift apart on what "twin" means.
+    the two can never drift apart on what "twin" means. Never raises on a
+    malformed declaration or a vector missing (or null in) a compared field:
+    the reason names what is lacking, so verify prints a FAIL line, not a
+    traceback.
     """
+    if not isinstance(twin["twin_of"], str):
+        return f"twin_of must be a vector-name string, got {twin['twin_of']!r}"
     base = by_name.get(twin["twin_of"])
     if base is None:
         return f"twin_of names unknown vector {twin['twin_of']!r}"
     for side in (twin, base):
-        missing = [k for k in ("value_json", "expected_payload_hex", "payload_envelope") if k not in side]
+        missing = [k for k in ("value_json", "frame_hex", "expected_payload_hex", "payload_envelope") if side.get(k) is None]
+        env = side.get("payload_envelope") or {}
+        missing += [f"payload_envelope.{f}" for f in _TWIN_ENVELOPE_FIELDS if env.get(f) is None]
         if missing:
             return f"twin_of requires envelope vectors on both sides; {side['name']!r} lacks {', '.join(missing)}"
     twin_env, base_env = twin["payload_envelope"], base["payload_envelope"]
