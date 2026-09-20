@@ -412,8 +412,8 @@ SDKs SHOULD send cache metrics headers for rate limiting and observability:
 | `200` | Success | Return data |
 | `201` | Created | Value stored |
 | `204` | No Content | Deleted successfully |
-| `400` | Bad Request | Client error (invalid key format, missing headers) |
-| `401` | Unauthorized | Invalid or missing API key. An authoritative verdict from the key store — never emitted for a backend fault while checking the key (that is a `503`) |
+| `400` | Bad Request | Client error (invalid cache-key format, missing required headers other than `Authorization`) |
+| `401` | Unauthorized | Authoritative denial: the `Authorization` header is missing or malformed, or the key store says the key is unknown or revoked, or its tenant is suspended. Never emitted for a backend fault while checking the key (that is a `503`) |
 | `403` | Forbidden | API key lacks permission for this operation/namespace |
 | `404` | Not Found | Cache miss (GET/HEAD) or key not found (DELETE) |
 | `409` | Conflict | `PATCH /v1/cache/{key}/ttl` on a stale entry past `fresh_until`; refresh requires a `PUT` of recomputed bytes ([SWR write semantics](#write-semantics)) |
