@@ -85,6 +85,17 @@ All notable changes to the CacheKit Protocol Specification.
   30-day maximum is restated as a bound on a stated TTL's value range, not a
   storage-lifetime ceiling — accumulation of no-expiry entries is unbounded by
   this spec (hygiene tracked as LAB-279).
+### SaaS API — `401` is an authoritative verdict; auth backend faults are `503` (LAB-4093)
+
+- [`spec/saas-api.md`](spec/saas-api.md) Error Handling: `401` is emitted only
+  for an authoritative denial — a missing or malformed `Authorization` header,
+  or the key store saying the key is unknown, revoked, or its tenant suspended or soft-deleted.
+  A backend fault while resolving the key (auth cache / database) is a `503`
+  with `Retry-After`, so SDKs retry under the existing Transient class instead
+  of surfacing a transient blip as "invalid API key" (Permanent, never retried).
+  Documents the cache-worker behaviour shipped in
+  [cachekit-io/saas#380](https://github.com/cachekit-io/saas/pull/380); no
+  SDK change — `503` already classifies as Transient in all three.
 
 ### Wire format — compressed-byte reproducibility scoped per-vector (LAB-1751)
 
