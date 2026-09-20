@@ -4,6 +4,18 @@ All notable changes to the CacheKit Protocol Specification.
 
 ## [Unreleased]
 
+### SaaS API — `401` is an authoritative verdict; auth backend faults are `503` (LAB-4093)
+
+- [`spec/saas-api.md`](spec/saas-api.md) Error Handling: `401` is emitted only
+  for an authoritative denial — a missing or malformed `Authorization` header,
+  or the key store saying the key is unknown, revoked, or its tenant suspended or soft-deleted.
+  A backend fault while resolving the key (auth cache / database) is a `503`
+  with `Retry-After`, so SDKs retry under the existing Transient class instead
+  of surfacing a transient blip as "invalid API key" (Permanent, never retried).
+  Documents the cache-worker behaviour shipped in
+  [cachekit-io/saas#380](https://github.com/cachekit-io/saas/pull/380); no
+  SDK change — `503` already classifies as Transient in all three.
+
 ### SDK feature matrix — TypeScript `cache.secure.wrap()` now fails closed (LAB-513)
 
 - [`sdk-feature-matrix.md`](sdk-feature-matrix.md): the Encryption row "Does the
@@ -22,6 +34,7 @@ All notable changes to the CacheKit Protocol Specification.
   reversed" summary and the Rust builder-stub cross-reference are updated to
   match, and the stale `cache-core.ts:832` / `:873` / `:486`, `cache.ts:87` and
   `intents-core.ts:240` references are replaced with current ones.
+
 
 ### Wire format — compressed-byte reproducibility scoped per-vector (LAB-1751)
 
