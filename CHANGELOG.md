@@ -8,7 +8,7 @@ All notable changes to the CacheKit Protocol Specification.
 
 - [`spec/saas-api.md`](spec/saas-api.md) Error Handling: `401` is emitted only
   for an authoritative denial — a missing or malformed `Authorization` header,
-  or the key store saying the key is unknown, revoked, or its tenant suspended.
+  or the key store saying the key is unknown, revoked, or its tenant suspended or deleted.
   A backend fault while resolving the key (auth cache / database) is a `503`
   with `Retry-After`, so SDKs retry under the existing Transient class instead
   of surfacing a transient blip as "invalid API key" (Permanent, never retried).
