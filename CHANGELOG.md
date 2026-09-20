@@ -13,13 +13,25 @@ All notable changes to the CacheKit Protocol Specification.
 - New [`test-vectors/decode-bounds.json`](test-vectors/decode-bounds.json)
   (13 reject + 2 accept) with [`tools/decode-bounds-reference.py`](tools/decode-bounds-reference.py)
   and its mutation suite; vendored and CI-executed by
-  [cachekit-py#276](https://github.com/cachekit-io/cachekit-py/pull/276) and
-  [cachekit-rs#73](https://github.com/cachekit-io/cachekit-rs/pull/73) (merged 2026-09-13) and
-  [cachekit-ts#121](https://github.com/cachekit-io/cachekit-ts/pull/121) (open).
+  [cachekit-py#276](https://github.com/cachekit-io/cachekit-py/pull/276),
+  [cachekit-rs#73](https://github.com/cachekit-io/cachekit-rs/pull/73) (both merged 2026-09-13)
+  and [cachekit-ts#121](https://github.com/cachekit-io/cachekit-ts/pull/121) (merged 2026-09-20).
 - [`spec/wire-format.md` → Security Limits](spec/wire-format.md#security-limits)
   cross-references the rules for the envelope bytes and the payload inside them.
 - The single shared depth value stays [protocol#20](https://github.com/cachekit-io/protocol/issues/20)'s
   open item.
+
+### SaaS API — `401` is an authoritative verdict; auth backend faults are `503` (LAB-4093)
+
+- [`spec/saas-api.md`](spec/saas-api.md) Error Handling: `401` is emitted only
+  for an authoritative denial — a missing or malformed `Authorization` header,
+  or the key store saying the key is unknown, revoked, or its tenant suspended or soft-deleted.
+  A backend fault while resolving the key (auth cache / database) is a `503`
+  with `Retry-After`, so SDKs retry under the existing Transient class instead
+  of surfacing a transient blip as "invalid API key" (Permanent, never retried).
+  Documents the cache-worker behaviour shipped in
+  [cachekit-io/saas#380](https://github.com/cachekit-io/saas/pull/380); no
+  SDK change — `503` already classifies as Transient in all three.
 
 ### Wire format — compressed-byte reproducibility scoped per-vector (LAB-1751)
 
