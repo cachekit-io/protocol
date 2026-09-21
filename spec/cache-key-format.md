@@ -256,16 +256,32 @@ Enforcement: the vectors are vendored (sha256-pinned) into cachekit-py and byte-
 ```
 SERIALIZER_CODES = {"default": "s", "auto": "a", "orjson": "o", "arrow": "w", "local": "l"}
 
-// Alias spellings this SDK accepts -> canonical name. Empty if the SDK accepts only
-// canonical names. The SAME map must canonicalize the serializer name the wire format
-// records, or a key and its stored envelope can disagree about which serializer wrote it.
-SERIALIZER_ALIASES = {"std": "default", "pythonic": "auto"}
+// SDK-SUPPLIED, not fixed by this spec: alias spellings THIS SDK accepts -> canonical
+// name. Empty if the SDK accepts only canonical names. The SAME map must canonicalize the
+// serializer name the wire format records, or a key and its stored envelope can disagree
+// about which serializer wrote it. Do not adopt another SDK's aliases: mapping a spelling
+// your API does not accept hands that name a table code instead of the derived `x` code it
+// should get. cachekit-py's map is in the Python note above.
+SERIALIZER_ALIASES = {}   // e.g. cachekit-py: {"std": "default", "pythonic": "auto"}
+
+// SDK-SUPPLIED, not fixed by this spec: reduce whatever your API accepts as a serializer to
+// the canonical STRING identity, before any lookup below. An SDK that accepts only names
+// returns the name unchanged. One that also accepts a serializer OBJECT must convert it
+// here — the lookups below are string operations and are undefined on an object. This is
+// the "SDK-defined refinement" the one-identity-one-code rule permits, so it must be a pure
+// function of the serializer's configuration, never of an object address or a randomised
+// hash. cachekit-py maps an object to "<custom>:" + its bare class name (Python note
+// above); the prefix uses characters no identifier can contain, which is what stops a class
+// named `auto` from taking AutoSerializer's code.
+function normalize_identity(serializer_type):
+    return serializer_type   // names-only SDK; override to handle objects
 
 function serializer_code(serializer_type):
-    // Resolve any alias spelling this SDK accepts, then look the code up. An identity
-    // outside the table gets its OWN derived code — never a shared constant, which would
-    // put every unrecognised serializer on one keyspace.
-    identity = SERIALIZER_ALIASES.get(serializer_type, serializer_type)
+    // Reduce to a string identity, resolve any alias spelling this SDK accepts, then look
+    // the code up. An identity outside the table gets its OWN derived code — never a shared
+    // constant, which would put every unrecognised serializer on one keyspace.
+    name = normalize_identity(serializer_type)
+    identity = SERIALIZER_ALIASES.get(name, name)
     if identity in SERIALIZER_CODES:
         return SERIALIZER_CODES[identity]
     // digest .hex(): exactly 4 lowercase zero-padded hex chars — never a numeric hex()
