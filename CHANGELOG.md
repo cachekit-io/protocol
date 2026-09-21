@@ -43,6 +43,18 @@ All notable changes to the CacheKit Protocol Specification.
   (`tests/unit/protocol/test_cache_key_vectors.py`, pinned to protocol
   `f0672c1c`). Every vector uses `std` → `1s`; vectors for the derived codes
   need a released generator that emits them and follow separately.
+- Test Vectors byte-for-byte scope corrected: the args-hash segment is the
+  unconditional match requirement; the `{ic_flag}{serializer_code}` suffix is
+  only required to match for an SDK that implements serializer codes at all
+  (`cachekit-ts` and `cachekit-rs` do not). An unscoped requirement was
+  unsatisfiable for those two and contradicted the fixture's own `note` field.
+- `normalize_identity()`: the purity constraint gains an explicit injectivity
+  requirement — two configurations that change the serialized container's
+  bytes MUST NOT normalize to the same identity, since a collapsed identity
+  makes the derived code and the frame tag agree and defeats the read-side
+  mismatch check. An object-to-string refinement MUST use a marker no bare
+  identity can produce, promoted from a cachekit-py-specific example to a
+  requirement on the hook's contract.
 
 ### SaaS API — `401` is an authoritative verdict; auth backend faults are `503` (LAB-4093)
 
