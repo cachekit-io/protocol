@@ -6,7 +6,7 @@
 
 **Deterministic key generation from function identity and arguments.**
 
-*Protocol Version 1.0 · Verified against `cachekit-py` v0.12.0 (`src/cachekit/key_generator.py`)*
+*Protocol Version 1.0 · Verified against `cachekit-py` v0.18.0 (`src/cachekit/key_generator.py`)*
 
 </div>
 
@@ -42,18 +42,52 @@ ns:{namespace}:func:{module}.{qualname}:args:{blake2b_hash}:{ic_flag}{serializer
 | `func:{module}.{qualname}:` | Function identifier (module path + qualified name) | `func:myapp.services.get_user:` |
 | `args:{blake2b_hash}:` | Blake2b-256 hash of normalized, MessagePack-serialized arguments | `args:a3c8d4...f2e1:` |
 | `{ic_flag}` | Integrity checking: `1` = ByteStorage enabled, `0` = raw MessagePack | `1` |
-| `{serializer_code}` | Serializer type (1 char) | `s` |
+| `{serializer_code}` | Serializer identity (1 char, or `x` + 4 hex — see below) | `s` |
 
 ### Serializer Codes
 
-| Code | Serializer | Cross-language? |
-| :---: | :--- | :---: |
-| `s` | StandardSerializer (MessagePack) | ✅ Yes |
-| `a` | AutoSerializer (Python-specific) | ❌ No |
-| `o` | OrjsonSerializer (JSON-based) | ⚠️ Partial |
-| `w` | ArrowSerializer (columnar) | ⚠️ Partial |
+| Code | Serializer | Canonical name | Cross-language? |
+| :---: | :--- | :--- | :---: |
+| `s` | StandardSerializer (MessagePack) | `default` | ✅ Yes |
+| `a` | AutoSerializer (language-specific types) | `auto` | ❌ No |
+| `o` | OrjsonSerializer (JSON-based) | `orjson` | ⚠️ Partial |
+| `w` | ArrowSerializer (columnar) | `arrow` | ⚠️ Partial |
+| `l` | Reference caching (no serialization) | `local` | ❌ No |
+| `x` + 4 hex | Any serializer identity not in this table | — | ❌ No |
 
 For cross-SDK interoperability, always use `s` (StandardSerializer).
+
+An identity outside the table gets `x` followed by the first 2 bytes of
+`blake2b(identity, digest_size=2)` as lowercase hex — a per-identity code, not a shared
+bucket. Codes are therefore 1 character for the table entries and 5 for everything else.
+
+> [!IMPORTANT]
+> **The code MUST be derived from the serializer the cache is configured with, never a
+> fixed default.** An SDK that emits one constant code collapses every serializer onto a
+> single keyspace: two caches over one function then share a key, each fails the other's
+> serializer-name check on read, evicts, and recomputes — a permanent 0% hit rate.
+>
+> **Two serializer identities that the wire format records differently MUST NOT share a
+> code**, which is why the fallback is derived rather than constant. Where a derivation
+> collision does occur (≈1 in 2^16), the reader-side serializer-name check in the
+> [wire format](wire-format.md) is the only remaining separator, so that check is REQUIRED,
+> not advisory.
+>
+> `cache_key` is an AES-256-GCM AAD input (see [Encryption](encryption.md)). Two serializers
+> sharing a code therefore produce a **byte-identical AAD**: AAD binding does not separate
+> them, and the cipher is not a backstop for a missing name check.
+>
+> **Conversely, one identity MUST always produce one code.** Derive it from the same value
+> the wire format records as the serializer name, never from a process-local value such as
+> an object address or a randomised hash, or keys stop being reproducible across processes.
+
+> [!NOTE]
+> **Python SDK specifics.** `cachekit-py` additionally accepts the alias spellings
+> `std`/`standard` for `default` and `pythonic` for `auto`, canonicalizing them before the
+> lookup. A serializer passed as an *instance* rather than a name is recorded under its class
+> name — built-ins included — and so takes a derived `x`-prefixed code rather than the
+> table's. Two instances of the same class are one identity: the SDK documents distinct
+> namespaces for per-configuration serializers.
 
 ### Example Keys
 
@@ -203,8 +237,24 @@ Enforcement: the vectors are vendored (sha256-pinned) into cachekit-py and byte-
 <summary>Expand full pseudocode</summary>
 
 ```
+SERIALIZER_CODES = {"default": "s", "auto": "a", "orjson": "o", "arrow": "w", "local": "l"}
+
+// Alias spellings this SDK accepts -> canonical name. Empty if the SDK accepts only
+// canonical names. The SAME map must canonicalize the serializer name the wire format
+// records, or a key and its stored envelope can disagree about which serializer wrote it.
+SERIALIZER_ALIASES = {"std": "default", "standard": "default", "pythonic": "auto"}
+
+function serializer_code(serializer_type):
+    // Resolve any alias spelling this SDK accepts, then look the code up. An identity
+    // outside the table gets its OWN derived code — never a shared constant, which would
+    // put every unrecognised serializer on one keyspace.
+    canonical = SERIALIZER_ALIASES.get(serializer_type, serializer_type)
+    if canonical in SERIALIZER_CODES:
+        return SERIALIZER_CODES[canonical]
+    return "x" + hex(blake2b(canonical.utf8_bytes(), digest_size=2))
+
 function generate_cache_key(namespace, func_module, func_qualname, args, kwargs,
-                            integrity_checking=true, serializer_type="std"):
+                            integrity_checking=true, serializer_type="default"):
 
     // Build key parts
     parts = []
@@ -222,10 +272,10 @@ function generate_cache_key(namespace, func_module, func_qualname, args, kwargs,
 
     parts.append("args:" + hash + ":")
 
-    // Metadata suffix
+    // Metadata suffix. serializer_type is the serializer the cache is CONFIGURED with —
+    // read it from the decorator/client configuration, never a fixed default.
     ic_flag = "1" if integrity_checking else "0"
-    serializer_code = SERIALIZER_CODES[serializer_type]  // "s" for standard
-    parts.append(ic_flag + serializer_code)
+    parts.append(ic_flag + serializer_code(serializer_type))
 
     key = join(parts)
 
