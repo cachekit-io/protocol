@@ -25,7 +25,14 @@ All notable changes to the CacheKit Protocol Specification.
 - Status banners reconciled with shipped code: `spec/encryption.md` and
   `decisions/key-rotation.md` no longer say "not yet implemented"; the
   [feature matrix](sdk-feature-matrix.md#encryption) Key rotation row is ✅ for
-  Python, Rust and TypeScript (cachekit-py#261, cachekit-rs#63, cachekit-ts#103).
+  Python 0.18.0+ (cachekit-py#261) and 🚧 unreleased for Rust and TypeScript —
+  cachekit-rs#63 and cachekit-ts#103 are merged but absent from crates.io 0.7.0
+  and npm 0.1.5 (artifacts inspected 2026-09-22).
+- `decisions/key-rotation.md` compromise runbook: flush at cut-over **and** again
+  once the last old-key writer has stopped — a deferred single flush leaves the
+  whole compromised corpus readable for the rollout window; the decrypt-only
+  list must be explicitly empty, since an omitted list falls back to
+  `CACHEKIT_PREVIOUS_MASTER_KEYS`.
 
 ### SaaS API — `401` is an authoritative verdict; auth backend faults are `503` (LAB-4093)
 
