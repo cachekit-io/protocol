@@ -4,6 +4,25 @@ All notable changes to the CacheKit Protocol Specification.
 
 ## [Unreleased]
 
+### Encryption — hardware-acceleration detection surfacing in rs/ts (LAB-523)
+
+- [Feature matrix](sdk-feature-matrix.md#encryption) Hardware acceleration
+  detection row: Rust and TypeScript move from "core-internal, not re-exported" /
+  "not exposed" to 🚧 in review — [cachekit-rs#80](https://github.com/cachekit-io/cachekit-rs/pull/80)
+  (`EncryptionLayer::hardware_acceleration_enabled()`, `SecureCache` forwarder)
+  and [cachekit-ts#132](https://github.com/cachekit-io/cachekit-ts/pull/132)
+  (`TenantKeys.hardwareAccelerationEnabled()` on both bindings,
+  `EncryptionManagerCore.isHardwareAccelerated()`). Published artifacts are
+  unchanged: crates.io 0.7.0 and npm 0.1.5 (checked 2026-09-22) still expose
+  nothing, so the cells are not ✅ — they flip to 🚧 unreleased on merge and to
+  ✅ with a version floor on release, per
+  [decisions/matrix-version-verification.md](decisions/matrix-version-verification.md).
+- Footnote ⁶ rewritten: names the core accessor and its per-architecture
+  behaviour (runtime probe on x86/x86_64, compile-time on aarch64, always `false`
+  on wasm32), states the flag is informational only, drops the stale line
+  numbers, and cites the executed tests behind the wasm32 and x86_64 claims
+  rather than a traced mechanism.
+
 ### Encryption — keyring conformance vectors + status reconciliation (LAB-687)
 
 - [`test-vectors/encryption.json`](test-vectors/encryption.json) gains a `keyring`
