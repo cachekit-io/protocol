@@ -22,6 +22,36 @@ All notable changes to the CacheKit Protocol Specification.
   change, no server change.
   **Proposed (accepted on merge)** — the epic owner's merge is the ratification.
 
+### Encryption — keyring conformance vectors + status reconciliation (LAB-687)
+
+- [`test-vectors/encryption.json`](test-vectors/encryption.json) gains a `keyring`
+  block: two master keys (`k1`, `k2`) for tenant `keyring-conformance`, one entry
+  sealed under each, and per-vector `key_fingerprint_hex` — the fingerprint of the
+  HKDF-derived per-tenant encryption key, as cachekit-py stores it. Frozen names
+  `encrypted_with_k1` / `encrypted_with_k2`; append-only like the main set.
+- [`tools/encryption-verify.py`](tools/encryption-verify.py) enforces
+  [`spec/encryption.md` § Key Rotation (Keyring)](spec/encryption.md#key-rotation-keyring):
+  `[k2, k1]` decrypts both at the declared entry, `[k2]` alone rejects the k1
+  entry, and the stored fingerprint selects the derived key — a master-key
+  fingerprint cannot select. Entry derivation, metadata, AAD and selection run
+  in the stdlib lane; only the decrypt attempts need `cryptography`.
+- New [`tools/test_encryption_verify.py`](tools/test_encryption_verify.py) mutation
+  suite runs ahead of the verifier in both CI lanes (same doctrine as the
+  wire-format guard): every keyring guard is proven to go red by poisoning a copy
+  of the fixture. Added after the LAB-687 panel found three vacuous passes in the
+  first revision.
+- Status banners reconciled with shipped code: `spec/encryption.md` and
+  `decisions/key-rotation.md` no longer say "not yet implemented"; the
+  [feature matrix](sdk-feature-matrix.md#encryption) Key rotation row is ✅ for
+  Python 0.18.0+ (cachekit-py#261) and 🚧 unreleased for Rust and TypeScript —
+  cachekit-rs#63 and cachekit-ts#103 are merged but absent from crates.io 0.7.0
+  and npm 0.1.5 (artifacts inspected 2026-09-22).
+- `decisions/key-rotation.md` compromise runbook: flush at cut-over **and** again
+  once the last old-key writer has stopped — a deferred single flush leaves the
+  whole compromised corpus readable for the rollout window; the decrypt-only
+  list must be explicitly empty, since an omitted list falls back to
+  `CACHEKIT_PREVIOUS_MASTER_KEYS`.
+
 ### SaaS API — `401` is an authoritative verdict; auth backend faults are `503` (LAB-4093)
 
 - [`spec/saas-api.md`](spec/saas-api.md) Error Handling: `401` is emitted only
