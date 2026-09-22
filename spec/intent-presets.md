@@ -187,11 +187,6 @@ recorded as such in the matrix.
    and TypeScript **MUST NOT** add `encrypted` aliases "for parity" — that creates a third
    spelling, not a second.
 
-**Migration story.** Nothing in code renames. The "loser" is the *documentation
-vocabulary*: any doc, README or matrix cell that calls the preset family "encrypted"
-switches to `secure` with the Rust spelling footnoted. The Rust-rename alternative and
-the condition for revisiting it are recorded in [Design Decisions](#design-decisions).
-
 ---
 
 ## Master Key Input
@@ -262,10 +257,20 @@ point that does not.
    `minimal`, `production` or `io` — **no constructor is exempt**, including an
    explicit *configure-everything-from-environment* constructor (e.g.
    `CacheKit::from_env()`). Such a constructor **MAY** source the master key from the
-   environment; it **MUST NOT** infer encryption state from the key's mere presence any
-   more than any other constructor does. `CACHEKIT_MASTER_KEY`'s only roles are:
+   environment for later use (the [`secure` fallback](#master-key-input) or an explicit
+   encryption option), but with no portable activation variable (rationale 4, below) and
+   no argument list to carry an explicit spelling, a zero-argument env constructor has
+   **no path to activate encryption on its own** — it can only supply a key that a
+   subsequent explicit call consumes. It **MUST NOT** infer encryption state from the
+   key's mere presence any more than any other constructor does. `CACHEKIT_MASTER_KEY`'s
+   only roles are:
    - the key fallback for `secure` ([above](#master-key-input));
-   - the key fallback for an explicit encryption option that names no key.
+   - the key fallback for an explicit encryption option that names no key;
+   - **legacy-decrypt**: transparently decrypting ciphertext a still-encrypting peer
+     already wrote, on a client whose current write path is not encrypting (see the
+     migration story below). This is a read-side obligation, not an activation path —
+     it does not put the client in an encrypting state and does not satisfy rule 1's
+     "explicit intent" for new writes.
 3. An explicit opt-out (`encryption=False` or equivalent) **MUST** be honoured even when
    a key is present.
 
@@ -307,14 +312,25 @@ what a still-encrypting peer already wrote. For one transitional minor release P
    silences `DeprecationWarning` by default outside `__main__`, so on every
    uvicorn/gunicorn/celery deployment the notice would otherwise never surface) naming
    the explicit spellings (`@cache.secure(...)` or `encryption=True`).
-3. The following release **MUST** remove auto-*activation* of new writes and **MUST**
-   fail closed on that release if `CACHEKIT_MASTER_KEY` is present without an explicit
-   encryption spelling and legacy-decrypt does not apply — construction errors rather than
-   silently starting to write plaintext under a variable the deployment set for
-   encryption. This is the one release where alternative *(B)* from
+3. The following release **MUST** remove auto-*activation* of new writes. The gate tests
+   only inputs known at construction — never "does legacy-decrypt apply", which is a
+   property of per-entry backend state discovered on read, not of construction inputs,
+   and so cannot gate construction without leaving a branch undefined:
+   - `encryption=True` (or `@cache.secure(...)`) → construct encrypting, as today.
+   - `encryption=False` → construct **not** encrypting new writes, and **MUST** still
+     retain legacy-decrypt from `CACHEKIT_MASTER_KEY` if present — the read-side role
+     rule 2 names above, unaffected by this branch.
+   - `CACHEKIT_MASTER_KEY` present with **neither** an explicit `encryption=` nor
+     `@cache.secure(...)` → construction **MUST** fail, naming both explicit spellings.
+     Presence alone is no longer read as intent to activate, and a variable the
+     deployment set for encryption **MUST NOT** be silently interpreted as "don't
+     encrypt" either — ambiguous intent is an error, not a default.
+
+   Every branch is decidable at construction; none strands the legacy-decrypt migration.
+   This is the one release where alternative *(B)* from
    [Design Decisions](#design-decisions) (presence on a non-encrypting preset is an
-   error) applies; it is rejected as a *permanent* rule but is the correct transitional
-   gate against a silent confidentiality downgrade.
+   error) applies, on the third branch only; it is rejected as a *permanent* rule but is
+   the correct transitional gate against a silent confidentiality downgrade.
 
 The fleet-convenience guidance shipped under LAB-749 is rewritten in the same release.
 The rejected alternatives are in [Design Decisions](#design-decisions).
@@ -385,13 +401,14 @@ implementation is out of scope for the specification itself.
 
 | Requirement | Python | Rust | TypeScript |
 | :--- | :--- | :--- | :--- |
-| Finite default TTL 300 / 600 / 600 / 3 600 s | ❌ none — entries never expire (`wrapper.py:499`) — LAB-4641 | ❌ `intents.rs:76,117,167,217` finite, but `from_env()` additionally reads `CACHEKIT_DEFAULT_TTL` (`config.rs:165`) — a process-wide override this specification no longer defines — LAB-4664 | ✅ `intents-core.ts:220,242,265,297` |
+| Finite default TTL 300 / 600 / 600 / 3 600 s | ❌ none — entries never expire (`wrapper.py:499`) — LAB-4641 | ✅ `intents.rs:76,117,167,217` | ✅ `intents-core.ts:220,242,265,297` |
+| No process-wide default-TTL override (rule 3) | ✅ (no such setting is wired in — see [LAB-4641](mention://issue/01a0c881-9e12-7199-a9f1-cf342726b84b)'s scope) | ❌ `from_env()` reads `CACHEKIT_DEFAULT_TTL` (`config.rs:165`), an override this specification no longer defines — LAB-4664 | ✅ |
 | `minimal`: L1 on, SWR / invalidation off | ✅ `decorator.py:335-350` | ❌ `.no_l1()` (`intents.rs:77`) — LAB-4644 | ✅ `intents-core.ts:221-230` |
 | `secure`: L1 on, ciphertext only | ❌ `@cache.secure(backend=None)` sets `_explicit_l1_only` (`decorators/intent.py:136`) → `ObjectCache`, which stores raw Python objects with no serializer in the path — encryption in cachekit-py is a serializer wrapper, so plaintext lands in L1 (`decorators/wrapper.py:659`) — LAB-4665 | ✅ `client.rs:656` | ✅ `cache-core.ts:654,831` |
 | Reliability stack on for `production` / `secure` / `io` | ✅ | ✅ `ReliabilityConfig::default()` | ✅ `PRODUCTION_RELIABILITY` |
 | `secure` takes a hex key and falls back to `CACHEKIT_MASTER_KEY` | ✅ ≥ 32 B (`validation.py:95`) | ❌ `encrypted(url, &[u8])` — raw bytes only, no env fallback, `len() >= 32` accepts more than exactly 32 B (`intents.rs:160-163`; `encryption.rs:101`) — LAB-4645, LAB-4663 | ✅ exactly 32 B (`constants.ts:138`) |
 | Missing master key fails at construction | ✅ `intent.py:212` | ✅ required argument; short key → `Err` | ✅ `intents-core.ts:257` |
-| Default `tenant_id` is `"default"`, identical for HKDF and AAD | ❌ deployment UUID (`cache_handler.py:591`) — LAB-4666 | ❌ `"default"` via `::encrypted`, deployment namespace via `from_env()` — inconsistent by constructor — LAB-4667 | ❌ HKDF `'default'` (`manager-core.ts:206`) but AAD `''` (`manager-core.ts:375`) — mismatched within one SDK — LAB-4668 |
+| Default `tenant_id` is `"default"`, identical for HKDF and AAD | ❌ deployment UUID resolved at `cache_handler.py:659`, used as tenant at `:937` — LAB-4666 | ❌ `"default"` via `::encrypted`, deployment namespace via `from_env()` — inconsistent by constructor — LAB-4667 | ❌ HKDF `'default'` (`manager-core.ts:206`) but AAD `''` (`manager-core.ts:375`) — mismatched within one SDK — LAB-4668 |
 | `CACHEKIT_MASTER_KEY` does not activate encryption on `minimal` / `production` / `io` | ❌ tri-state auto-detect on every preset (`cache_handler.py:580-585`) — LAB-4642 | ❌ `from_env()` activates from key presence alone (`config.rs:112`) — no constructor is exempt under the revised rule 2 — LAB-4669 | ✅ `secure()` only (`intents-core.ts:255`) |
 | Encrypted preset is spelled `secure` | ✅ `@cache.secure` | ❌ `CacheKit::encrypted(url, key)` (`intents.rs:160`); the `SecureCache` accessor holds the name (`client.rs:664`) — LAB-4651 | ✅ `createCache.secure()` |
 | `io`: API key by argument **or** `CACHEKIT_API_KEY` | ❌ env only; `backend=` silently dropped (`decorator.py:577`, `intent.py:220`) — LAB-4643 | ❌ argument only (`intents.rs:210`) — LAB-4647 | ✅ `intents-core.ts:283-288` |

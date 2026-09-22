@@ -105,7 +105,7 @@ This length-prefixed format prevents collision between `(domain="foo", salt="bar
 
 | Parameter | Limit |
 | :--- | ---: |
-| Minimum master key length | 16 bytes |
+| HKDF input-keying-material floor (not the user-facing minimum — see [Master Key](#master-key) / [intent-presets.md → Master Key Input](intent-presets.md#master-key-input) for the enforced 32-byte minimum) | 16 bytes |
 | Maximum domain length | 255 bytes (fits in u8) |
 | Maximum tenant salt length | 1024 bytes (fits in u16) |
 | Domain | Must not be empty |
