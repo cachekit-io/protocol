@@ -287,6 +287,10 @@ point that does not.
    Presence-activation has **no error path when the key is absent**: that is cachekit-py
    issue #128 — `@cache.io` with `CACHEKIT_MASTER_KEY` unset writes plaintext to the SaaS,
    silently. A preset that encrypts only when the environment says so cannot fail closed.
+   This ground is narrower than it sounds: the adopted rule's steady state also writes
+   plaintext when a key is present and no explicit spelling was given — the migration's
+   construction-error branch closes that for one release only. Grounds 1, 3 and 4 carry
+   the decision on their own; this one records the residual case rather than deciding it.
 3. *Environment-dependent semantics.* Presence-activation makes development (no variable)
    and production (variable) run different code paths: L1 holds plaintext in one and
    ciphertext in the other, payload sizes differ, decrypt-failure policy applies in one
@@ -402,7 +406,7 @@ implementation is out of scope for the specification itself.
 | Requirement | Python | Rust | TypeScript |
 | :--- | :--- | :--- | :--- |
 | Finite default TTL 300 / 600 / 600 / 3 600 s | ❌ none — entries never expire (`wrapper.py:499`) — LAB-4641 | ✅ `intents.rs:76,117,167,217` | ✅ `intents-core.ts:220,242,265,297` |
-| No process-wide default-TTL override (rule 3) | ✅ (no such setting is wired in — see [LAB-4641](mention://issue/01a0c881-9e12-7199-a9f1-cf342726b84b)'s scope) | ❌ `from_env()` reads `CACHEKIT_DEFAULT_TTL` (`config.rs:165`), an override this specification no longer defines — LAB-4664 | ✅ |
+| No process-wide default-TTL override (rule 3) | ❌ `CACHEKIT_DEFAULT_TTL` is offered — `settings.py:226`, env-settable and documented — even though nothing on the decorator path reads it; rule 3 forbids offering one — LAB-4641 | ❌ `from_env()` reads `CACHEKIT_DEFAULT_TTL` (`config.rs:165`), an override this specification no longer defines — LAB-4664 | ✅ |
 | `minimal`: L1 on, SWR / invalidation off | ✅ `decorator.py:335-350` | ❌ `.no_l1()` (`intents.rs:77`) — LAB-4644 | ✅ `intents-core.ts:221-230` |
 | `secure`: L1 on, ciphertext only | ❌ `@cache.secure(backend=None)` sets `_explicit_l1_only` (`decorators/intent.py:136`) → `ObjectCache`, which stores raw Python objects with no serializer in the path — encryption in cachekit-py is a serializer wrapper, so plaintext lands in L1 (`decorators/wrapper.py:659`) — LAB-4665 | ✅ `client.rs:656` | ✅ `cache-core.ts:654,831` |
 | Reliability stack on for `production` / `secure` / `io` | ✅ | ✅ `ReliabilityConfig::default()` | ✅ `PRODUCTION_RELIABILITY` |
@@ -410,6 +414,7 @@ implementation is out of scope for the specification itself.
 | Missing master key fails at construction | ✅ `intent.py:212` | ✅ required argument; short key → `Err` | ✅ `intents-core.ts:257` |
 | Default `tenant_id` is `"default"`, identical for HKDF and AAD | ❌ deployment UUID resolved at `cache_handler.py:659`, used as tenant at `:937` — LAB-4666 | ❌ `"default"` via `::encrypted`, deployment namespace via `from_env()` — inconsistent by constructor — LAB-4667 | ❌ HKDF `'default'` (`manager-core.ts:206`) but AAD `''` (`manager-core.ts:375`) — mismatched within one SDK — LAB-4668 |
 | `CACHEKIT_MASTER_KEY` does not activate encryption on `minimal` / `production` / `io` | ❌ tri-state auto-detect on every preset (`cache_handler.py:580-585`) — LAB-4642 | ❌ `from_env()` activates from key presence alone (`config.rs:112`) — no constructor is exempt under the revised rule 2 — LAB-4669 | ✅ `secure()` only (`intents-core.ts:255`) |
+| Explicit encryption option encrypts every operation (activation rule 1) | ✅ on the backend path — `encryption=True` wraps the serializer in the encryption wrapper (`cache_handler.py:574`, `:636`); the `backend=None` L1-only path bypasses it — LAB-4665 | ❌ the builder's `.encryption()` layer is consulted only by the `SecureCache` handle (`client.rs:734`); plain `set`/`get` never read it (`client.rs:537`, `:358`), and with the `encryption` feature off the builder methods return `Ok(self)` (`client.rs:1077`) — LAB-4676 | ✅ `if (this.encryption)` on both paths (`cache-core.ts:558`, `:823`) |
 | Encrypted preset is spelled `secure` | ✅ `@cache.secure` | ❌ `CacheKit::encrypted(url, key)` (`intents.rs:160`); the `SecureCache` accessor holds the name (`client.rs:664`) — LAB-4651 | ✅ `createCache.secure()` |
 | `io`: API key by argument **or** `CACHEKIT_API_KEY` | ❌ env only; `backend=` silently dropped (`decorator.py:577`, `intent.py:220`) — LAB-4643 | ❌ argument only (`intents.rs:210`) — LAB-4647 | ✅ `intents-core.ts:283-288` |
 
