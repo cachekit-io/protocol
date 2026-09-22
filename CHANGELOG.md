@@ -20,8 +20,8 @@ All notable changes to the CacheKit Protocol Specification.
   presence-activation are the outliers); an explicit encryption option MUST encrypt
   every operation or be rejected; the default `tenant_id` is `"default"` and MUST be
   identical for HKDF and AAD; no SDK MAY offer a process-wide default-TTL override;
-  `io` takes its API key by argument **or** `CACHEKIT_API_KEY`; explicit arguments a
-  preset does not support MUST be rejected, never dropped.
+  `io` takes its API key by argument **or** `CACHEKIT_API_KEY`; explicit arguments
+  that a preset does not support MUST be rejected, never dropped.
 - Per-SDK conformance table (code-verified 2026-09-22 against `main`: py `2f7c979`,
   rs `6587ce9`, ts `379847c`) with one alignment ticket per ❌; TypeScript's only ❌ is
   the HKDF-vs-AAD `tenant_id` mismatch.
