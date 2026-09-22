@@ -71,6 +71,7 @@ layer's own store/retrieve flows are specified in
 | [spec/interop-mode.md](spec/interop-mode.md) | Cross-SDK cache sharing — language-neutral key format, canonical argument normalization *(normative; shipped opt-in in all three SDKs — see the [feature matrix](sdk-feature-matrix.md#compliance-status) for per-SDK version floors)* |
 | [spec/interop-v2.md](spec/interop-v2.md) | Interop v2 compressed-values profile — opt-in LZ4-block + AES-256-GCM cross-SDK values *(DRAFT; no SDK implements it yet)* |
 | [spec/file-backend-format.md](spec/file-backend-format.md) | Shared local File backend filename, header, expiry, and fail-closed flag negotiation |
+| [spec/intent-presets.md](spec/intent-presets.md) | Intent-preset contract — canonical `minimal` / `production` / `secure` / `io` defaults: TTL, L1 and integrity posture, reliability floor, encryption activation and key input, `io` credentials; Rust's `::encrypted` is the ratified spelling of `secure` *(normative; per-SDK conformance and alignment tickets inside)* |
 | [sdk-feature-matrix.md](sdk-feature-matrix.md) | Feature parity tracking across Python, Rust, TypeScript, and PHP SDKs |
 | [decisions/key-rotation.md](decisions/key-rotation.md) | Decision records — master-key rotation via client-side keyring (rationale, rejected options, operator runbooks) |
 

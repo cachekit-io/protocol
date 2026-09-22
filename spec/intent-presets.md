@@ -1,0 +1,392 @@
+**[Protocol](../README.md)** > **Intent Presets**
+
+<div align="center">
+
+# Intent Presets
+
+**The canonical contract behind `minimal` / `production` / `secure` / `io` — what a preset name MUST configure, in every SDK.**
+
+> **Status**: SPECIFIED (protocol 1.x) — normative. Specified under LAB-514 from the
+> LAB-274 parity audit and the code-verified divergence table in the
+> [SDK feature matrix](../sdk-feature-matrix.md#intent-preset-semantics-parity-not-presence).
+> This document changes no SDK; it is the target the per-SDK alignment tickets in
+> [SDK Conformance](#sdk-conformance) converge on. Facts re-verified against
+> `cachekit-py@2f7c979`, `cachekit-rs@6587ce9` and `cachekit-ts@379847c` (`main`, 2026-09-22).
+
+</div>
+
+---
+
+## Table of Contents
+
+- [Scope](#scope)
+- [Canonical Preset Table](#canonical-preset-table)
+- [Default TTL](#default-ttl)
+- [L1 Posture](#l1-posture)
+- [Integrity Posture](#integrity-posture)
+- [Reliability Floor](#reliability-floor)
+- [Encrypted Preset Name](#encrypted-preset-name)
+- [Master Key Input](#master-key-input)
+- [Encryption Activation](#encryption-activation)
+- [`io` Credentials](#io-credentials)
+- [Explicit Configuration](#explicit-configuration)
+- [SDK-Local Presets](#sdk-local-presets)
+- [Per-SDK Spelling](#per-sdk-spelling)
+- [SDK Conformance](#sdk-conformance)
+- [Design Decisions](#design-decisions)
+
+---
+
+## Scope
+
+An **intent preset** is a named constructor that fixes a cache's defaults for one
+operational intent, so that a user who picks the preset *by name* gets the same
+semantics in every SDK. Four names are canonical: **`minimal`**, **`production`**,
+**`secure`**, **`io`**. This specification fixes, per preset: the default TTL, the L1
+posture, the integrity posture, the reliability floor, how encryption is activated and
+how its key is supplied, and where `io` takes its credentials.
+
+The key words MUST, MUST NOT, SHOULD, SHOULD NOT and MAY are used as in RFC 2119.
+
+This specification does **not** govern:
+
+- **Whether a backend is required.** Only cachekit-py can run L1-only
+  (`@cache(backend=None)`); `createCache.<intent>()` (`intents-core.ts:341`) and
+  `CacheKitBuilder::build()` (`client.rs:1083`) reject a missing backend. "L1" below
+  always means the in-process layer *in front of* whatever L2 the SDK requires.
+- **The auto-mode storage container** — SDK-internal, per protocol#11 and
+  [wire-format.md → SDK Storage Containers](wire-format.md#sdk-storage-containers-auto-mode).
+- **Decrypt-failure policy** (fail-open vs fail-closed on an authentication failure) and
+  **key rotation** — both owned by [encryption.md](encryption.md).
+- **Constructor spelling.** `@cache.production`, `createCache.production()` and
+  `CacheKit::production(url)` are all the `production` preset; see
+  [Per-SDK Spelling](#per-sdk-spelling).
+
+---
+
+## Canonical Preset Table
+
+| Preset | Intent | Default TTL | L1 | SWR / cross-process invalidation | Encryption | Reliability stack | Required input |
+| :--- | :--- | ---: | :---: | :---: | :--- | :--- | :--- |
+| `minimal` | cheapest correct cache | 300 s | on | off | off | MAY be off | backend |
+| `production` | default for services | 600 s | on | on | off | on | backend |
+| `secure` | zero-knowledge encrypted | 600 s | on — **ciphertext only** | on | **required, fail-closed** | on | backend + master key (argument or `CACHEKIT_MASTER_KEY`) |
+| `io` | managed CachekitIO backend | 3 600 s | on | on | off (explicit opt-in only) | on | API key (argument or `CACHEKIT_API_KEY`) |
+
+The sections below give the normative rule and the rationale for each column.
+
+---
+
+## Default TTL
+
+1. Every preset **MUST** apply a finite default TTL when the caller supplies none:
+   `minimal` **300 s**, `production` **600 s**, `secure` **600 s**, `io` **3 600 s**.
+2. An explicit TTL (per call, per decorator, per builder) **MUST** override the preset
+   default.
+3. An SDK **MAY** offer a process-wide override. If it does, the environment variable
+   **MUST** be `CACHEKIT_DEFAULT_TTL` (integer seconds) and every preset **MUST** honour
+   it. Precedence: explicit TTL → `CACHEKIT_DEFAULT_TTL` → preset default. A setting that
+   is documented but ignored by presets is a conformance failure, not a gap.
+4. "Never expire" **MUST** be an explicit opt-in (spelling is SDK-local). It **MUST NOT**
+   be a preset default.
+5. An SDK that changes a shipped default to conform **MUST** announce it in its changelog
+   and **SHOULD** emit a one-time deprecation warning for one minor release before the
+   change takes effect.
+
+**Rationale.** Rust and TypeScript already ship exactly these values. A default of
+"never expire" bounds neither memory nor staleness, and under metered-misses pricing it
+also hides cost: a cache-forever `production` entry is a stale-data incident waiting for
+its first schema change, with no expiry to end it. Presets exist so the same name gives
+the same freshness window everywhere; today a Python `@cache.production` entry outlives
+its Rust twin by an unbounded margin.
+
+---
+
+## L1 Posture
+
+1. `minimal`, `production` and `io` **MUST** enable L1 by default.
+2. `minimal` **MUST NOT** enable stale-while-revalidate or cross-process invalidation by
+   default. `production` and `io` **SHOULD** enable both where the backend supports
+   invalidation.
+3. `secure` **MUST** enable L1 by default and **MUST** hold only ciphertext in it. An SDK
+   **MUST NOT** place plaintext in any cache layer for the encrypted preset. This ratifies
+   the 2025-11-13 cachekit-py decision ("L1 stores encrypted bytes") cross-SDK; Rust's
+   `SecureCache` and TypeScript already comply.
+4. No layer **MAY** serve an entry past the TTL it was stored with.
+
+**Rationale.** `minimal` means minimal *features*, not minimal *layers*. L1 is what turns
+a hit into tens of nanoseconds instead of a network round trip, and the staleness it
+introduces on `minimal` — no invalidation — is already bounded by the 300 s TTL the same
+preset accepts. Rust's `.no_l1()` (`intents.rs:77`) makes `minimal` the only preset whose
+every read crosses the network, which contradicts its own "speed-first" rustdoc. On
+`secure`, ciphertext in L1 costs nothing in the zero-knowledge model (decryption happens
+only at read time, on the client) and removes the incentive to trade security for speed.
+
+---
+
+## Integrity Posture
+
+Integrity checksums (xxHash3-64 in the [ByteStorage envelope](wire-format.md)) are a
+property of the SDK's auto-mode storage container, which is SDK-internal (protocol#11).
+This specification therefore fixes **no MUST** on integrity:
+
+1. Where the container carries an integrity check, `production`, `secure` and `io`
+   **SHOULD** enable it and `minimal` **MAY** disable it.
+2. On `secure`, AES-GCM authentication already detects tampering; the checksum is
+   redundant and **MAY** be disabled (forcing it on, as cachekit-py does, is conformant).
+3. An SDK whose container has no checksum — cachekit-rs stores plain MessagePack — is
+   conformant; its documentation **MUST** say so, and the
+   [feature matrix](../sdk-feature-matrix.md#intent-preset-semantics-parity-not-presence)
+   records the per-SDK reality.
+
+---
+
+## Reliability Floor
+
+1. `production`, `secure` and `io` **MUST** enable the SDK's reliability stack by default —
+   whatever the SDK ships of retry, circuit breaker, backpressure / timeouts and graceful
+   degradation. The stack's *composition* is SDK-local; its *default-on* status is not.
+2. `minimal` **MAY** run with the reliability stack off.
+3. Every preset's documentation **MUST** state what happens when the backend is
+   unreachable — whether the error propagates to the caller or the wrapped function runs
+   uncached. The behaviour is the thing a user picks a preset to know; it is documented,
+   never inferred.
+
+**Rationale.** `minimal` is where users go to remove moving parts; a retry loop or
+breaker they did not ask for makes failure modes harder to reason about. All three SDKs
+already run `production`/`secure`/`io` with the stack on and diverge only inside
+`minimal` (Python: breaker off, backpressure on; Rust: everything off, first error
+propagates; TypeScript: breaker neutered, no retry, degradation off) — all conformant, and
+recorded as such in the matrix.
+
+---
+
+## Encrypted Preset Name
+
+1. The canonical name of the encrypted preset is **`secure`**. This specification, the
+   feature matrix and cross-SDK documentation refer to it as `secure`.
+2. Python `@cache.secure` and TypeScript `createCache.secure()` are the canonical
+   spelling.
+3. **Rust — ratified divergence.** `CacheKit::encrypted(url, key)` (`intents.rs:160`) *is*
+   the Rust spelling of the `secure` preset. Rust has no overloading and `secure` is
+   already taken by the `SecureCache` accessor (`pub fn secure(&self)`, `client.rs:664`),
+   so a `CacheKit::secure(url, key)` constructor cannot exist without first renaming the
+   accessor — a two-release breaking migration for a cosmetic gain. In exchange:
+   - cachekit-rs **MUST NOT** add a `::secure` constructor that means anything other than
+     this preset;
+   - the `secure()` accessor's rustdoc **and** its `Config` error message, and the
+     crate-level preset table, **MUST** name `CacheKit::encrypted` as the preset. Today
+     both point only at the builder (`client.rs:654-667`). The pointer lives where the
+     confusion happens;
+   - any cross-SDK document that names the preset **MUST** carry the per-SDK spelling
+     table (or link to [the one below](#per-sdk-spelling)).
+4. No SDK **MAY** introduce a further name or alias for this preset. In particular Python
+   and TypeScript **MUST NOT** add `encrypted` aliases "for parity" — that creates a third
+   spelling, not a second.
+
+**Migration story.** Nothing in code renames. The "loser" is the *documentation
+vocabulary*: any doc, README or matrix cell that calls the preset family "encrypted"
+switches to `secure` with the Rust spelling footnoted. The Rust-rename alternative and
+the condition for revisiting it are recorded in [Design Decisions](#design-decisions).
+
+---
+
+## Master Key Input
+
+[encryption.md → Master Key](encryption.md#master-key) is normative for the key itself
+(hex-encoded, `CACHEKIT_MASTER_KEY`). This section fixes how the **preset** takes it.
+
+1. The `secure` preset **MUST** accept the master key as a **hex string** and **MUST**
+   derive the key bytes as `hex_decode(string)`. The same string **MUST** yield the same
+   key bytes in every SDK.
+2. When no key argument is supplied, `secure` **MUST** fall back to `CACHEKIT_MASTER_KEY`.
+   When neither is present it **MUST** fail at construction (raise / `Err` / throw). It
+   **MUST NOT** fall back to plaintext.
+3. Length: an SDK **MUST** accept a key of exactly **32 bytes (64 hex characters)** and
+   **MUST** reject anything shorter. It **MAY** accept longer keys. Because TypeScript
+   accepts exactly 32 bytes while Python and Rust accept ≥ 32, portability across SDKs is
+   guaranteed **only at exactly 32 bytes** — documentation **MUST** recommend exactly 32.
+4. An SDK **MAY** additionally accept raw key bytes (the Rust idiom) through a
+   *distinctly named* parameter or method. The hex form **MUST** be available on the
+   preset itself, not only on a lower-level builder.
+
+**Rationale.** The cross-SDK hazard is not the parameter *type*; it is the same
+`CACHEKIT_MASTER_KEY` *value* producing different key bytes in two SDKs. A raw-bytes-only
+preset invites `CacheKit::encrypted(url, b"a1b2…")`: the 64 ASCII bytes of the hex
+string pass the ≥ 32-byte check and derive a key no other SDK derives. Nothing fails —
+the entries are simply unreadable from Python and TypeScript, and encrypted
+[interop-mode](interop-mode.md#encryption-in-interop-mode) values silently stop
+interoperating. Rust already hex-decodes in `CacheKitBuilder::encryption` and
+`CacheKit::from_env()` (`client.rs:1049`, `config.rs:121`); the preset is the only entry
+point that does not.
+
+> [!NOTE]
+> The Master Key table in encryption.md previously listed a **16-byte** minimum. All
+> three SDKs enforce **32 bytes** at the configuration boundary (`validation.py:95`,
+> `config.rs:305`, `encryption.rs:101`, `constants.ts:138`); the 16-byte figure is the
+> HKDF core's input-keying-material floor and is not user-facing. Corrected in the same
+> change as this specification.
+
+---
+
+## Encryption Activation
+
+**`CACHEKIT_MASTER_KEY` is a key *source*, not an activation *switch*.**
+
+1. Encryption **MUST** be activated only by explicit intent: choosing the `secure`
+   preset, or passing an explicit encryption option / builder call on another preset
+   (`encryption=True`, `.encryption(...)`, `{ encryption: … }`).
+2. The presence of `CACHEKIT_MASTER_KEY` **MUST NOT** change the encryption state of
+   `minimal`, `production` or `io`. Its only roles are:
+   - the key fallback for `secure` ([above](#master-key-input));
+   - the key fallback for an explicit encryption option that names no key;
+   - input to an explicit *configure-everything-from-environment* constructor
+     (`CacheKit::from_env()`), whose whole contract is "the environment decides". Such a
+     constructor **MAY** enable encryption when the key is present and **MUST** be the
+     only path that does.
+3. An explicit opt-out (`encryption=False` or equivalent) **MUST** be honoured even when
+   a key is present.
+
+**Rationale (security).**
+
+1. *Auditability.* Whether a call site encrypts must be readable at the call site or its
+   explicit configuration — not inferred from which pod happens to carry which variable.
+2. *Fail-closed needs intent.* `secure` without a key is an error in all three SDKs.
+   Presence-activation has **no error path when the key is absent**: that is cachekit-py
+   issue #128 — `@cache.io` with `CACHEKIT_MASTER_KEY` unset writes plaintext to the SaaS,
+   silently. A preset that encrypts only when the environment says so cannot fail closed.
+3. *Environment-dependent semantics.* Presence-activation makes development (no variable)
+   and production (variable) run different code paths: L1 holds plaintext in one and
+   ciphertext in the other, payload sizes differ, `fail_closed` applies in one and not the
+   other. The "fleet-wide convergence point" converges only where the variable is set.
+4. *Two of three already conform.* TypeScript reads the variable only in
+   `createCache.secure()` (`intents-core.ts:255`); Rust reads it only in `from_env()`
+   (`config.rs:112`), an explicit env-configuration constructor consistent with rule 2.
+
+**Migration story (cachekit-py).** Python's tri-state `encryption=None` auto-detect
+(`cache_handler.py:580-585`) currently enables encryption on every preset when the
+variable is set. For one minor release Python **SHOULD** keep that behaviour but emit a
+one-time `DeprecationWarning` on the auto-enable path naming the explicit spellings
+(`@cache.secure(...)` or `encryption=True`); the following release **MUST** remove
+auto-activation. The fleet-convenience guidance shipped under LAB-749 is rewritten in the
+same release. The rejected alternatives are in [Design Decisions](#design-decisions).
+
+---
+
+## `io` Credentials
+
+1. `io` **MUST** accept the API key as an explicit argument **and** fall back to
+   `CACHEKIT_API_KEY` when no argument is given. An explicit argument wins.
+2. When neither is present, `io` **MUST** fail at construction with a configuration error.
+3. `io` **MUST NOT** read `CACHEKIT_MASTER_KEY` to activate encryption
+   ([above](#encryption-activation)); it **MAY** accept an explicit encryption option.
+
+**Rationale.** Environment-only forbids two keys in one process (multi-tenant services,
+test suites); argument-only forbids twelve-factor deployment. Both are legitimate, and
+the family's other secret — the master key — already does argument-or-environment in two
+SDKs. Missing credentials fail where the preset is constructed, never on the first cache
+call.
+
+---
+
+## Explicit Configuration
+
+Across all presets:
+
+1. An explicit argument **MUST** override the preset default.
+2. An argument the preset does not support **MUST** be rejected with a configuration
+   error — never silently dropped. (cachekit-py's `@cache.io(backend=…)` discards
+   `backend=` with only a source comment, `intent.py:220-222`.)
+3. A missing master key (`secure`) or API key (`io`) **MUST** fail at construction.
+   Other misconfiguration **SHOULD** surface at construction rather than on first use.
+
+---
+
+## SDK-Local Presets
+
+An SDK **MAY** ship presets beyond the four canonical names (cachekit-py: `.dev`, `.test`,
+`.local`). They **MUST NOT** reuse a canonical name with different semantics, **MUST** be
+documented as SDK-local, and other SDKs are not required to mirror them. Python's
+`.local` is an in-process object cache that bypasses backends, serialization and
+encryption entirely; it is not a member of this family.
+
+---
+
+## Per-SDK Spelling
+
+| Preset | Python (`cachekit`) | Rust (`cachekit-rs`) | TypeScript (`@cachekit-io/cachekit`) |
+| :--- | :--- | :--- | :--- |
+| `minimal` | `@cache.minimal` | `CacheKit::minimal(url)` — `redis` feature | `createCache.minimal({ url \| backend })` |
+| `production` | `@cache.production` | `CacheKit::production(url)` — `redis` feature | `createCache.production({ url \| backend })` |
+| `secure` | `@cache.secure(master_key=…)` | **`CacheKit::encrypted(url, key)`** — `redis` + `encryption` features¹ | `createCache.secure({ masterKey, url \| backend })` |
+| `io` | `@cache.io` | `CacheKit::io(api_key)` — default features | `createCache.io({ apiKey })` |
+
+> ¹ Ratified divergence — see [Encrypted Preset Name](#encrypted-preset-name). Only `::io`
+> compiles on a default `cargo add cachekit-rs`; the Redis presets need
+> `features = ["redis"]`, and `::encrypted` needs `redis` + `encryption`
+> (`intents.rs:67,107,159,209`; `Cargo.toml:26`).
+
+---
+
+## SDK Conformance
+
+Code-verified 2026-09-22 against `cachekit-py@2f7c979` (0.18.0), `cachekit-rs@6587ce9`
+(0.7.0) and `cachekit-ts@379847c` (0.1.5) on `main`. ❌ cells link the alignment ticket;
+implementation is out of scope for the specification itself.
+
+| Requirement | Python | Rust | TypeScript |
+| :--- | :--- | :--- | :--- |
+| Finite default TTL 300 / 600 / 600 / 3 600 s | ❌ none — entries never expire; `CACHEKIT_DEFAULT_TTL` is documented (`settings.py:226`) but never read on the decorator path (`wrapper.py:499`) — LAB-4641 | ✅ `intents.rs:76,117,167,217`; `from_env()` honours `CACHEKIT_DEFAULT_TTL` | ✅ `intents-core.ts:220,242,265,297` |
+| `minimal`: L1 on, SWR / invalidation off | ✅ `decorator.py:335-350` | ❌ `.no_l1()` (`intents.rs:77`) — LAB-4644 | ✅ `intents-core.ts:221-230` |
+| `secure`: L1 on, ciphertext only | ✅ | ✅ `client.rs:656` | ✅ `cache-core.ts:654,831` |
+| Reliability stack on for `production` / `secure` / `io` | ✅ | ✅ `ReliabilityConfig::default()` | ✅ `PRODUCTION_RELIABILITY` |
+| `secure` takes a hex key and falls back to `CACHEKIT_MASTER_KEY` | ✅ ≥ 32 B (`validation.py:95`) | ❌ `encrypted(url, &[u8])` — raw bytes only, no env fallback (`intents.rs:160-163`) — LAB-4645 | ✅ exactly 32 B (`constants.ts:138`) |
+| Missing master key fails at construction | ✅ `intent.py:212` | ✅ required argument; short key → `Err` | ✅ `intents-core.ts:257` |
+| `CACHEKIT_MASTER_KEY` does not activate encryption on `minimal` / `production` / `io` | ❌ tri-state auto-detect on every preset (`cache_handler.py:580-585`) — LAB-4642 | ✅ `from_env()` only (`config.rs:112`) | ✅ `secure()` only (`intents-core.ts:255`) |
+| Encrypted preset discoverable from `secure` | ✅ | ❌ accessor rustdoc and error point only at the builder (`client.rs:654-667`) — LAB-4646 | ✅ |
+| `io`: API key by argument **or** `CACHEKIT_API_KEY` | ❌ env only; `backend=` silently dropped (`decorator.py:577`, `intent.py:220`) — LAB-4643 | ❌ argument only (`intents.rs:210`) — LAB-4647 | ✅ `intents-core.ts:283-288` |
+
+TypeScript's `cache.secure.wrap()` fails closed on `main` since
+[cachekit-ts#123](https://github.com/cachekit-io/cachekit-ts/pull/123) (LAB-513,
+2026-09-19); npm 0.1.5 predates it, so the matrix warning stands for the published
+artifact.
+
+---
+
+## Design Decisions
+
+**`secure`, not `encrypted`.** Intents name outcomes, not mechanisms — `minimal`,
+`production` and `io` describe what the user wants, and `secure` fits that vocabulary
+where `encrypted` describes how. Two of three SDKs, docs.cachekit.io and the product
+positioning already say `secure`.
+
+**Why Rust keeps `::encrypted`.** `CacheKit::secure` collides with the `secure()`
+accessor; the rename path is (1) deprecate the accessor in favour of a new name,
+(2) remove it, add `CacheKit::secure(url, key)`, deprecate `::encrypted` — two breaking
+releases so that one identifier matches a docs page. Rejected. **Revisit condition:** if
+the `SecureCache` accessor is ever renamed or removed for its own reasons,
+`CacheKit::secure` becomes the constructor and `::encrypted` is deprecated for one minor
+release.
+
+**Key source, not switch.** Alternatives considered: *(A)* presence activates
+everywhere (Python today) — fleet convenience, rejected on the three security grounds
+above; *(B)* presence on a non-encrypting preset is an error — rejected as hostile to
+fleets that legitimately run encrypted and plain caches under one environment;
+*(C)* the rule adopted, which is already what TypeScript does and what Rust does
+outside `from_env()`.
+
+**Finite TTL rather than ratifying "forever".** Ratifying Python's behaviour would have
+required Rust and TypeScript to *remove* expiry defaults — the only direction that makes
+every deployment worse.
+
+**No MUST on integrity.** The checksum lives in the storage container, which
+protocol#11 makes SDK-internal; a MUST here would legislate the container by the back
+door.
+
+**Hex on the preset, bytes allowed elsewhere.** The contract protects the shared
+environment variable, not Rust's type preferences; a raw-bytes API remains fine as long
+as it is not the only door.
+
+**No test vectors.** Nothing here is byte-level. The
+[Canonical Preset Table](#canonical-preset-table) is the fixture; SDK test suites assert
+the four TTLs and the postures directly.

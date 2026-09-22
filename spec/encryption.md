@@ -55,7 +55,7 @@ CACHEKIT_MASTER_KEY=a1b2c3d4e5f6...  (hex-encoded, minimum 32 bytes / 64 hex cha
 
 | Constraint | Value |
 | :--- | :--- |
-| Minimum length | 16 bytes (32 bytes strongly recommended) |
+| Minimum length | **32 bytes (64 hex chars)** — enforced by every SDK at configuration (cachekit-py `validation.py:95`, cachekit-rs `config.rs:305`, cachekit-ts `constants.ts:138`); the 16-byte figure under [Constraints](#constraints) is the HKDF core's input-keying-material floor, not a user-facing minimum. TypeScript accepts *exactly* 32 bytes, so portability is guaranteed only at that length — see [intent-presets.md → Master Key Input](intent-presets.md#master-key-input) |
 | Encoding | Hex string |
 | Env var | `CACHEKIT_MASTER_KEY` |
 
