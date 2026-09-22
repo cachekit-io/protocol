@@ -12,9 +12,8 @@ All notable changes to the CacheKit Protocol Specification.
   for every preset and ciphertext-only on `secure` (ratifies the 2025-11-13 cachekit-py
   decision cross-SDK); no MUST on integrity checksums (the storage container is
   SDK-internal, protocol#11); reliability stack default-on for `production`/`secure`/`io`;
-  `secure` is the canonical name and Rust's `CacheKit::encrypted` is a **ratified
-  divergence** (the `secure()` accessor occupies the name — the rename would cost two
-  breaking releases); the encrypted preset MUST take a hex key and fall back to
+  `secure` is the canonical name in every SDK (Rust's `CacheKit::encrypted` is a tracked
+  non-conformance, LAB-4651); the encrypted preset MUST take a hex key and fall back to
   `CACHEKIT_MASTER_KEY`; **`CACHEKIT_MASTER_KEY` is a key source, not an activation
   switch** — it MUST NOT turn encryption on for `minimal`/`production`/`io` (Python's
   fleet-wide auto-detect is the outlier; `CacheKit::from_env()` is the one sanctioned

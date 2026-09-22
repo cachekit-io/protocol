@@ -167,19 +167,10 @@ recorded as such in the matrix.
    feature matrix and cross-SDK documentation refer to it as `secure`.
 2. Python `@cache.secure` and TypeScript `createCache.secure()` are the canonical
    spelling.
-3. **Rust — ratified divergence.** `CacheKit::encrypted(url, key)` (`intents.rs:160`) *is*
-   the Rust spelling of the `secure` preset. Rust has no overloading and `secure` is
-   already taken by the `SecureCache` accessor (`pub fn secure(&self)`, `client.rs:664`),
-   so a `CacheKit::secure(url, key)` constructor cannot exist without first renaming the
-   accessor — a two-release breaking migration for a cosmetic gain. In exchange:
-   - cachekit-rs **MUST NOT** add a `::secure` constructor that means anything other than
-     this preset;
-   - the `secure()` accessor's rustdoc **and** its `Config` error message, and the
-     crate-level preset table, **MUST** name `CacheKit::encrypted` as the preset. Today
-     both point only at the builder (`client.rs:654-667`). The pointer lives where the
-     confusion happens;
-   - any cross-SDK document that names the preset **MUST** carry the per-SDK spelling
-     table (or link to [the one below](#per-sdk-spelling)).
+3. Rust's spelling is `CacheKit::secure(url, key)`. `cachekit-rs` 0.7.0 spells it
+   `CacheKit::encrypted` (`intents.rs:160`) because the `SecureCache` accessor held the
+   name `secure` (`client.rs:664`); that is a non-conformance tracked in
+   [SDK Conformance](#sdk-conformance) (LAB-4651), not a second spelling.
 4. No SDK **MAY** introduce a further name or alias for this preset. In particular Python
    and TypeScript **MUST NOT** add `encrypted` aliases "for parity" — that creates a third
    spelling, not a second.
@@ -318,13 +309,14 @@ encryption entirely; it is not a member of this family.
 | :--- | :--- | :--- | :--- |
 | `minimal` | `@cache.minimal` | `CacheKit::minimal(url)` — `redis` feature | `createCache.minimal({ url \| backend })` |
 | `production` | `@cache.production` | `CacheKit::production(url)` — `redis` feature | `createCache.production({ url \| backend })` |
-| `secure` | `@cache.secure(master_key=…)` | **`CacheKit::encrypted(url, key)`** — `redis` + `encryption` features¹ | `createCache.secure({ masterKey, url \| backend })` |
+| `secure` | `@cache.secure(master_key=…)` | `CacheKit::secure(url, key)` — `redis` + `encryption` features¹ | `createCache.secure({ masterKey, url \| backend })` |
 | `io` | `@cache.io` | `CacheKit::io(api_key)` — default features | `createCache.io({ apiKey })` |
 
-> ¹ Ratified divergence — see [Encrypted Preset Name](#encrypted-preset-name). Only `::io`
-> compiles on a default `cargo add cachekit-rs`; the Redis presets need
-> `features = ["redis"]`, and `::encrypted` needs `redis` + `encryption`
-> (`intents.rs:67,107,159,209`; `Cargo.toml:26`).
+> ¹ `cachekit-rs` 0.7.0 spells this `CacheKit::encrypted(url, key)` — see
+> [SDK Conformance](#sdk-conformance) (LAB-4651). Only `::io` compiles on a default
+> `cargo add cachekit-rs`; the Redis presets need `features = ["redis"]`, and the
+> encrypted preset needs `redis` + `encryption` (`intents.rs:67,107,159,209`;
+> `Cargo.toml:26`).
 
 ---
 
@@ -343,7 +335,7 @@ implementation is out of scope for the specification itself.
 | `secure` takes a hex key and falls back to `CACHEKIT_MASTER_KEY` | ✅ ≥ 32 B (`validation.py:95`) | ❌ `encrypted(url, &[u8])` — raw bytes only, no env fallback (`intents.rs:160-163`) — LAB-4645 | ✅ exactly 32 B (`constants.ts:138`) |
 | Missing master key fails at construction | ✅ `intent.py:212` | ✅ required argument; short key → `Err` | ✅ `intents-core.ts:257` |
 | `CACHEKIT_MASTER_KEY` does not activate encryption on `minimal` / `production` / `io` | ❌ tri-state auto-detect on every preset (`cache_handler.py:580-585`) — LAB-4642 | ✅ `from_env()` only (`config.rs:112`) | ✅ `secure()` only (`intents-core.ts:255`) |
-| Encrypted preset discoverable from `secure` | ✅ | ❌ accessor rustdoc and error point only at the builder (`client.rs:654-667`) — LAB-4646 | ✅ |
+| Encrypted preset is spelled `secure` | ✅ `@cache.secure` | ❌ `CacheKit::encrypted(url, key)` (`intents.rs:160`); the `SecureCache` accessor holds the name (`client.rs:664`) — LAB-4651 | ✅ `createCache.secure()` |
 | `io`: API key by argument **or** `CACHEKIT_API_KEY` | ❌ env only; `backend=` silently dropped (`decorator.py:577`, `intent.py:220`) — LAB-4643 | ❌ argument only (`intents.rs:210`) — LAB-4647 | ✅ `intents-core.ts:283-288` |
 
 TypeScript's `cache.secure.wrap()` fails closed on `main` since
@@ -360,13 +352,12 @@ artifact.
 where `encrypted` describes how. Two of three SDKs, docs.cachekit.io and the product
 positioning already say `secure`.
 
-**Why Rust keeps `::encrypted`.** `CacheKit::secure` collides with the `secure()`
-accessor; the rename path is (1) deprecate the accessor in favour of a new name,
-(2) remove it, add `CacheKit::secure(url, key)`, deprecate `::encrypted` — two breaking
-releases so that one identifier matches a docs page. Rejected. **Revisit condition:** if
-the `SecureCache` accessor is ever renamed or removed for its own reasons,
-`CacheKit::secure` becomes the constructor and `::encrypted` is deprecated for one minor
-release.
+**Rust renames rather than diverges.** `CacheKit::secure` collided with the `secure()`
+`SecureCache` accessor, and Rust rejects two inherent items of one name. Documenting
+`::encrypted` as a sanctioned Rust spelling was considered and rejected: pre-1.0 with no
+external dependants on the constructor, one breaking release (`cachekit-rs` 0.8.0 — the
+accessor becomes `secure_cache()`, the constructor becomes `::secure`) costs less than a
+permanent per-SDK translation and a standing exception in this specification.
 
 **Key source, not switch.** Alternatives considered: *(A)* presence activates
 everywhere (Python today) — fleet convenience, rejected on the three security grounds
