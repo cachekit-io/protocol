@@ -238,7 +238,7 @@ The contract a storage backend must satisfy per SDK (bytes in / bytes out; seria
 
 ### Intent-preset semantics (parity, not presence)
 
-The four shared preset names configure **different things per SDK**. Each cell is code-verified; a cross-SDK user hits these as surprises.
+The four shared preset names configure **different things per SDK**. Each cell is code-verified; a cross-SDK user hits these as surprises. The normative contract these cells are measured against is [spec/intent-presets.md](spec/intent-presets.md) (LAB-514): finite TTL defaults, L1 on for every preset (ciphertext-only on `secure`), hex master key with `CACHEKIT_MASTER_KEY` fallback on the encrypted preset, `CACHEKIT_MASTER_KEY` as a key *source* that never activates encryption on `minimal`/`production`/`io`, `io` credentials by argument or env, and `secure` as the canonical name in every SDK. Its [conformance table](spec/intent-presets.md#sdk-conformance) links one alignment ticket per ❌.
 
 | Semantic | Python | Rust | TypeScript |
 | :--- | :--- | :--- | :--- |

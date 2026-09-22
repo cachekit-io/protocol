@@ -4,6 +4,33 @@ All notable changes to the CacheKit Protocol Specification.
 
 ## [Unreleased]
 
+### Intent presets — canonical preset contract (LAB-514)
+
+- New normative [`spec/intent-presets.md`](spec/intent-presets.md): what `minimal` /
+  `production` / `secure` / `io` MUST configure in every SDK. Decisions: finite default
+  TTLs (300 / 600 / 600 / 3 600 s — Python's cache-forever default is the outlier); L1 on
+  for every preset and ciphertext-only on `secure` (ratifies the 2025-11-13 cachekit-py
+  decision cross-SDK); no MUST on integrity checksums (the storage container is
+  SDK-internal, protocol#11); reliability stack default-on for `production`/`secure`/`io`;
+  `secure` is the canonical name in every SDK (Rust's `CacheKit::encrypted` is a tracked
+  non-conformance, LAB-4651); the encrypted preset MUST take a hex key and fall back to
+  `CACHEKIT_MASTER_KEY`; **`CACHEKIT_MASTER_KEY` is a key source, not an activation
+  switch** — it MUST NOT turn encryption on for `minimal`/`production`/`io`, and no
+  constructor is exempt (Python's fleet-wide auto-detect and Rust's `from_env()`
+  presence-activation are the outliers); an explicit encryption option MUST encrypt
+  every operation or be rejected; the default `tenant_id` is `"default"` and MUST be
+  identical for HKDF and AAD; no SDK MAY offer a process-wide default-TTL override;
+  `io` takes its API key by argument **or** `CACHEKIT_API_KEY`; explicit arguments
+  that a preset does not support MUST be rejected, never dropped.
+- Per-SDK conformance table (code-verified 2026-09-22 against `main`: py `2f7c979`,
+  rs `6587ce9`, ts `379847c`) with one alignment ticket per ❌; TypeScript's only ❌ is
+  the HKDF-vs-AAD `tenant_id` mismatch.
+- [`spec/encryption.md`](spec/encryption.md#master-key) Master Key table: minimum length
+  corrected from 16 bytes to **32 bytes (64 hex chars)** — every SDK enforces 32 at the
+  configuration boundary; 16 is the HKDF core's IKM floor and was never user-facing.
+- [Feature matrix](sdk-feature-matrix.md#intent-preset-semantics-parity-not-presence)
+  intent-preset section now links the spec; README spec index gains the row.
+
 ### Encryption — keyring conformance vectors + status reconciliation (LAB-687)
 
 - [`test-vectors/encryption.json`](test-vectors/encryption.json) gains a `keyring`
