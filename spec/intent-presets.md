@@ -129,9 +129,10 @@ its Rust twin by an unbounded margin.
 **Rationale.** `minimal` means minimal *features*, not minimal *layers*. L1 is what turns
 a hit into tens of nanoseconds instead of a network round trip, and the staleness it
 introduces on `minimal` — no invalidation — is already bounded by the 300 s TTL the same
-preset accepts. Rust 0.7.0's `.no_l1()` (`intents.rs:77`) made `minimal` the only preset whose
-every read crossed the network, contradicting its own "speed-first" rustdoc (fixed in
-[cachekit-rs#85](https://github.com/cachekit-io/cachekit-rs/pull/85)). On
+preset accepts. Rust 0.7.0's `.no_l1()` (`intents.rs:77`) makes `minimal` the only preset whose
+every read crosses the network, contradicting its own "speed-first" rustdoc (fix in
+[cachekit-rs#85](https://github.com/cachekit-io/cachekit-rs/pull/85), unreleased as of
+2026-09-23). On
 `secure`, ciphertext in L1 costs nothing in the zero-knowledge model (decryption happens
 only at read time, on the client) and removes the incentive to trade security for speed.
 
