@@ -55,7 +55,7 @@ CACHEKIT_MASTER_KEY=a1b2c3d4e5f6...  (hex-encoded, minimum 32 bytes / 64 hex cha
 
 | Constraint | Value |
 | :--- | :--- |
-| Minimum length | 16 bytes (32 bytes strongly recommended) |
+| Minimum length | **32 bytes (64 hex chars)** — enforced by every SDK at configuration (cachekit-py `validation.py:95`, cachekit-rs `config.rs:305`, cachekit-ts `constants.ts:138`); the 16-byte figure under [Constraints](#constraints) is the HKDF core's input-keying-material floor, not a user-facing minimum. TypeScript accepts *exactly* 32 bytes, so portability is guaranteed only at that length — see [intent-presets.md → Master Key Input](intent-presets.md#master-key-input) |
 | Encoding | Hex string |
 | Env var | `CACHEKIT_MASTER_KEY` |
 
@@ -105,7 +105,7 @@ This length-prefixed format prevents collision between `(domain="foo", salt="bar
 
 | Parameter | Limit |
 | :--- | ---: |
-| Minimum master key length | 16 bytes |
+| HKDF input-keying-material floor (not the user-facing minimum — see [Master Key](#master-key) / [intent-presets.md → Master Key Input](intent-presets.md#master-key-input) for the enforced 32-byte minimum) | 16 bytes |
 | Maximum domain length | 255 bytes (fits in u8) |
 | Maximum tenant salt length | 1024 bytes (fits in u16) |
 | Domain | Must not be empty |
