@@ -129,8 +129,9 @@ its Rust twin by an unbounded margin.
 **Rationale.** `minimal` means minimal *features*, not minimal *layers*. L1 is what turns
 a hit into tens of nanoseconds instead of a network round trip, and the staleness it
 introduces on `minimal` — no invalidation — is already bounded by the 300 s TTL the same
-preset accepts. Rust's `.no_l1()` (`intents.rs:77`) makes `minimal` the only preset whose
-every read crosses the network, which contradicts its own "speed-first" rustdoc. On
+preset accepts. Rust 0.7.0's `.no_l1()` (`intents.rs:77`) made `minimal` the only preset whose
+every read crossed the network, contradicting its own "speed-first" rustdoc (fixed in
+[cachekit-rs#85](https://github.com/cachekit-io/cachekit-rs/pull/85)). On
 `secure`, ciphertext in L1 costs nothing in the zero-knowledge model (decryption happens
 only at read time, on the client) and removes the incentive to trade security for speed.
 
@@ -407,7 +408,7 @@ implementation is out of scope for the specification itself.
 | :--- | :--- | :--- | :--- |
 | Finite default TTL 300 / 600 / 600 / 3 600 s | ❌ none — entries never expire (`wrapper.py:499`) — LAB-4641 | ✅ `intents.rs:76,117,167,217` | ✅ `intents-core.ts:220,242,265,297` |
 | No process-wide default-TTL override (rule 3) | ❌ `CACHEKIT_DEFAULT_TTL` is offered — `settings.py:226`, env-settable and documented — even though nothing on the decorator path reads it; rule 3 forbids offering one — LAB-4641 | ❌ `from_env()` reads `CACHEKIT_DEFAULT_TTL` (`config.rs:165`), an override this specification no longer defines — LAB-4664 | ✅ |
-| `minimal`: L1 on, SWR / invalidation off | ✅ `decorator.py:335-350` | ❌ `.no_l1()` (`intents.rs:77`) — LAB-4644 | ✅ `intents-core.ts:221-230` |
+| `minimal`: L1 on, SWR / invalidation off | ✅ `decorator.py:335-350` | ❌ `.no_l1()` (`intents.rs:77`) on 0.7.0 — LAB-4644, fixed in [cachekit-rs#85](https://github.com/cachekit-io/cachekit-rs/pull/85) (unreleased as of 2026-09-23; flips ✅ when a release carries it) | ✅ `intents-core.ts:221-230` |
 | `secure`: L1 on, ciphertext only | ❌ `@cache.secure(backend=None)` sets `_explicit_l1_only` (`decorators/intent.py:136`) → `ObjectCache`, which stores raw Python objects with no serializer in the path — encryption in cachekit-py is a serializer wrapper, so plaintext lands in L1 (`decorators/wrapper.py:659`) — LAB-4665 | ✅ `client.rs:656` | ✅ `cache-core.ts:654,831` |
 | Reliability stack on for `production` / `secure` / `io` | ✅ | ✅ `ReliabilityConfig::default()` | ✅ `PRODUCTION_RELIABILITY` |
 | `secure` takes a hex key and falls back to `CACHEKIT_MASTER_KEY` | ✅ ≥ 32 B (`validation.py:95`) | ❌ `encrypted(url, &[u8])` — raw bytes only, no env fallback, `len() >= 32` accepts more than exactly 32 B (`intents.rs:160-163`; `encryption.rs:101`) — LAB-4645, LAB-4663 | ✅ exactly 32 B (`constants.ts:138`) |

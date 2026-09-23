@@ -243,7 +243,7 @@ The four shared preset names configure **different things per SDK**. Each cell i
 | Semantic | Python | Rust | TypeScript |
 | :--- | :--- | :--- | :--- |
 | Preset TTL defaults | **None — entries never expire** unless `ttl=` is passed | 300 / 600 / 600 / 3 600 s (`intents.rs:78`, `:118`, `:165`, `:214`) | 300 / 600 / 600 / 3 600 s |
-| `minimal`: L1 | **on** (SWR / invalidation off) | **off** (`no_l1()`, `intents.rs:79`) | **on** (SWR / invalidation off) |
+| `minimal`: L1 | **on** (SWR / invalidation off) | **off** on 0.7.0 (`no_l1()`, `intents.rs:79`); **on** (SWR / invalidation off) from the first release after [cachekit-rs#85](https://github.com/cachekit-io/cachekit-rs/pull/85) — unreleased as of 2026-09-23 | **on** (SWR / invalidation off) |
 | `minimal`: integrity checksums | **off** (`integrity_checking=False`) | n/a — values carry no envelope | **on** (ByteStorage on by default) |
 | `minimal`: reliability | circuit breaker / timeout off, backpressure on | **off** — the `reliability` layer is only attached by `production`/`encrypted`/`io` | circuit breaker neutered (∞ threshold), no retry, degradation off |
 | Encrypted preset | `.secure(master_key=…)` — hex string, ≥64 hex chars; falls back to `CACHEKIT_MASTER_KEY` | `::encrypted(url, key: &[u8])` — **raw bytes, ≥32**; argument only, no env fallback | `.secure({ masterKey })` — hex; falls back to `CACHEKIT_MASTER_KEY` |
