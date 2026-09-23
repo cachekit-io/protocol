@@ -19,7 +19,8 @@ All notable changes to the CacheKit Protocol Specification.
   [decisions/matrix-version-verification.md](decisions/matrix-version-verification.md).
 - Footnote ⁶ rewritten: names the core accessor and its per-architecture
   behaviour (runtime probe on x86/x86_64; `true` on every aarch64 build because
-  core tests NEON, not the Crypto Extension — core fix tracked as LAB-4650;
+  core tests NEON, not the Crypto Extension — true of every published core
+  through 0.6.0; the LAB-4650 fix is merged to core `main` but unreleased;
   always `false` on wasm32), states the flag is informational only, drops the
   stale line numbers, and cites the executed tests behind the wasm32 and x86_64
   claims rather than a traced mechanism.
