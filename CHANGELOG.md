@@ -26,7 +26,7 @@ All notable changes to the CacheKit Protocol Specification.
   [saas-api.md → Remaining Freshness](spec/saas-api.md#remaining-freshness).
   Origin: CodeRabbit outside-diff finding on
   [cachekit-py#233](https://github.com/cachekit-io/cachekit-py/pull/233).
-- **Second panel round on the same header (LAB-2531).** The deployment-specific
+- **Coherence, caching and clock rules for the same header.** The deployment-specific
   "≤5 seconds" edge-coherence figure is dropped from the normative text — the
   deployed tiers compose to roughly double it, and the spec now states the
   general truth instead: coherence windows **compound** across composed tiers
@@ -41,7 +41,7 @@ All notable changes to the CacheKit Protocol Specification.
   windows as a summed term alongside the local bound, transit, and clock error
   — a re-stamping tier can hand out a pre-`DELETE` copy that was never in
   flight (CodeRabbit finding on protocol#51).
-- **Third panel round (LAB-2531 F1–F4).** Re-serving-tier and SDK rules are
+- **Fail-closed tier and SDK rules for the same header.** Re-serving-tier and SDK rules are
   now fail-closed rather than enumerated: a tier MUST **decay** the header and
   MUST NOT re-stamp it (the deployed tiers already decay — zero implementation
   cost, and a pre-`DELETE` copy's local service now ends by the entry's
@@ -60,8 +60,7 @@ All notable changes to the CacheKit Protocol Specification.
   rule is scoped to responses that carry the header — a pre-signal response
   keeps the legacy local TTL, which is the origin gap the header closes;
   *coherence window* and *signal-capable server* are defined at first use.
-- **No-expiry entries admitted (LAB-557 — Ray's ruling on the Feature Design
-  review).** The spec described a tenant-default TTL that no server
+- **No-expiry entries admitted.** The spec described a tenant-default TTL that no server
   implements: saas has stored `expires_at NULL` for an omitted
   `X-CacheKit-TTL` since day one, and Redis, Memcached and File all admit
   unbounded entries. `PUT` without `X-CacheKit-TTL` now means **no expiry** —
@@ -73,8 +72,7 @@ All notable changes to the CacheKit Protocol Specification.
   positive knowledge of no expiry; otherwise `0`": a tier may omit only when
   a signal-capable store below omitted, or it populated the copy from a write
   with no TTL; a tier fronting a pre-signal store emits `0` rather than
-  passing the absence through (panel round on this commit — the pass-through
-  re-opened the origin gap for bounded entries behind such a tier). `GET
+  passing the absence through (the pass-through re-opened the origin gap for bounded entries behind such a tier). `GET
   /v1/cache/{key}/ttl` returns `200 {"ttl": null}` for a no-expiry key —
   never `404`, never a negative sentinel — with a mixed-reader caveat for SDKs
   that predate `null`; `PATCH /ttl` bounds it. The revocation bound is stated
@@ -84,7 +82,18 @@ All notable changes to the CacheKit Protocol Specification.
   the TTL as well as the stale window or it immortalizes a bounded key. The
   30-day maximum is restated as a bound on a stated TTL's value range, not a
   storage-lifetime ceiling — accumulation of no-expiry entries is unbounded by
-  this spec (hygiene tracked as LAB-279).
+  this spec (storage hygiene is an operator control).
+- **Legacy `X-TTL` writes and write-populated tier copies.** A write's
+  *effective TTL* is `X-CacheKit-TTL` when present, otherwise the deprecated
+  `X-TTL`; a write stores a no-expiry entry only when it carries neither. The
+  no-expiry rule, the stale-window requirement and the re-serving-tier rules
+  all read the effective TTL, so a tier can no longer mistake a bounded legacy
+  `X-TTL: 60` write for an immortal one and omit the header — which would
+  have let an SDK serve it for its full local TTL. A copy's bound now has one
+  named source: the response it was read from, or an accepted write it
+  forwarded, whose effective TTL is decayed from dispatch and may be emitted
+  as a positive `fresh` value — the positive-value gate and the decay rule no
+  longer contradict each other for write-populated copies.
 
 ### Intent presets — canonical preset contract (LAB-514)
 
