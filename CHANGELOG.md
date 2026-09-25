@@ -31,6 +31,21 @@ All notable changes to the CacheKit Protocol Specification.
 - [Feature matrix](sdk-feature-matrix.md#intent-preset-semantics-parity-not-presence)
   intent-preset section now links the spec; README spec index gains the row.
 
+### Feature matrix — Rust observability goes live (LAB-521)
+
+- [`sdk-feature-matrix.md` § Observability](sdk-feature-matrix.md#observability), Rust
+  column: Metrics, Structured logging, and SaaS telemetry headers move from ⚠️/❌ to 🚧
+  pending release of [cachekit-rs#81](https://github.com/cachekit-io/cachekit-rs/pull/81)
+  — `CacheKit::stats()` / `l1_entry_count()` / `circuit_state()`, an opt-in `tracing`
+  feature (events carry a Blake2b-128 `key_hash`, never the key), and `X-CacheKit-*`
+  headers auto-wired through `Backend::attach_metrics`. Flip to ✅ when the crates.io
+  release after 0.7.0 ships. OTel stays ❌ for every SDK (roadmap, not parity).
+- Conformance note, spec unchanged: the Rust SDK now sends `X-CacheKit-L1-Status: miss`
+  when L1 is on. It previously sent `enabled`, a value
+  [`spec/saas-api.md` § Optional Metrics Headers](spec/saas-api.md#optional-metrics-headers)
+  does not list and the API rejects with `400` for SDK keys — latent until the headers
+  carried real numbers, because nothing populated them before.
+
 ### Encryption — keyring conformance vectors + status reconciliation (LAB-687)
 
 - [`test-vectors/encryption.json`](test-vectors/encryption.json) gains a `keyring`
