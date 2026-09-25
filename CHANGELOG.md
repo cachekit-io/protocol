@@ -16,7 +16,9 @@ All notable changes to the CacheKit Protocol Specification.
   own is now REQUIRED on every read, before decoding, and a value recording no
   name is a mismatch. The table gains `l` (reference caching — shipped, never
   documented) and a `Canonical name` column; alias spellings and the instance
-  identity (`<custom>:` + class name) are documented in a new Python SDK note.
+  identity (`<custom>:` + class name) are documented in a new Python SDK note,
+  which requires distinct `ns:` namespaces for serializers whose classes share a
+  bare name, write different bytes, and share a `func:` segment.
   Documents the defect corrected by
   [cachekit-io/cachekit-py#311](https://github.com/cachekit-io/cachekit-py/pull/311)
   (merged as `ee65250`; ships in cachekit-py 0.20.0): through v0.19.0 every
@@ -37,11 +39,13 @@ All notable changes to the CacheKit Protocol Specification.
   need a released generator that emits them and follow separately.
 - `normalize_identity()`: the purity constraint gains an explicit injectivity
   requirement — two configurations that change the serialized container's
-  bytes MUST NOT normalize to the same identity, since a collapsed identity
-  makes the derived code and the frame tag agree and defeats the read-side
-  mismatch check. An object-to-string refinement MUST use a marker no bare
-  identity can produce, promoted from a cachekit-py-specific example to a
-  requirement on the hook's contract.
+  bytes MUST NOT normalize to the same identity, since the identity equals or
+  refines the recorded name: a collapsed identity gives both configurations one
+  code and one recorded name, which defeats the read-side mismatch check, and
+  distinct identities that share one recorded name are separated by their codes
+  alone. An object-to-string refinement MUST use a marker no bare identity
+  can produce, promoted from a cachekit-py-specific example to a requirement on
+  the hook's contract.
 
 ### Cache key — 7-segment format is Python SDK convention; server-side requirements
 

@@ -111,8 +111,14 @@ else.
 > class name, built-ins included, and its key identity is `<custom>:` + that class name, so it
 > takes a derived code (`ArrowSerializer()` → `<custom>:ArrowSerializer` → `x2263`), never the
 > table's. The prefix contains characters no Python identifier can, so a custom class named
-> `auto` cannot take AutoSerializer's code. Two instances of the same class are one identity:
-> the SDK documents distinct namespaces for per-configuration serializers.
+> `auto` cannot take AutoSerializer's code. Beyond that fixed prefix, the identity and the
+> recorded name both carry only the bare class name (`__name__`), so any two instances whose
+> classes share that name, whatever their module or nesting, get one code and one recorded
+> name, and the read-side check cannot separate them. When two such serializers write
+> different bytes and share a `func:` segment (one function, or closures from one factory),
+> the application MUST key them under different `ns:` namespaces, no namespace counting as
+> one; across a deploy, a changed configuration or implementation takes a namespace the old
+> one never wrote.
 
 ### Example Keys
 
@@ -304,11 +310,16 @@ SERIALIZER_ALIASES = {}   // e.g. cachekit-py: {"std": "default", "pythonic": "a
 // `normalize_identity()` MUST be a pure function of the serializer's configuration — never
 // an object address or a randomised hash — and MUST be injective over any configuration
 // dimension that changes the serialized container's bytes: e.g. `arrow+gzip` and
-// `arrow+none` MUST NOT both normalize to `"arrow"`. The derived code and the frame tag are
-// both computed from this identity, so collapsing two differently-configured serializers
-// onto one identity makes them self-report the identical frame tag — the read-side mismatch
+// `arrow+none` MUST NOT both normalize to `"arrow"`. The derived code is computed from this
+// identity; the read-side check compares the recorded name instead, which the identity
+// equals or refines (cachekit-py: `<custom>:ArrowSerializer` records `ArrowSerializer`).
+// Collapsing two differently-configured serializers onto one identity therefore gives them
+// one code — so one key for the same call — AND one recorded name: the read-side mismatch
 // check above can no longer tell them apart, and a mismatched container is served as a hit
-// instead of a miss: wrong data, not a recoverable eviction.
+// instead of a miss: wrong data, not a recoverable eviction. Distinct identities that
+// share one recorded name are kept apart by their codes alone (for two identities outside
+// the table, a 16-bit digest); the hit-rate-only collision guarantee above covers only
+// identities recorded differently.
 //
 // A refinement that maps a serializer OBJECT to a string MUST use a marker that no bare
 // identity can produce, so a user-named class can never be spelled as a table key.
