@@ -4,6 +4,23 @@ All notable changes to the CacheKit Protocol Specification.
 
 ## [Unreleased]
 
+### Interop mode — untrusted-decode bounds pinned as a cross-SDK invariant (LAB-2503)
+
+- New [`spec/interop-mode.md` → Decode bounds](spec/interop-mode.md#decode-bounds):
+  readers MUST bound nesting depth (≥ 32, ≤ 1024), MUST NOT pre-allocate beyond
+  what the input can back (Σ declared slots ≤ input bytes − 1), and MUST fail
+  closed with a catchable error. Follow-up to the LAB-2487 measurements.
+- New [`test-vectors/decode-bounds.json`](test-vectors/decode-bounds.json)
+  (13 reject + 2 accept) with [`tools/decode-bounds-reference.py`](tools/decode-bounds-reference.py)
+  and its mutation suite; vendored and CI-executed by
+  [cachekit-py#276](https://github.com/cachekit-io/cachekit-py/pull/276),
+  [cachekit-rs#73](https://github.com/cachekit-io/cachekit-rs/pull/73) (both merged 2026-09-13)
+  and [cachekit-ts#121](https://github.com/cachekit-io/cachekit-ts/pull/121) (merged 2026-09-20).
+- [`spec/wire-format.md` → Security Limits](spec/wire-format.md#security-limits)
+  cross-references the rules for the envelope bytes and the payload inside them.
+- The single shared depth value stays [protocol#20](https://github.com/cachekit-io/protocol/issues/20)'s
+  open item.
+
 ### Intent presets — canonical preset contract (LAB-514)
 
 - New normative [`spec/intent-presets.md`](spec/intent-presets.md): what `minimal` /
