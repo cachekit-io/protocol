@@ -33,7 +33,7 @@ spec.loader.exec_module(pfr)
 
 LEGACY_NAME = "default_saas_write_msgpack_bytestorage"
 BIN_NAME = LEGACY_NAME + "_bin"
-COMMITTED = json.loads(pfr.VECTOR_PATH.read_text())
+COMMITTED = pfr._load_fixture()
 
 FAILURES = 0
 
