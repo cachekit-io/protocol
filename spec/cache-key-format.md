@@ -317,9 +317,13 @@ SERIALIZER_ALIASES = {}   // e.g. cachekit-py: {"std": "default", "pythonic": "a
 // one code — so one key for the same call — AND one recorded name: the read-side mismatch
 // check above can no longer tell them apart, and a mismatched container is served as a hit
 // instead of a miss: wrong data, not a recoverable eviction. Distinct identities that
-// share one recorded name are kept apart by their codes alone (for two identities outside
-// the table, a 16-bit digest); the hit-rate-only collision guarantee above covers only
-// identities recorded differently.
+// share one recorded name are kept apart only by their codes, and a code is NOT a
+// collision-resistant separator: two identities outside the table collide at ≈1 in 2^16
+// per pair, and that collision is wrong data too, since key and recorded name then both
+// match. The hit-rate-only collision guarantee above covers only identities recorded
+// differently. Identities that share a recorded name but write different bytes MUST
+// therefore be keyed under different `ns:` namespaces (as the Python note above requires
+// for same-name classes).
 //
 // A refinement that maps a serializer OBJECT to a string MUST use a marker that no bare
 // identity can produce, so a user-named class can never be spelled as a table key.

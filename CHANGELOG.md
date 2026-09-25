@@ -41,9 +41,11 @@ All notable changes to the CacheKit Protocol Specification.
   requirement — two configurations that change the serialized container's
   bytes MUST NOT normalize to the same identity, since the identity equals or
   refines the recorded name: a collapsed identity gives both configurations one
-  code and one recorded name, which defeats the read-side mismatch check, and
-  distinct identities that share one recorded name are separated by their codes
-  alone. An object-to-string refinement MUST use a marker no bare identity
+  code and one recorded name, which defeats the read-side mismatch check.
+  Distinct identities that share one recorded name are separated only by their
+  codes, which are not collision-resistant (16-bit derived digest), so those that
+  write different bytes MUST be keyed under different `ns:` namespaces, matching
+  the Python note. An object-to-string refinement MUST use a marker no bare identity
   can produce, promoted from a cachekit-py-specific example to a requirement on
   the hook's contract.
 
