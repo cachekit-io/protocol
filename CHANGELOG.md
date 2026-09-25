@@ -4,6 +4,95 @@ All notable changes to the CacheKit Protocol Specification.
 
 ## [Unreleased]
 
+### Intent presets — canonical preset contract (LAB-514)
+
+- New normative [`spec/intent-presets.md`](spec/intent-presets.md): what `minimal` /
+  `production` / `secure` / `io` MUST configure in every SDK. Decisions: finite default
+  TTLs (300 / 600 / 600 / 3 600 s — Python's cache-forever default is the outlier); L1 on
+  for every preset and ciphertext-only on `secure` (ratifies the 2025-11-13 cachekit-py
+  decision cross-SDK); no MUST on integrity checksums (the storage container is
+  SDK-internal, protocol#11); reliability stack default-on for `production`/`secure`/`io`;
+  `secure` is the canonical name in every SDK (Rust's `CacheKit::encrypted` is a tracked
+  non-conformance, LAB-4651); the encrypted preset MUST take a hex key and fall back to
+  `CACHEKIT_MASTER_KEY`; **`CACHEKIT_MASTER_KEY` is a key source, not an activation
+  switch** — it MUST NOT turn encryption on for `minimal`/`production`/`io`, and no
+  constructor is exempt (Python's fleet-wide auto-detect and Rust's `from_env()`
+  presence-activation are the outliers); an explicit encryption option MUST encrypt
+  every operation or be rejected; the default `tenant_id` is `"default"` and MUST be
+  identical for HKDF and AAD; no SDK MAY offer a process-wide default-TTL override;
+  `io` takes its API key by argument **or** `CACHEKIT_API_KEY`; explicit arguments
+  that a preset does not support MUST be rejected, never dropped.
+- Per-SDK conformance table (code-verified 2026-09-22 against `main`: py `2f7c979`,
+  rs `6587ce9`, ts `379847c`) with one alignment ticket per ❌; TypeScript's only ❌ is
+  the HKDF-vs-AAD `tenant_id` mismatch.
+- [`spec/encryption.md`](spec/encryption.md#master-key) Master Key table: minimum length
+  corrected from 16 bytes to **32 bytes (64 hex chars)** — every SDK enforces 32 at the
+  configuration boundary; 16 is the HKDF core's IKM floor and was never user-facing.
+- [Feature matrix](sdk-feature-matrix.md#intent-preset-semantics-parity-not-presence)
+  intent-preset section now links the spec; README spec index gains the row.
+
+### Encryption — keyring conformance vectors + status reconciliation (LAB-687)
+
+- [`test-vectors/encryption.json`](test-vectors/encryption.json) gains a `keyring`
+  block: two master keys (`k1`, `k2`) for tenant `keyring-conformance`, one entry
+  sealed under each, and per-vector `key_fingerprint_hex` — the fingerprint of the
+  HKDF-derived per-tenant encryption key, as cachekit-py stores it. Frozen names
+  `encrypted_with_k1` / `encrypted_with_k2`; append-only like the main set.
+- [`tools/encryption-verify.py`](tools/encryption-verify.py) enforces
+  [`spec/encryption.md` § Key Rotation (Keyring)](spec/encryption.md#key-rotation-keyring):
+  `[k2, k1]` decrypts both at the declared entry, `[k2]` alone rejects the k1
+  entry, and the stored fingerprint selects the derived key — a master-key
+  fingerprint cannot select. Entry derivation, metadata, AAD and selection run
+  in the stdlib lane; only the decrypt attempts need `cryptography`.
+- New [`tools/test_encryption_verify.py`](tools/test_encryption_verify.py) mutation
+  suite runs ahead of the verifier in both CI lanes (same doctrine as the
+  wire-format guard): every keyring guard is proven to go red by poisoning a copy
+  of the fixture. Added after the LAB-687 panel found three vacuous passes in the
+  first revision.
+- Status banners reconciled with shipped code: `spec/encryption.md` and
+  `decisions/key-rotation.md` no longer say "not yet implemented"; the
+  [feature matrix](sdk-feature-matrix.md#encryption) Key rotation row is ✅ for
+  Python 0.18.0+ (cachekit-py#261) and 🚧 unreleased for Rust and TypeScript —
+  cachekit-rs#63 and cachekit-ts#103 are merged but absent from crates.io 0.7.0
+  and npm 0.1.5 (artifacts inspected 2026-09-22).
+- `decisions/key-rotation.md` compromise runbook: flush at cut-over **and** again
+  once the last old-key writer has stopped — a deferred single flush leaves the
+  whole compromised corpus readable for the rollout window; the decrypt-only
+  list must be explicitly empty, since an omitted list falls back to
+  `CACHEKIT_PREVIOUS_MASTER_KEYS`.
+
+### SaaS API — `401` is an authoritative verdict; auth backend faults are `503` (LAB-4093)
+
+- [`spec/saas-api.md`](spec/saas-api.md) Error Handling: `401` is emitted only
+  for an authoritative denial — a missing or malformed `Authorization` header,
+  or the key store saying the key is unknown, revoked, or its tenant suspended or soft-deleted.
+  A backend fault while resolving the key (auth cache / database) is a `503`
+  with `Retry-After`, so SDKs retry under the existing Transient class instead
+  of surfacing a transient blip as "invalid API key" (Permanent, never retried).
+  Documents the cache-worker behaviour shipped in
+  [cachekit-io/saas#380](https://github.com/cachekit-io/saas/pull/380); no
+  SDK change — `503` already classifies as Transient in all three.
+
+### SDK feature matrix — TypeScript `cache.secure.wrap()` now fails closed (LAB-513)
+
+- [`sdk-feature-matrix.md`](sdk-feature-matrix.md): the Encryption row "Does the
+  `secure` API enforce encryption?" flips ❌ → ✅ for TypeScript. Both
+  `cache.secure.wrap()` and `cache.withExecutionContext(ctx).secure.wrap()` now
+  throw `ConfigurationError` at wrap time on any instance without `encryption`
+  configured ([cachekit-ts#123](https://github.com/cachekit-io/cachekit-ts/pull/123));
+  before, both were unconditional aliases for `wrap()`, so on an instance
+  without configured encryption a "secure" registration stored plaintext
+  (CWE-311) — on an encrypted instance they always encrypted. All three SDKs
+  now refuse a missing key on the secure entry point — py raises at decoration
+  time, rs `secure()` returns `Err`, ts throws at wrap time — with no opt-in to
+  run the secure entry point unencrypted in any of them; ts callers who want
+  plaintext call `wrap()` explicitly. The "Intent-preset
+  semantics" warning is rewritten to the enforced contract, the "cells that
+  reversed" summary and the Rust builder-stub cross-reference are updated to
+  match, and the stale `cache-core.ts:832` / `:873` / `:486`, `cache.ts:87` and
+  `intents-core.ts:240` references are replaced with current ones.
+
+
 ### Wire format — compressed-byte reproducibility scoped per-vector (LAB-1751)
 
 - LZ4 compressed bytes are **not canonical** across conforming block encoders.

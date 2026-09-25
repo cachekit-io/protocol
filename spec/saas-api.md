@@ -435,8 +435,8 @@ SDKs SHOULD send cache metrics headers for rate limiting and observability:
 | :---: | :--- | :--- |
 | `200` | Success | Return data |
 | `204` | No Content | CORS preflight (`OPTIONS`) only — writes and deletes return `200` |
-| `400` | Bad Request | Client error (invalid key format, missing headers) |
-| `401` | Unauthorized | Invalid or missing API key |
+| `400` | Bad Request | Client error (invalid cache-key format, missing required headers other than `Authorization`) |
+| `401` | Unauthorized | Authoritative denial: the `Authorization` header is missing or malformed, or the key store says the key is unknown or revoked, or its tenant is suspended or soft-deleted. Never emitted for a backend fault while checking the key (that is a `503`) |
 | `403` | Forbidden | API key lacks permission for this operation/namespace |
 | `404` | Not Found | Cache miss (`GET`/`HEAD /v1/cache/{key}`, subject to [HEAD's known server deviation](#head-v1cachekey)); TTL unavailable on `GET /v1/cache/{key}/ttl` ([causes](#get-v1cachekeyttl)). Never emitted by `DELETE /v1/cache/{key}` or `PATCH /v1/cache/{key}/ttl` — both are no-ops on an absent key. |
 | `409` | Conflict | `PATCH /v1/cache/{key}/ttl` on a stale entry past `fresh_until`; refresh requires a `PUT` of recomputed bytes ([SWR write semantics](#write-semantics)) |
@@ -444,7 +444,7 @@ SDKs SHOULD send cache metrics headers for rate limiting and observability:
 | `429` | Too Many Requests | Rate limited |
 | `500` | Internal Server Error | Backend failure |
 | `502` | Bad Gateway | Upstream failure |
-| `503` | Service Unavailable | Backend overloaded |
+| `503` | Service Unavailable | Backend overloaded, or a backend fault while authenticating the key (`Retry-After` set). Retry; do not surface as "invalid API key" |
 
 ### Error Classification
 
