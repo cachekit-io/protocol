@@ -50,11 +50,11 @@
 | StandardSerializer (MessagePack) | ✅ | ✅ via rmp-serde | ✅ | 🔜 Planned |
 | AutoSerializer (Python-specific) | ✅ | N/A | N/A | N/A |
 | OrjsonSerializer (fast JSON) | ✅ `[json]` extra | N/A | N/A | N/A |
-| ArrowSerializer (columnar) | ✅ `[data]` extra | N/A | ❌ (LAB-524)⁰ | ❌ |
+| ArrowSerializer (columnar) | ✅ `[data]` extra | N/A | ❌ declined⁰ | ❌ |
 | ByteStorage (LZ4 + xxHash3-64) | ✅ via Rust FFI | ✅ canonical (cachekit-core) | ✅ via NAPI (Rust) | 🔜 Planned |
 | Blake2b-256 key generation | ✅ | ✅ interop mode only — N/A auto mode (see [Compliance Status](#compliance-status) note ¹⁴) | ✅ via @noble/hashes | 🔜 Planned |
 
-> ⁰ TypeScript Arrow was listed 🔜 Planned from 2026-06-06 with no code, stub, or tracking issue behind it; corrected to ❌, with LAB-524 owning the implement-or-decline decision. Orjson and Arrow live behind cachekit-py's `[json]` / `[data]` extras (`pyproject.toml:73-81`).
+> ⁰ TypeScript Arrow was listed 🔜 Planned from 2026-06-06 with no code, stub, or tracking issue behind it; corrected to ❌, then **declined** on 2026-09-23. No Node columnar use case has been reported or found, and cross-SDK values are interop/v1 MessagePack only, so a TypeScript Arrow serializer would serve single-SDK Node workloads alone. Have one? Open an issue on [cachekit-ts](https://github.com/cachekit-io/cachekit-ts/issues). Orjson and Arrow live behind cachekit-py's `[json]` / `[data]` extras (`pyproject.toml:73-81`).
 
 ---
 
