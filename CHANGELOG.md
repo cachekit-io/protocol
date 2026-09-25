@@ -4,6 +4,20 @@ All notable changes to the CacheKit Protocol Specification.
 
 ## [Unreleased]
 
+### Encryption — default-tenant conformance vector (LAB-4666)
+
+- [`test-vectors/encryption.json`](test-vectors/encryption.json) gains a `default_tenant`
+  block (file version 1.2.0): tenant `"default"` under the main master key, one entry
+  (`default_tenant_interop`) sealed at the interop `single_int` key over the
+  `issue_example_object` plaintext, so it loads directly as an interop-mode entry. An SDK
+  that decrypts it through its `secure` preset with **no tenant configured** has
+  demonstrated [intent-presets.md § Master Key Input](spec/intent-presets.md#master-key-input)
+  rule 5 byte-for-byte. `tools/encryption-verify.py` checks the block (block-level derived-key fingerprint, AAD
+  with `"default"` as component 1, seal); append-only like the main set.
+- Conformance table: Python's default-`tenant_id` row flips to ✅ (cachekit-py LAB-4666 —
+  implicit tenant is the literal `"default"`; the persisted per-host deployment UUID is
+  gone, explicit `deployment_uuid` / `CACHEKIT_DEPLOYMENT_UUID` remain as the override).
+
 ### Intent presets — canonical preset contract (LAB-514)
 
 - New normative [`spec/intent-presets.md`](spec/intent-presets.md): what `minimal` /
