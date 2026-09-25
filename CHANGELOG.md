@@ -22,8 +22,8 @@ All notable changes to the CacheKit Protocol Specification.
   enforcement, plus an Observability section (LAB-275). Supersedes protocol#25,
   #28, #29, #31, #32, #33, #35, #37, #40, #43 — per-PR fold verdicts below.
 
-- **Every version-keyed claim re-verified against published artifacts**, after an
-  expert-panel review found the first pass had introduced two new false cells of
+- **Every version-keyed claim re-verified against published artifacts**, after a
+  review found the first pass had introduced two new false cells of
   the very class it was fixing. `cachekit-rs` 0.6.0 published 74 minutes before
   that pass's final commit, so six Rust reliability cells shipped marked 🚧
   unreleased when the tier was in fact released and **on by default**; and
@@ -128,11 +128,9 @@ All notable changes to the CacheKit Protocol Specification.
   a committed vector is structurally impossible — which deletes the LAB-903
   drop-refusal guard and both wheel-direction refusals, and folds the
   append-only `generate-bin-twin` mode into `generate` (a protocol 1.1 wheel
-  rebuilds the `_bin` twin, a legacy wheel the legacy original; whenever both
-  default-path vectors are present the pair is checked to differ only in
-  envelope encoding, and a partial fixture missing either twin skips that
-  check with a stderr note rather than aborting). That check is a stderr
-  **warning**, not a hard failure (fix-loop, 2026-09-19, adversarial finding):
+  rebuilds the `_bin` twin; the twin check is keyed on `twin_of` — see the
+  entry above). At `generate` time that check is a stderr
+  **warning**, not a hard failure:
   the legacy wheel is gone from every installable release, so `legacy` can
   never be regenerated — a `_require()` there would permanently deadlock
   `generate` the first time the default write path legitimately changes for
@@ -149,7 +147,7 @@ All notable changes to the CacheKit Protocol Specification.
   "mixed provenance" statement the first time a previously-unstamped vector is
   rewritten); `test-vectors/python-frame.json` is byte-unchanged by this
   refactor, and a no-op `generate` never rewrites the file. The stdlib `verify`
-  leg got strictly stronger (expert-panel findings): it now fully decodes each
+  leg got strictly stronger: it now fully decodes each
   `payload_envelope` via the shared codec (enforcing the protocol 1.1 flip
   exclusions — checksum stays an array of 8 integers, format stays fixstr),
   requires the envelope to re-encode byte-identically (pinning the canonical
