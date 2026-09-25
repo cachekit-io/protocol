@@ -401,12 +401,14 @@ encryption entirely; it is not a member of this family.
 
 Code-verified 2026-09-22 against `cachekit-py@2f7c979` (0.18.0), `cachekit-rs@6587ce9`
 (0.7.0) and `cachekit-ts@379847c` (0.1.5) on `main`. ❌ cells link the alignment ticket;
-implementation is out of scope for the specification itself.
+implementation is out of scope for the specification itself. The two default-TTL Python
+rows were re-checked against the PyPI 0.19.0 wheel on 2026-09-24 (unchanged); they flip to
+✅ with a version floor when a PyPI release carries the fix.
 
 | Requirement | Python | Rust | TypeScript |
 | :--- | :--- | :--- | :--- |
-| Finite default TTL 300 / 600 / 600 / 3 600 s | ❌ none — entries never expire (`wrapper.py:499`) — LAB-4641 | ✅ `intents.rs:76,117,167,217` | ✅ `intents-core.ts:220,242,265,297` |
-| No process-wide default-TTL override (rule 3) | ❌ `CACHEKIT_DEFAULT_TTL` is offered — `settings.py:226`, env-settable and documented — even though nothing on the decorator path reads it; rule 3 forbids offering one — LAB-4641 | ❌ `from_env()` reads `CACHEKIT_DEFAULT_TTL` (`config.rs:165`), an override this specification no longer defines — LAB-4664 | ✅ |
+| Finite default TTL 300 / 600 / 600 / 3 600 s | ❌ none — entries never expire (`wrapper.py:499`) — LAB-4641; fix in [cachekit-py#318](https://github.com/cachekit-io/cachekit-py/pull/318) | ✅ `intents.rs:76,117,167,217` | ✅ `intents-core.ts:220,242,265,297` |
+| No process-wide default-TTL override (rule 3) | ❌ `CACHEKIT_DEFAULT_TTL` is offered — `settings.py:226`, env-settable and documented — even though nothing on the decorator path reads it; rule 3 forbids offering one — LAB-4641; fix in [cachekit-py#318](https://github.com/cachekit-io/cachekit-py/pull/318) | ❌ `from_env()` reads `CACHEKIT_DEFAULT_TTL` (`config.rs:165`), an override this specification no longer defines — LAB-4664 | ✅ |
 | `minimal`: L1 on, SWR / invalidation off | ✅ `decorator.py:335-350` | ❌ `.no_l1()` (`intents.rs:77`) — LAB-4644 | ✅ `intents-core.ts:221-230` |
 | `secure`: L1 on, ciphertext only | ❌ `@cache.secure(backend=None)` sets `_explicit_l1_only` (`decorators/intent.py:136`) → `ObjectCache`, which stores raw Python objects with no serializer in the path — encryption in cachekit-py is a serializer wrapper, so plaintext lands in L1 (`decorators/wrapper.py:659`) — LAB-4665 | ✅ `client.rs:656` | ✅ `cache-core.ts:654,831` |
 | Reliability stack on for `production` / `secure` / `io` | ✅ | ✅ `ReliabilityConfig::default()` | ✅ `PRODUCTION_RELIABILITY` |
