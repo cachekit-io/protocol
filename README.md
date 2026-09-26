@@ -83,7 +83,7 @@ Building a new SDK? Implement in this order:
 
 **1. Key Generation** — [spec/cache-key-format.md](spec/cache-key-format.md)
 
-Generate deterministic cache keys from function identity + arguments. Keys must match across SDKs for cross-language cache sharing.
+Generate deterministic cache keys from function identity + arguments. These auto-mode keys are SDK-specific (the 7-segment format is the Python SDK's convention); keys shared across SDKs use [interop mode](spec/interop-mode.md).
 
 **2. Wire Format** — [spec/wire-format.md](spec/wire-format.md)
 

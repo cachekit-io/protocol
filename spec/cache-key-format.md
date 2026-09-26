@@ -54,16 +54,17 @@ ns:{namespace}:func:{module}.{qualname}:args:{blake2b_hash}:{ic_flag}{serializer
 
 ### Serializer Codes
 
-| Code | Serializer | Canonical name | Cross-language? |
-| :---: | :--- | :--- | :---: |
-| `s` | StandardSerializer (MessagePack) | `default` | ✅ Yes |
-| `a` | AutoSerializer (language-specific types) | `auto` | ❌ No |
-| `o` | OrjsonSerializer (JSON-based) | `orjson` | ⚠️ Partial |
-| `w` | ArrowSerializer (columnar) | `arrow` | ⚠️ Partial |
-| `l` | Reference caching (no serialization) | `local` | ❌ No |
-| `x` + 4 hex | Any serializer identity not in this table | — | ❌ No |
+| Code | Serializer | Canonical name |
+| :---: | :--- | :--- |
+| `s` | StandardSerializer (MessagePack) | `default` |
+| `a` | AutoSerializer (language-specific types) | `auto` |
+| `o` | OrjsonSerializer (JSON-based) | `orjson` |
+| `w` | ArrowSerializer (columnar) | `arrow` |
+| `l` | Reference caching (no serialization) | `local` |
+| `x` + 4 hex | Any serializer identity not in this table | — |
 
-For cross-SDK interoperability, always use `s` (StandardSerializer).
+No code makes these keys shareable across SDKs; see
+[Cross-SDK Key Generation Strategy](#cross-sdk-key-generation-strategy).
 
 An identity outside the table gets `x` followed by the 2-byte digest
 `blake2b(utf8(identity), digest_size=2)` encoded as exactly 4 lowercase hexadecimal
@@ -84,16 +85,21 @@ else.
 > exactly as a constant code makes every pair do — and never yields a wrong value, because
 > the stored serializer name still differs and the read-side check below rejects it.
 >
-> **On every read of a serialized entry, before decoding the payload, the reader MUST compare
-> the serializer name its storage container records (Python: the `s` field of the
-> [CK v3 frame](wire-format.md#python-ck-v3-frame)) with the name it would itself record for
-> its configured serializer, and MUST reject the entry on mismatch — a miss, never a value. A
-> value that records no serializer name is a mismatch.** A colliding entry has the same key as
-> the reader's own, so nothing before this comparison can tell them apart. An SDK that offers
-> more than one serializer identity MUST record the name in its container, or this check
-> cannot exist (`cachekit-ts` and `cachekit-rs` record none and offer one). Reference caching
-> (`l`) is exempt: it stores the object itself, never a serialized container, so there is no
-> recorded name to compare.
+> **An SDK that offers more than one serializer identity MUST record the serializer name in
+> the storage container of every serialized entry it stores under a key in this format
+> (Python: the `s` field of the [CK v3 frame](wire-format.md#python-ck-v3-frame)). On every
+> read of a serialized entry under a key in this format, before decoding the payload, such an
+> SDK MUST compare the name the container records with the name it would itself record for
+> its configured serializer, and MUST reject the entry on mismatch — a miss, never a value.
+> For such an SDK, an entry that records no serializer name is a mismatch.** A colliding
+> entry has the same key as the reader's own, so nothing before this comparison can tell them
+> apart. An SDK that offers exactly one serializer identity is exempt from both the recording
+> and the comparison, because there is no second serializer in its keyspace to confuse with
+> the first (`cachekit-ts` and `cachekit-rs` offer one and record none). Neither rule reaches
+> a value that is not a serialized entry under a key in this format:
+> [Interop Mode](interop-mode.md) entries carry no serializer code and no container, and a
+> cache that keeps live objects in process memory stores nothing to compare (in
+> `cachekit-py`: reference caching, code `l`, and caches configured with no backend).
 >
 > `cache_key` is an AES-256-GCM AAD input (see [Encryption](encryption.md)). Two serializers
 > sharing a code therefore share the **`cache_key` AAD component**; when they also share the
@@ -107,6 +113,16 @@ else.
 > process-local value such as an object address or a randomised hash, or keys stop being
 > reproducible across processes.
 >
+> **Deriving the identity.** An SDK that accepts alias spellings MUST resolve each accepted
+> spelling to exactly one canonical name, and the code, the recorded name, and the serializer
+> that writes the bytes MUST all be that canonical name's, or a key, its stored entry and its
+> bytes can disagree about which serializer wrote it. An SDK that accepts a serializer object
+> MUST reduce it to a string identity carrying a marker that no code-table name, alias
+> spelling or accepted serializer name contains, so a user-named class can never take a table
+> code (the Python note below gives `cachekit-py`'s marker). An empty or non-string identity
+> MUST be rejected with an error, never mapped to a code: a fallback code is a shared bucket,
+> and a key computed from it names an entry nothing wrote.
+>
 > **An SDK SHOULD make the identity distinguish configurations that write different bytes.
 > Wherever its identity does not, configurations that write different bytes and would
 > otherwise share a key MUST be keyed under different `ns:` namespaces**, no namespace
@@ -119,8 +135,9 @@ else.
 > identities recorded differently. The Python SDK is the known case where the identity does not distinguish configurations (see the note below).
 
 > [!NOTE]
-> **Python SDK specifics.** `cachekit-py` additionally accepts the alias spellings `std` and
-> `standard` for `default` and `pythonic` for `auto`, canonicalizing them before the lookup.
+> **Python SDK specifics.** `cachekit-py` additionally accepts the alias spellings `std` for
+> `default` and `pythonic` for `auto`, canonicalizing them before the lookup. (Its key
+> generator's alias map also lists `standard`, which the cache rejects as a serializer name.)
 > A serializer passed as an *instance* rather than a name is recorded in the frame header
 > under its bare class name, built-ins included, and its key identity is `<custom>:` + that
 > class name, so it takes a derived code (`ArrowSerializer()` → `<custom>:ArrowSerializer` →
@@ -152,7 +169,7 @@ ns:cache:func:app.views.index:args:0000...0000:0s
 - If a key exceeds 250 characters: first 50 chars of original key + `:` + first 32 chars of a Blake2b-256 hash of the full key
 
 > [!WARNING]
-> **Discrepancy with RFC** — The original protocol RFC (Section 3.1.5) specifies a simpler key format: `{namespace}:{hash}`. The actual implementation includes function identity (`func:` prefix) and metadata suffix (`:{ic_flag}{serializer_code}`). **The implementation is authoritative.** For cross-SDK interoperability, SDK implementors must use explicit namespaces (the `func:` segment is language-specific and will differ).
+> **Discrepancy with RFC** — The original protocol RFC (Section 3.1.5) specifies a simpler key format: `{namespace}:{hash}`. The actual implementation includes function identity (`func:` prefix) and metadata suffix (`:{ic_flag}{serializer_code}`). **The implementation is authoritative.** For cross-SDK sharing, use [Interop Mode](interop-mode.md) (see [Cross-SDK Key Generation Strategy](#cross-sdk-key-generation-strategy)).
 
 ---
 
@@ -179,16 +196,7 @@ generation, invisible to the server.
 
 ## Cross-SDK Key Generation Strategy
 
-For multi-language interoperability, all SDKs MUST use **explicit namespaces** rather than auto-generated function signatures. The `func:` segment is inherently language-specific (Python modules vs PHP namespaces vs Go packages), so cross-language cache sharing requires:
-
-1. All SDKs agree on a namespace string (e.g., `"get_user"`)
-2. All SDKs serialize arguments identically (see [Argument Hashing Algorithm](#argument-hashing-algorithm) below)
-3. The resulting Blake2b hash in the `args:` segment will be identical
-
-The `func:` and metadata segments may differ between SDKs — this is acceptable when the key is constructed to match.
-
-> [!TIP]
-> Use [Interop Mode](interop-mode.md) to remove the `func:` segment entirely. Interop mode produces the simplest possible cross-language key: `{namespace}:{operation}:{args_hash}`.
+Keys in this format are not shared across SDKs, even under an agreed namespace. The `func:` segment is language-specific, and the values stored under these keys are SDK-internal containers that no other SDK decodes (see [SDK Storage Containers](wire-format.md#sdk-storage-containers-auto-mode)). Cross-language cache sharing uses [Interop Mode](interop-mode.md) exclusively: explicit, language-neutral operation names, keys of the form `{namespace}:{operation}:{args_hash}`, and plain MessagePack values.
 
 ---
 
@@ -305,12 +313,12 @@ Enforcement: the vectors are vendored (sha256-pinned) into cachekit-py and byte-
 SERIALIZER_CODES = {"default": "s", "auto": "a", "orjson": "o", "arrow": "w", "local": "l"}
 
 // SDK-SUPPLIED, not fixed by this spec: alias spellings THIS SDK accepts -> canonical
-// name. Empty if the SDK accepts only canonical names. The SAME map must canonicalize the
-// serializer name the wire format records, or a key and its stored envelope can disagree
-// about which serializer wrote it. Do not adopt another SDK's aliases: mapping a spelling
-// your API does not accept hands that name a table code instead of the derived `x` code it
-// should get. cachekit-py's map is in the Python note above.
-SERIALIZER_ALIASES = {}   // e.g. cachekit-py: {"std": "default", "standard": "default", "pythonic": "auto"}
+// name. Empty if the SDK accepts only canonical names. Using this map for the recorded name
+// too, with the writer resolving to the same serializer, satisfies "Deriving the identity"
+// in Serializer Codes above. Do not adopt another SDK's aliases: mapping a spelling your API
+// does not accept hands that name a table code instead of the derived `x` code it should
+// get. cachekit-py's accepted aliases are in the Python note above.
+SERIALIZER_ALIASES = {}   // e.g. cachekit-py accepts: {"std": "default", "pythonic": "auto"}
 // test-vectors/cache-keys.json records serializer_type "std": cachekit-py's alias for the
 // canonical "default", so every vector's code is "s".
 
@@ -327,11 +335,9 @@ SERIALIZER_ALIASES = {}   // e.g. cachekit-py: {"std": "default", "standard": "d
 // identity must distinguish configurations that write different bytes is the uniqueness
 // rule in Serializer Codes above (SHOULD; where it does not, different `ns:` namespaces MUST).
 //
-// A refinement that maps a serializer OBJECT to a string MUST use a marker that no bare
-// identity can produce, so a user-named class can never be spelled as a table key.
-// cachekit-py maps an object to "<custom>:" + its bare class name (Python note above); the
-// prefix uses characters no identifier can contain, which is what stops a class named
-// `auto` from taking AutoSerializer's code.
+// An object-to-string refinement carries a marker no table name, alias or accepted name
+// contains ("Deriving the identity" above). cachekit-py maps an object to "<custom>:" + its
+// bare class name (Python note above).
 function normalize_identity(serializer_type):
     return serializer_type   // names-only SDK; override to handle objects
 
@@ -340,8 +346,7 @@ function serializer_code(serializer_type):
     // the code up. An identity outside the table gets its OWN derived code — never a shared
     // constant, which would put every unrecognised serializer on one keyspace.
     name = normalize_identity(serializer_type)
-    // An empty or non-string identity MUST be rejected with an error, never mapped to a
-    // code: a fallback code is a shared bucket, and a key computed from it is one nothing wrote.
+    // An empty or non-string identity is an error, never a code ("Deriving the identity").
     if name is not a string or name == "":
         raise error
     identity = SERIALIZER_ALIASES.get(name, name)

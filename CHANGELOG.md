@@ -11,18 +11,29 @@ All notable changes to the CacheKit Protocol Specification.
   two identities the wire format records differently MUST NOT be mapped onto
   one code by construction. An identity outside the code table gets `x` + the
   2-byte `blake2b` digest of its UTF-8 identity as 4 lowercase hex characters;
-  the collision guarantee is stated as probabilistic (16 bits). The read-side
-  comparison of the container's recorded serializer name against the reader's
-  own is now REQUIRED on every read of a serialized entry, before decoding, and
-  a value recording no name is a mismatch; reference caching (`l`) stores no
-  serialized container and is exempt. One uniqueness rule: an SDK SHOULD make
+  the collision guarantee is stated as probabilistic (16 bits). An SDK that
+  offers more than one serializer identity MUST record the serializer name in
+  the container of each serialized entry under a key in this format, and MUST
+  compare it against its own on every read of one, before decoding; for such an
+  SDK, an entry recording no name is a mismatch. An SDK offering a single
+  identity (`cachekit-ts`, `cachekit-rs`) is exempt from both; Interop Mode
+  entries and in-process live-object caches are outside both rules.
+  Identity-derivation rules that lived only in pseudocode comments (alias
+  resolution, the object-identity marker, rejecting an empty identity) are now
+  normative prose, and alias resolution now also binds the writer: the code,
+  the recorded name and the serializer that writes the bytes MUST all resolve
+  to one canonical name. One uniqueness rule: an SDK SHOULD make
   the identity distinguish configurations that write different bytes, and
   wherever it does not, those configurations MUST be keyed under different
   `ns:` namespaces (the 16-bit code is not a collision-resistant separator). The
   `cache_key` AAD component is identical for serializers sharing a code, so the
   cipher is no backstop between serializers that also share a `format` token.
   The table gains `l` (reference caching — shipped, never documented) and a
-  `Canonical name` column; alias spellings (`std`, `standard`, `pythonic`) and
+  `Canonical name` column, and drops its `Cross-language?` column: no
+  serializer code makes these keys shareable across SDKs, and the Cross-SDK Key
+  Generation Strategy section (and the README's implementor Quick Start) now
+  route all cross-SDK sharing through Interop Mode instead of namespace-matched
+  keys. Alias spellings (`std`, `pythonic`) and
   the instance identity (`<custom>:` + bare class name, so one class with
   different constructor arguments shares one identity) are documented in a new
   Python SDK note, which points at that rule.
@@ -37,10 +48,13 @@ All notable changes to the CacheKit Protocol Specification.
   now defines the table and `serializer_code()`, and adds an alias map and a
   `normalize_identity()` hook, both marked SDK-supplied; the hook runs before
   alias and table lookup, with the purity constraint the one-identity-one-code
-  rule already requires, and an object-to-string refinement MUST use a marker
-  no bare identity can produce. `serializer_type` is a required parameter, and
+  rule already requires. `serializer_type` is a required parameter, and
   `serializer_code()` rejects an empty or non-string identity with an error
   rather than mapping it to a code.
+- [`spec/wire-format.md`](spec/wire-format.md): the CK v3 frame's header `s`
+  table adds a serializer instance's bare class name, and the framing statement
+  excepts the two in-process modes that store no bytes: reference caching (`l`)
+  and `backend=None`.
 - Provenance: no vector changed; the derived codes are not yet covered by
   vectors.
 
