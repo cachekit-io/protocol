@@ -56,6 +56,20 @@
 
 > ⁰ TypeScript Arrow was listed 🔜 Planned from 2026-06-06 with no code, stub, or tracking issue behind it; corrected to ❌, with LAB-524 owning the implement-or-decline decision. Orjson and Arrow live behind cachekit-py's `[json]` / `[data]` extras (`pyproject.toml:73-81`).
 
+### Namespace semantics (per-SDK divergence)
+
+*Re-verified 2026-09-19 (LAB-646) against py `cachekit-py/src/cachekit/key_generator.py`, rs `cachekit-rs/crates/cachekit/src/client.rs`, ts `cachekit-ts/packages/cachekit/src/serialization/key-generator.ts` + `types/cache.ts` + `cache-core.ts` — all public SDK repos, `main`. Server-side behavior is cited via the public spec only; PHP has no namespace implementation to audit. Descriptive only, no new key-format requirement.*
+
+| Semantic | Python | Rust | TypeScript |
+| :--- | :--- | :--- | :--- |
+| Key-prefix shape (auto mode) | `ns:{namespace}:func:...` — a dedicated `ns:` token (`spec/cache-key-format.md:36`, `key_generator.py:94-95`) | N/A — no auto-mode key format; `get`/`set` take caller-supplied keys and the `#[cachekit]` macro mints interop/v1 keys only (see [Compliance Status](#compliance-status) note ¹⁴) | `{namespace}:{blake2b-hex}` — one colon, no `ns:` token (`key-generator.ts:33-44`) |
+| Key-prefix shape (caller-supplied key) | N/A — decorator-only public API, no key-taking `get`/`set` | `{namespace}:{key}` when `.namespace()` is set on the builder, else the bare key — one colon, no `ns:` token (`client.rs:246-250`) | `get`/`set`/`delete` hand the key to the backend verbatim — no prefix applied (`cache-core.ts:683,829,856`); the `namespace` set-option only groups the entry for L1 invalidation (`types/cache.ts:47-48`, `cache-core.ts:768`) |
+| Default / unset namespace | Falsy (`None`/`""`) omits the `ns:` segment entirely (`key_generator.py:94-95`) | No SDK-level default — `namespace: Option<String>`, `None` → bare key (`client.rs:246-250`); `Some("")` is rejected at `build()` (`client.rs:1090-1092`) | Required, non-optional field with nothing to fall back to (`types/cache.ts:56`); an empty string still reaches `generateKey` unchecked (`key-generator.ts:44`) |
+| Charset validation on the namespace value | None — spliced in as-is (`key_generator.py:94-95`); only the unrelated `func:` segment is sanitized (`key_generator.py:364-381`) | Setter accepts any `impl Into<String>` (`client.rs:918-922`); `build()` rejects empty, >255-byte, or non-printable-ASCII values (`client.rs:1088-1101`) — `:` is printable ASCII, so an `ns:`-shaped value passes | None in auto mode (`key-generator.ts:44`); interop mode's namespace/operation segments are validated against a fixed pattern at wrap time (`validateInteropSegment`, `cache-core.ts:922-923`) |
+
+> [!NOTE]
+> Authorization on the namespace is a per-API-key grant — a request the key isn't permitted for is refused with `403` (`spec/saas-api.md:417`) — and is separate from tenant isolation, which comes from authentication rather than key parsing (`spec/interop-mode.md:375-376`).
+
 ---
 
 ## Encryption
@@ -171,6 +185,7 @@ The contract a storage backend must satisfy per SDK (bytes in / bytes out; seria
 | TTL management | ✅ Redis + SaaS + File; Memcached refresh-only (see note) | ✅ Redis + SaaS + File + Workers (`TtlInspectable`); Memcached refresh-only (LAB-429/426) | ✅ Redis + SaaS + File (`TTLBackend`); Memcached refresh-only (LAB-430) | ❌ |
 | Stale-while-revalidate (client L1) | ⚠️ L1-only mode (`backend=None`) **and an explicit `ttl=`** only¹⁰ | ✅ Serve-stale + single-flight background refresh (LAB-728)¹⁰ ¹³ | ✅ `getWithSwr` — version tokens + background refresh, `maxConcurrentRefreshes` cap; on Workers requires a bound `ExecutionContext` (see [Cache Backends](#cache-backends) note ¹) | ❌ |
 | Stale-while-revalidate (server stale-grace) | 🚧 LAB-381 | ❌ | ❌ | ❌ |
+| Server-bounded L1 backfill (`X-CacheKit-Fresh-For`, [saas-api.md → Remaining Freshness](spec/saas-api.md#remaining-freshness)) | 🚧 LAB-557 | ❌ | ❌ | ❌ |
 
 > [!IMPORTANT]
 > ¹³ **The Rust reliability tier ships in `cachekit-rs` 0.6.0+ and is on by default.** Verified inside the published artifact, not the branch: the `cachekit-rs` 0.6.0 `.crate` from crates.io (published 2026-08-03T14:58:16Z) contains `src/reliability.rs`, `src/flight.rs`, `tests/reliability_tests.rs`, and `get_with_swr` in `src/l1/mod.rs`, and its `Cargo.toml` declares `default = ["cachekitio", "encryption", "l1", "reliability"]`. So a plain `cargo add cachekit-rs` gets **circuit breaker, retry, backpressure and L1 SWR** with no feature flags. Two of the six cells need an opt-in feature: macro-level graceful degradation and the automatic `#[cachekit]` single-flight wiring are emitted by the proc-macro, and `macros = ["dep:cachekit-macros"]` is **not** in `default` — add `--features macros`. Redis-backed presets likewise need the non-default `redis` feature (see [Developer Experience](#developer-experience) note ¹¹).
