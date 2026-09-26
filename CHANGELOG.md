@@ -4,6 +4,51 @@ All notable changes to the CacheKit Protocol Specification.
 
 ## [Unreleased]
 
+### SaaS API
+
+- **`X-CacheKit-Fresh-For` remaining-freshness response header (LAB-557).**
+  `GET /v1/cache/{key}` `200 OK` responses carry the entry's remaining freshness
+  in whole seconds, so SDK local caches (L1) bound backfill to
+  `min(local_ttl, fresh_for)` instead of restarting the freshness clock at
+  time-of-read — which let an entry read near the end of its window be served
+  locally past `fresh_until` (and, with a stale-grace window, past `evict_at`).
+  Additive and backward compatible: an absent header means legacy behaviour on
+  both sides. Spec: [saas-api.md → Remaining Freshness](spec/saas-api.md#remaining-freshness).
+  - **Emission.** Sent on every `GET` `200 OK` for a bounded entry; `0` on
+    stale-window responses (and legal on `fresh` in the final sub-second);
+    omitted for no-expiry entries and by pre-signal servers — both mean "no
+    server-side bound", same SDK action. Never sent on `HEAD`, and a `HEAD`
+    response MUST NOT create or extend a local bound.
+  - **Re-serving tiers** decay the value and MUST NOT re-stamp it; they may omit
+    it only on positive knowledge of no expiry, and emit `0` otherwise; a
+    positive value only follows a `fresh` (or unlabelled) positive source or an
+    accepted write with a positive effective TTL. Coherence windows of composed
+    tiers add up, and the revocation-propagation bound is stated as that sum
+    plus the local bound, transit and clock error; `evict_at` is the store's
+    bound, not an end-to-end one.
+  - **SDK consumption.** The value is a hard local service bound — once it
+    elapses the local copy MUST NOT be served in any form, and `0` forbids
+    backfill. It MUST be 1–7 ASCII digits and at most `2,592,000`; anything
+    else is `0`. Local caches MUST NOT backfill a `stale`-labelled response at
+    all. Local deadlines SHOULD use a clock that counts across suspend.
+- **`Cache-Control: no-store` and `Vary: Authorization` on every response.**
+  The cache key carries no tenant, so byte-identical URLs across tenants made
+  heuristic HTTP caching (RFC 9111 §4.2.2) a cross-tenant read. CacheKit-operated
+  caching tiers MUST partition by tenant.
+- **Effective TTL.** A write's effective TTL is `X-CacheKit-TTL` when present,
+  otherwise the deprecated `X-TTL`; a write stores a no-expiry entry only when
+  it carries neither. The no-expiry rule, the stale-window requirement and the
+  tier rules all read the effective TTL, so a legacy `X-TTL: 60` write is no
+  longer mistaken for an immortal one.
+- **No-expiry follow-ons** to the contract in the LAB-677 entry below.
+  `GET /v1/cache/{key}/ttl` returns `200 {"ttl": null}` for a no-expiry key
+  (mixed-reader caveat for SDKs that predate `null`), so its `404` now means
+  only "key absent"; an SDK TTL read MAY still collapse both to its null value.
+  A revalidation `PUT` MUST re-send the TTL as well as the stale window, or it
+  stores a no-expiry entry. Keys whose TTL is a revocation boundary MUST be
+  stored with an explicit TTL. The 30-day maximum bounds a stated TTL's value
+  range, not an entry's storage lifetime.
+
 ### Intent presets — canonical preset contract (LAB-514)
 
 - New normative [`spec/intent-presets.md`](spec/intent-presets.md): what `minimal` /
@@ -299,8 +344,9 @@ All notable changes to the CacheKit Protocol Specification.
   permanently fresh while present, never age-evicted, and eligible for whatever
   capacity eviction the deployment applies — "no expiry" is not a durability
   guarantee; a deployment needing a ceiling provisions a quota. `PATCH /v1/cache/{key}/ttl` never `404`s (no-op on
-  an absent key). `GET /v1/cache/{key}/ttl` returns `404` for a no-expiry entry
-  on the deployed server — classified "TTL unavailable", not a cache miss. Authentication: accepted key prefixes are `ck_sdk_` / `ck_api_` /
+  an absent key). `404` on `GET /v1/cache/{key}/ttl` is classified "Key
+  absent", not a cache miss; a no-expiry entry returns `200 {"ttl": null}`
+  there, not `404` (see the `X-CacheKit-Fresh-For` entries above). Authentication: accepted key prefixes are `ck_sdk_` / `ck_api_` /
   `ck_live_` (`ck_test_` removed — it never authenticated); `X-CacheKit-L1-Status`
   moved to Required Headers as mandatory for `ck_sdk_` keys (`400` otherwise);
   the `ns:`/`nsapi:` write-space split documented — each class may also mutate
