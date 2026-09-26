@@ -55,7 +55,9 @@ jobs:
         run: node tools/interop-v2-crosscheck.mjs
 
       - name: Python-frame verify (stdlib only)
-        run: python3 tools/python-frame-reference.py verify
+        run: |
+          python3 tools/test_python_frame_reference.py
+          python3 tools/python-frame-reference.py verify
 
       - name: File-backend format verify (stdlib only)
         run: python3 tools/file-backend-reference.py
