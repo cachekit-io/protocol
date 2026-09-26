@@ -4,6 +4,65 @@ All notable changes to the CacheKit Protocol Specification.
 
 ## [Unreleased]
 
+### Cache key — serializer code MUST be derived, and per-identity (LAB-4351)
+
+- [`spec/cache-key-format.md`](spec/cache-key-format.md): the `{serializer_code}`
+  suffix MUST be derived from the configured serializer, never a constant, and
+  two identities the wire format records differently MUST NOT be mapped onto
+  one code by construction. An identity outside the code table gets `x` + the
+  2-byte `blake2b` digest of its UTF-8 identity as 4 lowercase hex characters;
+  the collision guarantee is stated as probabilistic (16 bits). The read-side
+  comparison of the container's recorded serializer name against the reader's
+  own is now REQUIRED on every read of a serialized entry, before decoding, and
+  a value recording no name is a mismatch; reference caching (`l`) stores no
+  serialized container and is exempt. One uniqueness rule: an SDK SHOULD make
+  the identity distinguish configurations that write different bytes, and
+  wherever it does not, those configurations MUST be keyed under different
+  `ns:` namespaces (the 16-bit code is not a collision-resistant separator). The
+  `cache_key` AAD component is identical for serializers sharing a code, so the
+  cipher is no backstop between serializers that also share a `format` token.
+  The table gains `l` (reference caching — shipped, never documented) and a
+  `Canonical name` column; alias spellings (`std`, `standard`, `pythonic`) and
+  the instance identity (`<custom>:` + bare class name, so one class with
+  different constructor arguments shares one identity) are documented in a new
+  Python SDK note, which points at that rule.
+  Documents the defect corrected by
+  [cachekit-io/cachekit-py#311](https://github.com/cachekit-io/cachekit-py/pull/311)
+  (merged as `ee65250`; ships in cachekit-py 0.20.0): through v0.19.0 every
+  auto-mode key ended in `s` regardless of serializer, so two caches over one
+  function differing only in serializer shared a key and evicted each other on
+  every read.
+- SDK-implementor pseudocode: the block previously defaulted `serializer_type`
+  to cachekit-py's `std` spelling and indexed a code table it never defined. It
+  now defines the table and `serializer_code()`, and adds an alias map and a
+  `normalize_identity()` hook, both marked SDK-supplied; the hook runs before
+  alias and table lookup, with the purity constraint the one-identity-one-code
+  rule already requires, and an object-to-string refinement MUST use a marker
+  no bare identity can produce. `serializer_type` is a required parameter, and
+  `serializer_code()` rejects an empty or non-string identity with an error
+  rather than mapping it to a code.
+- Provenance: no vector changed; the derived codes are not yet covered by
+  vectors.
+
+### Cache key — 7-segment format is Python SDK convention; server-side requirements
+
+- [`spec/cache-key-format.md`](spec/cache-key-format.md): the 7-segment key
+  structure is marked the Python SDK's internal convention, not a server
+  contract. A new
+  [Server-Side Requirements](spec/cache-key-format.md#server-side-requirements)
+  section lists the only checks the CachekitIO backend enforces and which API
+  key classes may write each key space — including the open `default` space
+  that unprefixed keys (TypeScript/Rust `{ns}:{hash}`, interop, bare hashes)
+  fall in.
+- Test Vectors: `test-vectors/cache-keys.json` is Python-SDK-only. The rule
+  that a cross-SDK implementation substitutes its own module path and matches
+  the args-hash segment byte-for-byte is withdrawn for these vectors; cross-SDK
+  conformance uses `test-vectors/interop-mode.json`. The fixture's `note` and
+  `key_format` fields now say so; no vector changed.
+- [`spec/interop-mode.md`](spec/interop-mode.md): the deployed validator
+  accepts interop-format keys (`{namespace}:{operation}:{args_hash}`, in the
+  `default` namespace), replacing the warning that it would reject them.
+
 ### Intent presets — canonical preset contract (LAB-514)
 
 - New normative [`spec/intent-presets.md`](spec/intent-presets.md): what `minimal` /
