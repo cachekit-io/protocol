@@ -7,93 +7,47 @@ All notable changes to the CacheKit Protocol Specification.
 ### SaaS API
 
 - **`X-CacheKit-Fresh-For` remaining-freshness response header (LAB-557).**
-  `GET /v1/cache/{key}` `200 OK` responses now carry the entry's remaining
-  freshness in whole seconds (server-clock delta; `0` on stale-window
-  responses; emitted on every `GET` `200 OK` for a bounded entry; omitted for
-  no-expiry entries and by pre-signal servers — both mean "no server bound",
-  same SDK action), so
-  SDK local caches (L1) can bound backfill to `min(local_ttl, fresh_for)`
-  instead of restarting the freshness clock at time-of-read — an entry read
-  near the end of its server-side window could previously be served fresh from
-  L1 for up to another full TTL, past `fresh_until` (and, with a stale-grace
-  window, past `evict_at`). The header value is a hard local service bound:
-  once elapsed, the local copy MUST NOT be served in any form (a `0` value
-  prohibits backfill entirely) — client-side stale service of server-backed
-  entries is prohibited regardless of header presence, since the client has
-  no remaining-eviction signal; the server owns the stale window through
-  `evict_at`. Additive and backward compatible: absent header =
-  legacy behavior on both sides. Not emitted on `HEAD`. Spec:
-  [saas-api.md → Remaining Freshness](spec/saas-api.md#remaining-freshness).
-  Origin: CodeRabbit outside-diff finding on
-  [cachekit-py#233](https://github.com/cachekit-io/cachekit-py/pull/233).
-- **Coherence, caching and clock rules for the same header.** The deployment-specific
-  "≤5 seconds" edge-coherence figure is dropped from the normative text — the
-  deployed tiers compose to roughly double it, and the spec now states the
-  general truth instead: coherence windows **compound** across composed tiers
-  that re-stamp rather than decay. New in the same round: servers MUST emit
-  `Cache-Control: no-store` on every response (the cache key carries no tenant,
-  so byte-identical URLs across tenants make heuristic HTTP caching
-  (RFC 9111 §4.2.2) a cross-tenant read; CacheKit-operated tiers MUST partition
-  internal caches by tenant); `fresh` + `Fresh-For: 0` documented as legal
-  (final sub-second floors to `0` — serve, don't backfill); local deadlines
-  SHOULD use a suspend-counting clock. The
-  revocation-propagation bound names the serving path's compounded coherence
-  windows as a summed term alongside the local bound, transit, and clock error
-  — a re-stamping tier can hand out a pre-`DELETE` copy that was never in
-  flight (CodeRabbit finding on protocol#51).
-- **Fail-closed tier and SDK rules for the same header.** Re-serving-tier and SDK rules are
-  now fail-closed rather than enumerated: a tier MUST **decay** the header and
-  MUST NOT re-stamp it (the deployed tiers already decay — zero implementation
-  cost, and a pre-`DELETE` copy's local service now ends by the entry's
-  `fresh_until`); a positive value is legal only on a `fresh`-labelled (or
-  unlabelled — the pre-SWR `fresh` default) response that carried a positive
-  value; every other shape (`stale`, `0` under any
-  label, unrecognized token, missing header) is emitted as `0` with the
-  freshness label passed through unchanged; a bounded entry whose remainder a
-  tier has lost is `0`, never omitted; SDK backfill is gated on the `fresh` (or unlabelled) label.
-  `Vary: Authorization` joins `Cache-Control: no-store` as a mandatory response
-  header (independent second control against cross-tenant HTTP caching). The
-  value grammar is length-guarded — 1–7 ASCII digits, checked before the range
-  check, so a wrapping fixed-width parse cannot land an over-cap value in range.
-  `evict_at` is stated as the store's bound with the end-to-end revocation
-  bound in Remaining Freshness, and the local-cache "never past `evict_at`"
-  rule is scoped to responses that carry the header — a pre-signal response
-  keeps the legacy local TTL, which is the origin gap the header closes;
-  *coherence window* and *signal-capable server* are defined at first use.
-- **No-expiry entries admitted.** The spec described a tenant-default TTL that no server
-  implements: saas has stored `expires_at NULL` for an omitted
-  `X-CacheKit-TTL` since day one, and Redis, Memcached and File all admit
-  unbounded entries. `PUT` without `X-CacheKit-TTL` now means **no expiry** —
-  no `fresh_until`, no `evict_at`, served `fresh` until deleted or
-  overwritten, never stale — and servers MUST NOT substitute a hidden default.
-  `X-CacheKit-Fresh-For` is omitted for such entries (the server bound is
-  unbounded, so the SDK's configured local TTL — the absent-header path — is
-  the right bound), and the re-serving-tier rule becomes "omit only on
-  positive knowledge of no expiry; otherwise `0`": a tier may omit only when
-  a signal-capable store below omitted, or it populated the copy from a write
-  with no TTL; a tier fronting a pre-signal store emits `0` rather than
-  passing the absence through (the pass-through re-opened the origin gap for bounded entries behind such a tier). `GET
-  /v1/cache/{key}/ttl` returns `200 {"ttl": null}` for a no-expiry key —
-  never `404`, never a negative sentinel — with a mixed-reader caveat for SDKs
-  that predate `null`; `PATCH /ttl` bounds it. The revocation bound is stated
-  for no-expiry entries (no `fresh_until`, so the local term is the full
-  configured local TTL with no server ceiling), revocation-sensitive keys MUST
-  carry an explicit `X-CacheKit-TTL`, and a revalidation `PUT` MUST re-send
-  the TTL as well as the stale window or it immortalizes a bounded key. The
-  30-day maximum is restated as a bound on a stated TTL's value range, not a
-  storage-lifetime ceiling — accumulation of no-expiry entries is unbounded by
-  this spec (storage hygiene is an operator control).
-- **Legacy `X-TTL` writes and write-populated tier copies.** A write's
-  *effective TTL* is `X-CacheKit-TTL` when present, otherwise the deprecated
-  `X-TTL`; a write stores a no-expiry entry only when it carries neither. The
-  no-expiry rule, the stale-window requirement and the re-serving-tier rules
-  all read the effective TTL, so a tier can no longer mistake a bounded legacy
-  `X-TTL: 60` write for an immortal one and omit the header — which would
-  have let an SDK serve it for its full local TTL. A copy's bound now has one
-  named source: the response it was read from, or an accepted write it
-  forwarded, whose effective TTL is decayed from dispatch and may be emitted
-  as a positive `fresh` value — the positive-value gate and the decay rule no
-  longer contradict each other for write-populated copies.
+  `GET /v1/cache/{key}` `200 OK` responses carry the entry's remaining freshness
+  in whole seconds, so SDK local caches (L1) bound backfill to
+  `min(local_ttl, fresh_for)` instead of restarting the freshness clock at
+  time-of-read — which let an entry read near the end of its window be served
+  locally past `fresh_until` (and, with a stale-grace window, past `evict_at`).
+  Additive and backward compatible: an absent header means legacy behaviour on
+  both sides. Spec: [saas-api.md → Remaining Freshness](spec/saas-api.md#remaining-freshness).
+  - **Emission.** Sent on every `GET` `200 OK` for a bounded entry; `0` on
+    stale-window responses (and legal on `fresh` in the final sub-second);
+    omitted for no-expiry entries and by pre-signal servers — both mean "no
+    server-side bound", same SDK action. Never sent on `HEAD`, and a `HEAD`
+    response MUST NOT create or extend a local bound.
+  - **Re-serving tiers** decay the value and MUST NOT re-stamp it; they may omit
+    it only on positive knowledge of no expiry, and emit `0` otherwise; a
+    positive value only follows a `fresh` (or unlabelled) positive source or an
+    accepted write with a positive effective TTL. Coherence windows of composed
+    tiers add up, and the revocation-propagation bound is stated as that sum
+    plus the local bound, transit and clock error; `evict_at` is the store's
+    bound, not an end-to-end one.
+  - **SDK consumption.** The value is a hard local service bound — once it
+    elapses the local copy MUST NOT be served in any form, and `0` forbids
+    backfill. It MUST be 1–7 ASCII digits and at most `2,592,000`; anything
+    else is `0`. Local caches MUST NOT backfill a `stale`-labelled response at
+    all. Local deadlines SHOULD use a clock that counts across suspend.
+- **`Cache-Control: no-store` and `Vary: Authorization` on every response.**
+  The cache key carries no tenant, so byte-identical URLs across tenants made
+  heuristic HTTP caching (RFC 9111 §4.2.2) a cross-tenant read. CacheKit-operated
+  caching tiers MUST partition by tenant.
+- **Effective TTL.** A write's effective TTL is `X-CacheKit-TTL` when present,
+  otherwise the deprecated `X-TTL`; a write stores a no-expiry entry only when
+  it carries neither. The no-expiry rule, the stale-window requirement and the
+  tier rules all read the effective TTL, so a legacy `X-TTL: 60` write is no
+  longer mistaken for an immortal one.
+- **No-expiry follow-ons** to the contract in the LAB-677 entry below.
+  `GET /v1/cache/{key}/ttl` returns `200 {"ttl": null}` for a no-expiry key
+  (mixed-reader caveat for SDKs that predate `null`), so its `404` now means
+  only "key absent"; an SDK TTL read MAY still collapse both to its null value.
+  A revalidation `PUT` MUST re-send the TTL as well as the stale window, or it
+  stores a no-expiry entry. Keys whose TTL is a revocation boundary MUST be
+  stored with an explicit TTL. The 30-day maximum bounds a stated TTL's value
+  range, not an entry's storage lifetime.
 
 ### Intent presets — canonical preset contract (LAB-514)
 
@@ -390,8 +344,8 @@ All notable changes to the CacheKit Protocol Specification.
   permanently fresh while present, never age-evicted, and eligible for whatever
   capacity eviction the deployment applies — "no expiry" is not a durability
   guarantee; a deployment needing a ceiling provisions a quota. `PATCH /v1/cache/{key}/ttl` never `404`s (no-op on
-  an absent key). `404` on `GET /v1/cache/{key}/ttl` is classified "TTL
-  unavailable", not a cache miss; a no-expiry entry returns `200 {"ttl": null}`
+  an absent key). `404` on `GET /v1/cache/{key}/ttl` is classified "Key
+  absent", not a cache miss; a no-expiry entry returns `200 {"ttl": null}`
   there, not `404` (see the `X-CacheKit-Fresh-For` entries above). Authentication: accepted key prefixes are `ck_sdk_` / `ck_api_` /
   `ck_live_` (`ck_test_` removed — it never authenticated); `X-CacheKit-L1-Status`
   moved to Required Headers as mandatory for `ck_sdk_` keys (`400` otherwise);

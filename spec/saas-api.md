@@ -284,7 +284,7 @@ On a `200` with `X-CacheKit-Freshness: stale`:
 - An SDK MUST NOT treat the response as a protocol error.
 - By default it SHOULD return the bytes to the caller immediately — a stale response is never a blocking miss.
 - An SDK MAY instead treat a stale hit as a **miss** by local policy (e.g. security-sensitive caches where TTL is a revocation boundary) and take the ordinary synchronous miss path. Such caches SHOULD NOT set `X-CacheKit-Stale-TTL` on write in the first place.
-- Local caches (L1) MUST NOT backfill a stale-flagged response at all — not as fresh, not as locally-stale — regardless of any `X-CacheKit-Fresh-For` value (signal-capable servers mark these `0`; the rule holds with or without the header, and the rationale is stated once under [Remaining Freshness](#remaining-freshness)). On a response carrying [`X-CacheKit-Fresh-For`](#remaining-freshness), local caching MUST NOT extend service of an entry past the store's `evict_at` — for *fresh*-labelled reads near the freshness boundary, the header is the mechanism that lets local caches honor this bound (LAB-557). A response without it comes from a pre-signal server and follows the legacy absence rule in that section: the configured local TTL applies unchanged and may outlive `evict_at` — the origin gap the header exists to close.
+- Local caches (L1) MUST NOT backfill a stale-flagged response at all — not as fresh, not as locally-stale — regardless of any `X-CacheKit-Fresh-For` value (signal-capable servers mark these `0`; the rule holds with or without the header, and the rationale is stated once under [Remaining Freshness](#remaining-freshness)). On a response carrying [`X-CacheKit-Fresh-For`](#remaining-freshness), local caching MUST NOT extend service of an entry past the store's `evict_at` — for *fresh*-labelled reads near the freshness boundary, the header is the mechanism that lets local caches honor this bound (LAB-557). A response without it — a no-expiry entry, or a pre-signal server — follows the absence rule in that section: the configured local TTL applies unchanged. From a pre-signal server that lifetime may outlive `evict_at` — the origin gap the header exists to close.
 - Revalidation is triggered only by `GET`. `HEAD` freshness is informational; an existence check MUST NOT fire a background recompute.
 
 ### Revalidation flow (SDK)
@@ -382,7 +382,7 @@ X-CacheKit-Lock-Id: uuid-string
 
 ### GET /v1/cache/{key}/ttl
 
-Get remaining TTL for a key. The returned `ttl` is the remaining seconds until **eviction** — for entries with a [stale-grace window](#stale-while-revalidate), that is `evict_at`, not `fresh_until`. A **no-expiry** entry ([PUT](#put-v1cachekey)) returns `200 OK` with `{"ttl": null}`: the key exists, so `404` MUST NOT be returned for it, and `null` — not a negative sentinel — is the representation, because the field is typed as seconds and every SDK already models no expiry as its null / `None` / `Option::None`. SDKs MUST accept `null` and surface it as their no-expiry value. This is **not** transparent to readers that predate it: an SDK that asserts an integer `ttl`, or coerces a non-integer to `0`, reads an immortal key as missing or as expiring now. Deployments MUST NOT store no-expiry entries for keys whose `/ttl` readers predate `null` support — the same mixed-reader rule as `stale_ttl` ([Semantics notes](#semantics-notes)).
+Get remaining TTL for a key. The returned `ttl` is the remaining seconds until **eviction** — for entries with a [stale-grace window](#stale-while-revalidate), that is `evict_at`, not `fresh_until`. A **no-expiry** entry ([PUT](#put-v1cachekey)) returns `200 OK` with `{"ttl": null}`: the key exists, so `404` MUST NOT be returned for it, and `null` — not a negative sentinel — is the representation, because the field is typed as seconds and every SDK already models no expiry as its null / `None` / `Option::None`. SDKs MUST accept `null` and surface it as their no-expiry value. An SDK TTL read MAY surface that value and an absent key (`404`) identically — both as its null / `None` / `Option::None` — so a caller that needs existence, not a TTL, uses `GET /v1/cache/{key}`, or `HEAD` subject to its [known server deviation](#head-v1cachekey). This is **not** transparent to readers that predate it: an SDK that asserts an integer `ttl`, or coerces a non-integer to `0`, reads an immortal key as missing or as expiring now. Deployments MUST NOT store no-expiry entries for keys whose `/ttl` readers predate `null` support — the same mixed-reader rule as `stale_ttl` ([Semantics notes](#semantics-notes)).
 
 | Status | Meaning | Response Body |
 | :---: | :--- | :--- |
@@ -470,7 +470,7 @@ SDKs SHOULD send cache metrics headers for rate limiting and observability:
 | `400` | Bad Request | Client error (invalid cache-key format, missing required headers other than `Authorization`) |
 | `401` | Unauthorized | Authoritative denial: the `Authorization` header is missing or malformed, or the key store says the key is unknown or revoked, or its tenant is suspended or soft-deleted. Never emitted for a backend fault while checking the key (that is a `503`) |
 | `403` | Forbidden | API key lacks permission for this operation/namespace |
-| `404` | Not Found | Cache miss (`GET`/`HEAD /v1/cache/{key}`, subject to [HEAD's known server deviation](#head-v1cachekey)); TTL unavailable on `GET /v1/cache/{key}/ttl` ([causes](#get-v1cachekeyttl)). Never emitted by `DELETE /v1/cache/{key}` or `PATCH /v1/cache/{key}/ttl` — both are no-ops on an absent key. |
+| `404` | Not Found | Cache miss (`GET`/`HEAD /v1/cache/{key}`, subject to [HEAD's known server deviation](#head-v1cachekey)); key absent on `GET /v1/cache/{key}/ttl`. Never emitted by `DELETE /v1/cache/{key}` or `PATCH /v1/cache/{key}/ttl` — both are no-ops on an absent key. |
 | `409` | Conflict | `PATCH /v1/cache/{key}/ttl` on a stale entry past `fresh_until`; refresh requires a `PUT` of recomputed bytes ([SWR write semantics](#write-semantics)) |
 | `413` | Payload Too Large | Value exceeds max stored value size (25 MB). Permanent — do not retry; surface "value too large" |
 | `429` | Too Many Requests | Rate limited |
@@ -487,7 +487,7 @@ SDKs should classify errors for circuit breaker integration:
 | **Transient** | `429`, `500`, `502`, `503`, network timeouts | Retry with backoff |
 | **Permanent** | `400`, `401`, `403`, `409`, `413` | Do not retry, surface to caller. For `409` (`PATCH /ttl` past `fresh_until`): do not re-`PATCH` — recompute and `PUT` ([write semantics](#write-semantics)) |
 | **Cache miss** | `404` on `GET`/`HEAD /v1/cache/{key}` (see [HEAD's known server deviation](#head-v1cachekey)) | Not an error — return `None`/`null` (`GET`) or `false` (`HEAD`) |
-| **TTL unavailable** | `404` on `GET /v1/cache/{key}/ttl` | Not an error — return `None`/`null` for the TTL ([causes](#get-v1cachekeyttl)) |
+| **Key absent** | `404` on `GET /v1/cache/{key}/ttl` | Not an error — return `None`/`null` for the TTL ([GET /v1/cache/{key}/ttl](#get-v1cachekeyttl)) |
 
 ---
 
