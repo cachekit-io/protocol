@@ -310,8 +310,9 @@ All notable changes to the CacheKit Protocol Specification.
   table. **`HEAD` on a missing key stays `404`** (RFC 9110 §9.3.2) — the deployed
   server's `200` is recorded as a known server deviation, not adopted, and the
   spec defines no client workaround: SDKs keep branching on status, and callers
-  needing a reliable existence check against the deployed server use `GET`
-  until it is corrected.
+  needing an existence check against the deployed server use `GET` until it is
+  corrected — its `404` may trail a `PUT` made through another edge instance by
+  up to the ~5 s negative-cache window.
 
 - StorageEnvelope `compressed_data` canonical encoding flipped from MessagePack
   array-of-ints to `bin` (LAB-783 /
