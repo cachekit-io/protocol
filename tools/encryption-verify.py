@@ -63,6 +63,11 @@ FROZEN_KEYRING_VECTORS = {"encrypted_with_k1": "k1", "encrypted_with_k2": "k2"}
 FROZEN_KEYRING_VECTOR_NAMES = frozenset(FROZEN_KEYRING_VECTORS)
 KEYRING_ORDER = ("k2", "k1")
 
+# Default-tenant conformance (spec/intent-presets.md § Master Key Input rule 5): the
+# tenant MUST be the literal "default" and the vector names are frozen like the rest.
+DEFAULT_TENANT_ID = "default"
+FROZEN_DEFAULT_TENANT_VECTOR_NAMES = frozenset({"default_tenant_interop"})
+
 
 def hkdf_sha256(ikm: bytes, salt: bytes, info: bytes, length: int = 32) -> bytes:
     """RFC 5869 HKDF-Extract + Expand with SHA-256."""
@@ -211,6 +216,53 @@ def verify_keyring(keyring: dict | None, *, seal: bool) -> int:
     return failures
 
 
+def verify_default_tenant(block: dict | None, master_key: bytes, *, seal: bool) -> int:
+    """Return the number of failed default-tenant checks (intent-presets.md rule 5).
+
+    The block pins tenant "default" under the main master key: fingerprint of the
+    HKDF-derived key, AAD reconstruction with "default" as component 1, and (with
+    `cryptography`) the seal. An SDK that decrypts these through its preset with NO
+    tenant configured has demonstrated the cross-SDK default.
+    """
+    if block is None:
+        print("FAIL default_tenant vectors missing")
+        return 1
+    failures = 0
+    if block.get("tenant_id") != DEFAULT_TENANT_ID:
+        print(f"FAIL default_tenant: tenant_id must be the literal {DEFAULT_TENANT_ID!r}; got {block.get('tenant_id')!r}")
+        return 1
+    key = derive_encryption_key(master_key, DEFAULT_TENANT_ID)
+    if key_fingerprint(key) != block.get("derived_key_fingerprint_hex"):
+        print(f"FAIL default_tenant: derived-key fingerprint mismatch (derived {key_fingerprint(key)})")
+        return 1
+    vectors = block.get("vectors", [])
+    missing = FROZEN_DEFAULT_TENANT_VECTOR_NAMES - {vec.get("name") for vec in vectors}
+    if missing:
+        print(f"FAIL frozen default_tenant vectors missing: {sorted(missing)}")
+        failures += 1
+    for vec in vectors:
+        name = vec["name"]
+        if not isinstance(vec["compressed"], bool) or vec["format"] not in FORMAT_REGISTRY:
+            print(f"FAIL default_tenant {name}: invalid metadata")
+            failures += 1
+            continue
+        aad = aad_v3(DEFAULT_TENANT_ID, vec["cache_key"], fmt=vec["format"], compressed=vec["compressed"])
+        if aad.hex() != vec["aad_hex"]:
+            print(f"FAIL default_tenant {name}: AAD mismatch\n  expected {vec['aad_hex']}\n  rebuilt  {aad.hex()}")
+            failures += 1
+            continue
+        if not seal:
+            print(f"ok  default_tenant {name} (AAD + fingerprint only)")
+            continue
+        result = decrypt_with_keyring([key], bytes.fromhex(vec["ciphertext_hex"]), aad)
+        if result is None or result[1].hex() != vec["plaintext_hex"]:
+            print(f"FAIL default_tenant {name}: did not decrypt to plaintext_hex under tenant {DEFAULT_TENANT_ID!r}")
+            failures += 1
+            continue
+        print(f"ok  default_tenant {name}")
+    return failures
+
+
 def verify(doc: dict, *, require_seal: bool) -> int:
     failures = 0
 
@@ -275,13 +327,18 @@ def verify(doc: dict, *, require_seal: bool) -> int:
         print(f"ok  {name}")
 
     failures += verify_keyring(doc.get("keyring"), seal=aesgcm is not None)
+    failures += verify_default_tenant(doc.get("default_tenant"), bytes.fromhex(doc["master_key_hex"]), seal=aesgcm is not None)
 
     if failures:
         print(f"{failures} vector(s) FAILED")
         return 1
     mode = "AAD + AES-GCM seal" if aesgcm is not None else "AAD-only"
     keyring_count = len(doc.get("keyring", {}).get("vectors", []))
-    print(f"all {len(doc['vectors'])} encryption vectors plus {keyring_count} keyring vectors verified ({mode})")
+    default_count = len(doc.get("default_tenant", {}).get("vectors", []))
+    print(
+        f"all {len(doc['vectors'])} encryption vectors plus {keyring_count} keyring and "
+        f"{default_count} default-tenant vectors verified ({mode})"
+    )
     return 0
 
 
