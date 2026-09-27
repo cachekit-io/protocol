@@ -598,6 +598,16 @@ round-trip) in both envelope encodings — the legacy array-of-ints original
 release emitting `bin`) — an Arrow-envelope frame (structural checks), and
 must-reject error vectors — including a CK frame fed to a strict interop reader.
 
+The `bin` twin carries `"twin_of": "default_saas_write_msgpack_bytestorage"`: an
+operator-owned declaration that it differs from the legacy vector **only** in
+envelope encoding (same value, frame-prefix bytes, compressed bytes, checksum,
+size, format and inner MessagePack). `verify` enforces the declaration as a hard
+failure; `generate` never adds or removes it and only warns on divergence. When
+the default write path legitimately moves, the exit is to drop `twin_of` from
+the regenerated vector in the same commit — a reviewable fixture diff — not to
+loosen a byte comparison. The legacy vector stays frozen (no installable wheel
+emits the array-of-integers envelope any more) as legacy-read proof.
+
 Verify:
 
 ```bash
