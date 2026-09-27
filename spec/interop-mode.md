@@ -450,40 +450,62 @@ Interop values are read from a backend the SDK does not control, so every decode
 is an untrusted-input parser. A MessagePack collection header costs 1–5 bytes but
 may declare up to 2³²−1 elements, and an eager decoder pre-allocates the container
 *before* decoding its children; depth-first decoding stacks those allocations, so a
-few KB of nested headers can drive hundreds of MB of transient heap (measured
-15 KB → ~400 MB in `@msgpack/msgpack` 3.1.3; 10 KB → 67 MB in `msgpack-python`
-1.2.1 with `array32` headers claiming `len(input)` elements). A reader MUST
-therefore:
+few KB of nested headers can drive hundreds of MB of transient heap. Measured peak
+heap: 15 KB → ~400 MB in `@msgpack/msgpack` 3.1.3, and 10 KB → ~82 MB in
+`msgpack-python` 1.2.1 with `array32` headers claiming `len(input)` elements (8 bytes
+× 1024 levels × input length: it allocates every level until its nesting limit trips).
+A reader MUST therefore:
 
-1. **Bound nesting depth.** The bound MUST be at least 32 and MUST NOT exceed 1024.
+1. **Bound nesting depth.** Depth is the number of collection headers on the
+   deepest path from the root; str, bin and scalars add nothing, so `[[null]]` has
+   depth 2. The bound MUST be at least 32 and MUST NOT exceed 1024.
    (Today: TypeScript 100, Rust 100, Python 1024. A single shared value is
    [protocol#20](https://github.com/cachekit-io/protocol/issues/20)'s open item;
-   until it is ratified, writers SHOULD keep values within 32 levels.)
+   until it is ratified, writers SHOULD keep values within 32 levels.) A recursive
+   native decoder can exhaust its thread stack below 1024 levels (`rmp-serde` in a
+   debug build does on a 2 MiB thread), so each SDK SHOULD test a complete document
+   at its own bound on its smallest supported stack.
 2. **Never pre-allocate beyond what the input can back.** Every declared element or
-   byte needs at least one input byte, so a structurally incomplete document
-   (Σ declared slots > input bytes − 1) MUST be rejected *without* materialising it.
-   A map pair counts as two slots (key + value). Every per-header term and the running
-   sum MUST be computed in at least 64 bits or with checked/saturating arithmetic, and
-   an overflow is itself a rejection: two `array32` headers already exceed 2³², and a
-   32-bit accumulator that wraps to a small value passes the budget
-   (`array32_sum_wraps_u32` and `map32_half_claim_wraps_u32_mul` pin the shapes).
-   Do not assume a decoder is lazy: `rmp-serde` reads str/bin lazily but serde's
-   `Vec<T>` visitor still pre-allocates up to 1 MiB per collection from the
+   byte needs at least one input byte, so the declared slots summed over the whole
+   document MUST NOT exceed input bytes − 1, and a document that exceeds it MUST be
+   rejected *without* materialising it. Checking each header only against the input
+   that remains after it does not satisfy this: nested headers can each fit what
+   follows them while together declaring far more than the input holds
+   (`nested_array16_each_header_fits_sum_overclaims`). A map pair counts as two slots
+   (key + value). Exceeding the sum is sufficient to reject, but it is not the
+   definition of an incomplete document: `92 dc 00 00` sums to 2 and is still
+   truncated. Every per-header term and the running sum MUST be computed in at least
+   64 bits or with checked/saturating arithmetic, and an overflow is itself a
+   rejection: two `array32` headers already exceed 2³², and a 32-bit accumulator that
+   wraps to a small value passes the budget (`array32_sum_wraps_u32`,
+   `array32_sum_wraps_u32_small_first` and `map32_half_claim_wraps_u32_mul` pin the
+   shapes). Do not assume a decoder is lazy: `rmp-serde` reads str/bin lazily but
+   serde's `Vec<T>` visitor still pre-allocates up to 1 MiB per collection from the
    declared length. A header-only structural walk before decoding (the pre-scan in
-   `cachekit-ts`, `Unpacker.skip()` in `cachekit-py`, `check_structure` in
+   `cachekit-ts`, `check_msgpack_structure` in `cachekit-py`, `check_structure` in
    `cachekit-rs`) is sufficient.
 3. **Fail closed, catchably.** Rejection surfaces as a decode error the SDK read
    path turns into a cache miss — never an uncaught crash or an OOM abort.
 
 These bounds are SDK-owned invariants, not library defaults: each SDK pins them
 explicitly and regression-tests them, so a decoder dependency bump cannot silently
-re-open the amplifier.
+re-open the amplifier. The vector verdicts alone cannot show that: a stock decoder's
+default limits reject every reject vector today, so an SDK's test SHOULD drive the
+vectors through its own guard (call the pre-scan directly, or bound peak memory)
+rather than only assert that a decode fails.
 [`test-vectors/decode-bounds.json`](../test-vectors/decode-bounds.json) pins the
-bytes every decoder MUST reject (13) and MUST accept (2); the same rules apply to
+bytes every decoder MUST reject (16) and MUST accept (2); the same rules apply to
 any other untrusted MessagePack decode in an SDK (auto-mode payloads after the
-envelope is unwrapped, invalidation events). The 40× residual — a *legal* payload
-still materialises far more than its byte size in language objects — is bounded by
-each SDK's input-size cap, not by these rules.
+envelope is unwrapped, invalidation events).
+
+These rules do not bound the residual. A *legal*, fully backed document still
+materialises far more memory than its size in language objects: an `array32` of
+empty maps peaks at 72× its size in `msgpack-python` 1.2.1 (2 MB → 144 MB). The
+ratio applies to the decode input, which for an auto-mode payload is the
+LZ4-decompressed bytes (up to 512 MiB under
+[wire-format.md → Security Limits](wire-format.md#security-limits)), not the stored
+bytes. No normative input-size or element-count cap exists; a shared value belongs
+with the depth value on [protocol#20](https://github.com/cachekit-io/protocol/issues/20).
 
 ---
 
@@ -519,16 +541,9 @@ not re-litigated by accident.
 | `encryption_vectors` | 1 | Full HKDF-SHA256 → AES-256-GCM round-trip over plain-msgpack plaintext with the interop AAD (fixed nonce; decrypt-verified) |
 | `error_vectors` | 9 | Inputs that MUST be rejected (NaN, +Inf and −Inf as independent vectors, int overflow/underflow, naive datetime, bad segments incl. trailing newline). The `error` text is a maintainer note, not a normative message |
 
-[`test-vectors/decode-bounds.json`](../test-vectors/decode-bounds.json) (see
-[Decode bounds](#decode-bounds)) adds 13 `reject_vectors` (nested-header bombs,
-over-claiming `array32`/`map32`/`bin32`/`str32` headers, a truncated array and map,
-two shapes that wrap 32-bit slot arithmetic) and 2
-`accept_vectors` (32-deep nesting, a fully backed `array16`) that every SDK's
-untrusted decoder MUST honour; `tools/decode-bounds-reference.py verify` checks the
-file against its recipes and, when `msgpack-python` is installed, that the real
-decoder rejects/accepts each vector (rejection only — msgpack-python's default limits
-reject them, which proves each vector trips a stock decoder's limits; each SDK's explicit bound and
-no-pre-allocation guard are tested in that SDK, not here).
+[`test-vectors/decode-bounds.json`](../test-vectors/decode-bounds.json) pins the
+[Decode bounds](#decode-bounds); `tools/decode-bounds-reference.py verify` checks it,
+and the tool's docstring states what each CI leg proves.
 
 Inputs use a tagged-JSON convention (`{"$set": …}`, `{"$float": "2.0"}`,
 `{"$int": "…"}`, `{"$datetime": "…"}`, `{"$uuid": "…"}`, `{"$bytes": "<hex>"}`)

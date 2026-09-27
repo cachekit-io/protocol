@@ -2,12 +2,15 @@
 """Reference tool for test-vectors/decode-bounds.json (untrusted-decode bounds).
 
 Normative rules and the measurements behind them: spec/interop-mode.md → Decode
-bounds. This file pins the bytes every SDK's decoder MUST reject (13) and MUST
-accept (2, so the bound cannot over-tighten).
+bounds. This file pins the bytes every SDK's decoder MUST reject and MUST accept
+(so the bound cannot over-tighten).
 
 Usage:
-    verify    (default) stdlib-only. Checks the file equals the recipes below and
-              that each vector's depth/slot tags match its arithmetic. When
+    verify    (default) stdlib-only. Checks the file equals the recipes below,
+              derives each vector's depth and declared slots with a header-only
+              structural walk (never trusting the hand-entered tags), checks the
+              reject reasons against them, and checks the set still contains the
+              shapes that separate a conforming reader from a near miss. When
               `msgpack` (msgpack-python) is importable, additionally checks the
               real decoder rejects every reject vector and accepts every accept
               vector. Rejection only: msgpack-python's own default limits reject
@@ -20,6 +23,7 @@ Usage:
 
 from __future__ import annotations
 
+from collections.abc import Callable
 import json
 import logging
 from pathlib import Path
@@ -28,9 +32,6 @@ import sys
 ROOT = Path(__file__).resolve().parents[1]
 VECTORS = ROOT / "test-vectors" / "decode-bounds.json"
 
-# Every SDK's current depth bound is <= MAX_DEPTH_CEILING (ts 100, rs 100, py
-# 1024), so a reject vector nested deeper than this is rejected by all of them;
-# every SDK accepts at least MIN_DEPTH_FLOOR levels.
 MAX_DEPTH_CEILING = 1024
 MIN_DEPTH_FLOOR = 32
 
@@ -72,10 +73,21 @@ def build() -> dict:
         recipe("nested_map16_depth_2048",
                "Map twin of nested_array16_depth_2048 (map pre-allocation is typically larger per slot).",
                "de" + u16(2000), 2048, depth=2048, slots=2048 * 2 * 2000, reasons=["depth", "overclaim"]),
+        recipe("nested_array16_each_header_fits_sum_overclaims",
+               "30 nested array16 headers each claiming 2000 elements, then 2000 nils. Every header fits the bytes "
+               "that follow it and the nesting is below the depth floor, so only the sum over the whole document "
+               "(60 000 > input_len - 1) rejects it. A per-header check (claim <= remaining input) accepts it and "
+               "lets an eager decoder pre-allocate 30 x 2000 slots.",
+               "dc" + u16(2000), 30, "c0" * 2000, depth=30, slots=30 * 2000, reasons=["overclaim"]),
         recipe("nested_fixarray_depth_2048_complete",
                "Structurally COMPLETE document ([[...[null]...]]) nested 2048 deep: every header is backed, "
                "so only the depth bound rejects it. Isolates the depth rule from the allocation rule.",
                "91", 2048, "c0", depth=2048, slots=2048, reasons=["depth"]),
+        recipe("nested_fixarray_depth_1025_complete",
+               "Structurally COMPLETE document nested 1025 deep, one level past the ceiling: only the depth bound "
+               "rejects it, and a reader whose bound exceeds 1024 accepts it.",
+               "91", MAX_DEPTH_CEILING + 1, "c0", depth=MAX_DEPTH_CEILING + 1, slots=MAX_DEPTH_CEILING + 1,
+               reasons=["depth"]),
         recipe("array16_overclaim_shallow",
                "One array16 header claiming 10 000 elements with 3 backing bytes.",
                "dc" + u16(10000), 1, "010203", depth=1, slots=10000, reasons=["overclaim"]),
@@ -87,8 +99,14 @@ def build() -> dict:
                "df" + u32(0xFFFFFFFF), 1, depth=1, slots=2 * 0xFFFFFFFF, reasons=["overclaim"]),
         recipe("array32_sum_wraps_u32",
                "array32 claiming 2^32-1 elements whose first element is an array32 claiming 1: the declared "
-               "slots sum to exactly 2^32, which a 32-bit accumulator wraps to 0 and then passes the slot budget.",
+               "slots sum to exactly 2^32, which a 32-bit accumulator checked only once the sum is complete wraps "
+               "to 0 and passes. One checked after every add rejects it at the first header; see "
+               "array32_sum_wraps_u32_small_first.",
                "dd" + u32(0xFFFFFFFF), 1, "dd" + u32(1), depth=2, slots=0xFFFFFFFF + 1, reasons=["overclaim"]),
+        recipe("array32_sum_wraps_u32_small_first",
+               "fixarray claiming 1 element that is an array32 claiming 2^32-1: the running sum is 1, then exactly "
+               "2^32, so a 32-bit accumulator checked after every add sees 1 and then 0 and passes both checks.",
+               "91", 1, "dd" + u32(0xFFFFFFFF), depth=2, slots=1 + 0xFFFFFFFF, reasons=["overclaim"]),
         recipe("map32_half_claim_wraps_u32_mul",
                "A lone map32 header claiming 2^31 pairs: the per-header term 2 x pairs is exactly 2^32, which a "
                "32-bit multiply wraps to 0 before it is ever added to the budget.",
@@ -130,9 +148,11 @@ def build() -> dict:
             "depth": f"Readers MUST bound nesting depth. The bound MUST be >= {MIN_DEPTH_FLOOR} and MUST be "
                      f"<= {MAX_DEPTH_CEILING}; every reject vector tagged 'depth' nests deeper than "
                      f"{MAX_DEPTH_CEILING}.",
-            "overclaim": "Readers MUST NOT pre-allocate for a collection/str/bin header more than the remaining "
-                         "input can back (each element or byte needs >= 1 input byte), and MUST reject a "
-                         "structurally incomplete document. Every reject vector tagged 'overclaim' has "
+            "overclaim": "Readers MUST NOT pre-allocate beyond what the input can back (each element or byte needs "
+                         ">= 1 input byte): declared slots summed over the whole document MUST NOT exceed "
+                         "input_len - 1, checked before anything is materialised. Checking each header against the "
+                         "remaining input does not satisfy this. Readers MUST reject a structurally incomplete "
+                         "document. Every reject vector tagged 'overclaim' has "
                          "declared_slots > input_len - 1 (the root header is the only byte that is not an element). "
                          "A map pair counts as two slots (key + value). Every per-header term and the running sum "
                          "MUST be computed in >= 64 bits or with checked/saturating arithmetic; an overflow is "
@@ -151,6 +171,81 @@ def build() -> dict:
     }
 
 
+# type byte -> (kind, bytes in its length field or fixed payload); fix* types are handled in walk().
+_WIDE = {
+    0xC4: ("bytes", 1), 0xC5: ("bytes", 2), 0xC6: ("bytes", 4),
+    0xD9: ("bytes", 1), 0xDA: ("bytes", 2), 0xDB: ("bytes", 4),
+    0xC7: ("ext", 1), 0xC8: ("ext", 2), 0xC9: ("ext", 4),
+    0xDC: ("array", 2), 0xDD: ("array", 4), 0xDE: ("map", 2), 0xDF: ("map", 4),
+    0xC0: ("fixed", 0), 0xC2: ("fixed", 0), 0xC3: ("fixed", 0),
+    0xCA: ("fixed", 4), 0xCB: ("fixed", 8),
+    0xCC: ("fixed", 1), 0xCD: ("fixed", 2), 0xCE: ("fixed", 4), 0xCF: ("fixed", 8),
+    0xD0: ("fixed", 1), 0xD1: ("fixed", 2), 0xD2: ("fixed", 4), 0xD3: ("fixed", 8),
+    0xD4: ("fixed", 2), 0xD5: ("fixed", 3), 0xD6: ("fixed", 5), 0xD7: ("fixed", 9), 0xD8: ("fixed", 17),
+}
+
+
+def walk(data: bytes) -> dict:
+    """Header-only structural walk, the reference for the `nesting_depth` and `declared_slots` tags.
+
+    Reads headers in document order and skips str/bin/ext payloads; stops at the end of the
+    root item or of the input. Also reports two near-miss readers' verdicts for the coverage
+    guards: `per_header_fits` (every claim <= the bytes after its header) and `u32_sum_fits`
+    (a 32-bit running sum, checked after every add, never exceeds len - 1).
+    """
+    pos = depth = slots = sum32 = 0
+    per_header_fits = u32_sum_fits = True
+    owed: list[int] = []  # children still owed by each open collection
+    while pos < len(data):
+        t = data[pos]
+        pos += 1
+        if t <= 0x7F or t >= 0xE0:
+            kind, width, n = "fixed", 0, 0
+        elif t <= 0x8F:
+            kind, width, n = "map", 0, t & 0x0F
+        elif t <= 0x9F:
+            kind, width, n = "array", 0, t & 0x0F
+        elif t <= 0xBF:
+            kind, width, n = "bytes", 0, t & 0x1F
+        elif t in _WIDE:
+            kind, width = _WIDE[t]
+            n = 0
+        else:
+            raise ValueError(f"walk: type byte {t:#04x} is never used")  # noqa: TRY003
+        if kind != "fixed" and width:
+            if pos + width > len(data):
+                break
+            n = int.from_bytes(data[pos:pos + width], "big")
+            pos += width
+        if kind == "fixed":
+            pos += width
+        else:
+            claim = 2 * n if kind == "map" else n
+            slots += claim
+            per_header_fits &= claim <= len(data) - pos
+            sum32 = (sum32 + claim) % 2**32
+            u32_sum_fits &= sum32 <= len(data) - 1
+            if kind in ("array", "map"):
+                depth = max(depth, len(owed) + 1)
+                if claim:
+                    owed.append(claim)
+                    continue
+            else:
+                pos += n + (kind == "ext")  # payload (+ the ext type byte)
+        if pos > len(data):
+            break
+        while owed:  # one item completed: settle every collection it finishes
+            owed[-1] -= 1
+            if owed[-1]:
+                break
+            owed.pop()
+        if not owed:
+            return {"nesting_depth": depth, "declared_slots": slots, "complete": pos == len(data),
+                    "per_header_fits": per_header_fits, "u32_sum_fits": u32_sum_fits}
+    return {"nesting_depth": depth, "declared_slots": slots, "complete": False,
+            "per_header_fits": per_header_fits, "u32_sum_fits": u32_sum_fits}
+
+
 def check(condition: bool, name: str, detail: str) -> None:  # noqa: FBT001
     """Fail closed even under ``python -O`` (asserts would be stripped)."""
     if not condition:
@@ -161,8 +256,12 @@ def verify(document: dict, *, require_extras: bool = False) -> tuple[int, str]:
     fresh = build()
     check(document == fresh, "document", "vector file differs from the recipes; run `generate`")
     # input_hex / input_len are derived from `construction` by recipe(), so the equality
-    # above already proves them; what still needs checking is the hand-entered tags.
+    # above already proves them; the hand-entered tags are checked against the walk.
+    walked = {}
     for v in document["reject_vectors"] + document["accept_vectors"]:
+        w = walked[v["name"]] = walk(bytes.fromhex(v["input_hex"]))
+        check(w["nesting_depth"] == v["nesting_depth"], v["name"], "nesting_depth differs from the walk")
+        check(w["declared_slots"] == v["declared_slots"], v["name"], "declared_slots differs from the walk")
         reasons = v.get("reject_reasons", [])
         check(("depth" in reasons) == (v["nesting_depth"] > MAX_DEPTH_CEILING), v["name"], "depth tag mismatch")
         # Slot budget: every declared element (including a nested header) costs >= 1 input
@@ -170,6 +269,19 @@ def verify(document: dict, *, require_extras: bool = False) -> tuple[int, str]:
         check(("overclaim" in reasons) == (v["declared_slots"] > v["input_len"] - 1), v["name"], "overclaim tag mismatch")
         if not reasons:
             check(v["nesting_depth"] <= MIN_DEPTH_FLOOR, v["name"], "accept vector deeper than the floor")
+            check(w["complete"], v["name"], "accept vector is not one complete document")
+
+    # Coverage: each guard names a near-miss reader that would otherwise pass every verdict.
+    def some_reject(test: Callable[[dict, dict], bool]) -> bool:
+        return any(test(v, walked[v["name"]]) for v in document["reject_vectors"])
+    check(some_reject(lambda v, w: v["reject_reasons"] == ["overclaim"] and w["per_header_fits"]
+                      and 2 <= v["nesting_depth"] < MIN_DEPTH_FLOOR),
+          "coverage", "no reject vector needs the whole-document sum (per-header checks pass, nesting below the floor)")
+    check(some_reject(lambda v, w: v["reject_reasons"] == ["overclaim"] and w["u32_sum_fits"]),
+          "coverage", "no reject vector passes a 32-bit running sum checked after every add")
+    check(some_reject(lambda v, w: v["reject_reasons"] == ["depth"] and w["complete"]
+                      and v["nesting_depth"] == MAX_DEPTH_CEILING + 1),
+          "coverage", "no complete reject vector sits one level past the depth ceiling")
 
     total = len(document["reject_vectors"]) + len(document["accept_vectors"])
     try:
@@ -192,7 +304,10 @@ def verify(document: dict, *, require_extras: bool = False) -> tuple[int, str]:
             raise ValueError(f"{v['name']}: msgpack-python violated failure_mode ({type(e).__name__})") from e  # noqa: TRY003
         raise ValueError(f"{v['name']}: msgpack-python decoded a reject vector")  # noqa: TRY003
     for v in document["accept_vectors"]:
-        msgpack.unpackb(bytes.fromhex(v["input_hex"]))
+        try:
+            msgpack.unpackb(bytes.fromhex(v["input_hex"]))
+        except ValueError as e:
+            raise ValueError(f"{v['name']}: msgpack-python rejected an accept vector") from e  # noqa: TRY003
     return total, f"msgpack-python {msgpack.version} rejects/accepts as required"
 
 
@@ -203,8 +318,8 @@ def main() -> None:
     modes = [a for a in args if a != "--require-extras"]
     mode = modes[0] if modes else "verify"
     # Fail closed on anything unexpected: a typo in the flag must not silently drop the
-    # extras requirement CI relies on, and generate has no extras to require.
-    if len(modes) > 1 or mode not in ("verify", "generate") or (require_extras and mode != "verify"):
+    # extras requirement CI relies on.
+    if len(modes) > 1 or mode not in ("verify", "generate"):
         sys.exit(usage)
     if mode == "generate":
         VECTORS.write_text(json.dumps(build(), indent=2) + "\n", encoding="utf-8")

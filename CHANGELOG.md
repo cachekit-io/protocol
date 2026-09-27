@@ -11,15 +11,17 @@ All notable changes to the CacheKit Protocol Specification.
   what the input can back (Σ declared slots ≤ input bytes − 1), and MUST fail
   closed with a catchable error. Follow-up to the LAB-2487 measurements.
 - New [`test-vectors/decode-bounds.json`](test-vectors/decode-bounds.json)
-  (13 reject + 2 accept) with [`tools/decode-bounds-reference.py`](tools/decode-bounds-reference.py)
-  and its mutation suite; vendored and CI-executed by
-  [cachekit-py#276](https://github.com/cachekit-io/cachekit-py/pull/276),
-  [cachekit-rs#73](https://github.com/cachekit-io/cachekit-rs/pull/73) (both merged 2026-09-13)
-  and [cachekit-ts#121](https://github.com/cachekit-io/cachekit-ts/pull/121) (merged 2026-09-20).
+  (16 reject + 2 accept) with [`tools/decode-bounds-reference.py`](tools/decode-bounds-reference.py),
+  which derives every vector's depth and slot tags with a structural walk, and its
+  mutation suite. The SDKs vendor it; see the matrix's "Test vectors in CI" row.
 - [`spec/wire-format.md` → Security Limits](spec/wire-format.md#security-limits)
-  cross-references the rules for the envelope bytes and the payload inside them.
-- The single shared depth value stays [protocol#20](https://github.com/cachekit-io/protocol/issues/20)'s
-  open item.
+  states the whole-document slot rule (per-header checks do not satisfy it) for the
+  envelope bytes and the payload inside them, and the Verification Flow pre-scans
+  before it decodes.
+- Matrix: `cachekit-core` ByteStorage is ⚠️ — its `retrieve` has no step-2 pre-scan.
+- Open: the shared depth value, and any cap on the ~70× materialisation of *legal*
+  payloads, stay [protocol#20](https://github.com/cachekit-io/protocol/issues/20)'s
+  items.
 
 ### Encryption — default-tenant conformance vector (LAB-4666)
 
