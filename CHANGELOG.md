@@ -15,7 +15,9 @@ All notable changes to the CacheKit Protocol Specification.
   which derives every vector's depth and slot tags with a structural walk, and its
   mutation suite. The SDKs vendor earlier revisions; see the matrix's footnote 16.
 - An SDK's conformance test MUST assert that its structural guard rejects each reject
-  vector before materialising it. A verdict alone does not show when a reader rejected.
+  vector at every untrusted decode entry point on its read path, before materialising
+  it. A verdict alone does not show when a reader rejected, and a direct guard call
+  alone does not show that the read path runs the guard.
 - [`spec/wire-format.md` → Security Limits](spec/wire-format.md#security-limits)
   states the whole-document slot rule (per-header checks do not satisfy it; ext
   lengths count) for the envelope bytes and the payload inside them, and the

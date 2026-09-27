@@ -153,9 +153,10 @@ def main() -> None:
     results.append(expect_raises("accept floor", with_recipes(deep_accept), "deeper than the floor"))
 
     cut_accept = copy.deepcopy(good)
-    cut_accept["accept_vectors"][1] = dbr.recipe("array16_256_backed_nils", "", "dc" + dbr.u16(256), 1, "c0" * 255,
+    at = next(i for i, v in enumerate(cut_accept["accept_vectors"]) if v["name"] == "array16_256_backed_nils")
+    cut_accept["accept_vectors"][at] = dbr.recipe("array16_256_backed_nils", "", "dc" + dbr.u16(256), 1, "c0" * 255,
                                                  depth=1, slots=256, reasons=[])
-    del cut_accept["accept_vectors"][1]["reject_reasons"]
+    del cut_accept["accept_vectors"][at]["reject_reasons"]
     results.append(expect_raises("accept complete", with_recipes(cut_accept), "not one complete document"))
 
     # Coverage: dropping exactly one discriminating vector must fire its guard.
