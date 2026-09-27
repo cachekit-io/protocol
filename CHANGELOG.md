@@ -10,15 +10,20 @@ All notable changes to the CacheKit Protocol Specification.
   readers MUST bound nesting depth (≥ 32, ≤ 1024), MUST NOT pre-allocate beyond
   what the input can back (Σ declared slots ≤ input bytes − 1), and MUST fail
   closed with a catchable error. Follow-up to the LAB-2487 measurements.
-- New [`test-vectors/decode-bounds.json`](test-vectors/decode-bounds.json)
-  (16 reject + 2 accept) with [`tools/decode-bounds-reference.py`](tools/decode-bounds-reference.py),
+- New [`test-vectors/decode-bounds.json`](test-vectors/decode-bounds.json) `1.1.0`
+  (17 reject + 3 accept) with [`tools/decode-bounds-reference.py`](tools/decode-bounds-reference.py),
   which derives every vector's depth and slot tags with a structural walk, and its
-  mutation suite. The SDKs vendor it; see the matrix's "Test vectors in CI" row.
+  mutation suite. The SDKs vendor earlier revisions; see the matrix's footnote 16.
+- An SDK's conformance test MUST assert that its structural guard rejects each reject
+  vector before materialising it. A verdict alone does not show when a reader rejected.
 - [`spec/wire-format.md` → Security Limits](spec/wire-format.md#security-limits)
-  states the whole-document slot rule (per-header checks do not satisfy it) for the
-  envelope bytes and the payload inside them, and the Verification Flow pre-scans
-  before it decodes.
-- Matrix: `cachekit-core` ByteStorage is ⚠️ — its `retrieve` has no step-2 pre-scan.
+  states the whole-document slot rule (per-header checks do not satisfy it; ext
+  lengths count) for the envelope bytes and the payload inside them, and the
+  Verification Flow pre-scans before it decodes.
+- Matrix: ByteStorage is ⚠️ in all three SDKs, because each decodes the envelope with
+  `cachekit-core`'s `ByteStorage::retrieve`, which has no step-2 pre-scan. The
+  decode-bounds test cells for Python and Rust are ⚠️ until their tests assert the
+  guard's rejection.
 - Open: the shared depth value, and any cap on the ~70× materialisation of *legal*
   payloads, stay [protocol#20](https://github.com/cachekit-io/protocol/issues/20)'s
   items.

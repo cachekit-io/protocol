@@ -457,8 +457,9 @@ heap: 15 KB → ~400 MB in `@msgpack/msgpack` 3.1.3, and 10 KB → ~82 MB in
 A reader MUST therefore:
 
 1. **Bound nesting depth.** Depth is the number of collection headers on the
-   deepest path from the root; str, bin and scalars add nothing, so `[[null]]` has
-   depth 2. The bound MUST be at least 32 and MUST NOT exceed 1024.
+   deepest path from the root. A map counts one level, like an array; str, bin, ext
+   and scalars add nothing, so `[[null]]` and `{"": [null]}` both have depth 2. The
+   bound MUST be at least 32 and MUST NOT exceed 1024.
    (Today: TypeScript 100, Rust 100, Python 1024. A single shared value is
    [protocol#20](https://github.com/cachekit-io/protocol/issues/20)'s open item;
    until it is ratified, writers SHOULD keep values within 32 levels.) A recursive
@@ -466,15 +467,16 @@ A reader MUST therefore:
    debug build does on a 2 MiB thread), so each SDK SHOULD test a complete document
    at its own bound on its smallest supported stack.
 2. **Never pre-allocate beyond what the input can back.** Every declared element or
-   byte needs at least one input byte, so the declared slots summed over the whole
+   byte (collection elements; str, bin and ext bytes) needs at least one input byte,
+   so the declared slots summed over the whole
    document MUST NOT exceed input bytes − 1, and a document that exceeds it MUST be
    rejected *without* materialising it. Checking each header only against the input
    that remains after it does not satisfy this: nested headers can each fit what
    follows them while together declaring far more than the input holds
    (`nested_array16_each_header_fits_sum_overclaims`). A map pair counts as two slots
-   (key + value). Exceeding the sum is sufficient to reject, but it is not the
-   definition of an incomplete document: `92 dc 00 00` sums to 2 and is still
-   truncated. Every per-header term and the running sum MUST be computed in at least
+   (key + value). Exceeding the sum is sufficient to reject but does not define an
+   incomplete document: `92 dc 00 00` sums to 2 and is still truncated. A reader MUST
+   reject a structurally incomplete document as well. Every per-header term and the running sum MUST be computed in at least
    64 bits or with checked/saturating arithmetic, and an overflow is itself a
    rejection: two `array32` headers already exceed 2³², and a 32-bit accumulator that
    wraps to a small value passes the budget (`array32_sum_wraps_u32`,
@@ -489,12 +491,15 @@ A reader MUST therefore:
 
 These bounds are SDK-owned invariants, not library defaults: each SDK pins them
 explicitly and regression-tests them, so a decoder dependency bump cannot silently
-re-open the amplifier. The vector verdicts alone cannot show that: a stock decoder's
-default limits reject every reject vector today, so an SDK's test SHOULD drive the
-vectors through its own guard (call the pre-scan directly, or bound peak memory)
-rather than only assert that a decode fails.
+re-open the amplifier. A verdict cannot show that, because it does not say *when* a
+reader rejected: a stock decoder's default limits reject every reject vector today,
+and a reader with per-header checks alone rejects the incomplete ones at end of input,
+after it has pre-allocated for them. An SDK's conformance test MUST therefore assert
+that its structural guard rejects each reject vector before anything is materialised,
+by calling the guard directly or by asserting the guard's distinguishing error. A run
+that only asserts that a decode fails does not demonstrate conformance.
 [`test-vectors/decode-bounds.json`](../test-vectors/decode-bounds.json) pins the
-bytes every decoder MUST reject (16) and MUST accept (2); the same rules apply to
+bytes every decoder MUST reject (17) and MUST accept (3); the same rules apply to
 any other untrusted MessagePack decode in an SDK (auto-mode payloads after the
 envelope is unwrapped, invalidation events).
 

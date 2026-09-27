@@ -62,6 +62,57 @@ def raise_value_error(_: bytes) -> None:
     raise ValueError("stock limit")  # noqa: TRY003
 
 
+# hex -> (nesting_depth, declared_slots, complete, array_depth): one row per framing rule walk() implements.
+WALK_TABLE = {
+    "05": (0, 0, True, 0),                       # positive fixint
+    "7f": (0, 0, True, 0),                       # last positive fixint, not a fixmap
+    "e0": (0, 0, True, 0),                       # negative fixint
+    "a3616263": (0, 3, True, 0),                 # fixstr: length in the type byte
+    "a1ff": (0, 1, True, 0),                     # framing only: invalid UTF-8 is still complete
+    "b0" + "41" * 16: (0, 16, True, 0),          # fixstr mask 0x1f
+    "d90141": (0, 1, True, 0),                   # str8
+    "c403010203": (0, 3, True, 0),               # bin8
+    "c702054142": (0, 2, True, 0),               # ext8: length, type byte, payload
+    "d40100": (0, 0, True, 0),                   # fixext1 declares no slots
+    "d801" + "00" * 16: (0, 0, True, 0),         # fixext16
+    "cf" + "00" * 8: (0, 0, True, 0),            # uint64
+    "ca00000000": (0, 0, True, 0),               # float32
+    "cf00": (0, 0, False, 0),                    # fixed payload cut short
+    "90": (1, 0, True, 1),                       # empty array still counts a level
+    "81a0c0": (1, 2, True, 0),                   # fixmap: one level, two slots
+    "8f": (1, 30, False, 0),                     # fixmap mask 0x0f
+    "9181a0c0": (2, 3, True, 1),                 # map inside array: array_depth counts arrays only
+    "9291c091c0": (2, 4, True, 2),               # sibling arrays: a closed array leaves the count
+    "92dc0000": (2, 2, False, 2),                # truncated with the sum inside the budget
+    "dc00": (0, 0, False, 0),                    # length field cut short
+    "c0c0": (0, 0, False, 0),                    # trailing byte: not one document
+}
+
+
+# hex -> (per_header_fits, u32_add_fits, u32_mul_fits): the near-miss models on their boundaries.
+FLAG_TABLE = {
+    "92c0c0": (True, True, True),                # backed: every model passes
+    "93c0c0": (False, False, False),             # claim 3 fits len 3, not the 2 bytes after the header
+    "91ddffffffff": (False, True, False),        # running sum 1 + (2^32 - 1) wraps to 0
+    "df80000000": (False, False, True),          # map term 2 x 2^31 wraps to 0 in 32 bits
+    "ddffffffffdd00000001": (False, False, False),  # the first term alone exceeds the budget
+}
+
+
+def walk_table() -> list[str | None]:
+    out: list[str | None] = []
+    for hx, want in WALK_TABLE.items():
+        w = dbr.walk(bytes.fromhex(hx))
+        got = (w["nesting_depth"], w["declared_slots"], w["complete"], w["array_depth"])
+        out.append(None if got == want else f"walk {hx}: {got} != {want}")
+    for hx, want in FLAG_TABLE.items():
+        w = dbr.walk(bytes.fromhex(hx))
+        got = (w["per_header_fits"], w["u32_add_fits"], w["u32_mul_fits"])
+        out.append(None if got == want else f"walk flags {hx}: {got} != {want}")
+    out.append(expect_raises("walk 0xc1", lambda: dbr.walk(b"\xc1"), "never used"))
+    return out
+
+
 def cli_rejects(name: str, *args: str) -> str | None:
     """The CLI must exit non-zero on anything it does not understand (fail closed)."""
     rc = subprocess.run([sys.executable, str(TOOL), *args], capture_output=True, check=False).returncode
@@ -107,18 +158,30 @@ def main() -> None:
     del cut_accept["accept_vectors"][1]["reject_reasons"]
     results.append(expect_raises("accept complete", with_recipes(cut_accept), "not one complete document"))
 
-    # Coverage: drop every vector that separates each near-miss reader and watch its guard fire.
-    def without(test: Callable[[dict, dict], bool]) -> dict:
+    # Coverage: dropping exactly one discriminating vector must fire its guard.
+    def without(name: str) -> dict:
         doc = copy.deepcopy(good)
-        doc["reject_vectors"] = [v for v in doc["reject_vectors"]
-                                 if not test(v, dbr.walk(bytes.fromhex(v["input_hex"])))]
+        kept = [v for v in doc["reject_vectors"] if v["name"] != name]
+        if len(kept) != len(doc["reject_vectors"]) - 1:
+            sys.exit(f"FAIL coverage test names no vector: {name}")  # a typo must not pass vacuously
+        doc["reject_vectors"] = kept
         return doc
-    results.append(expect_raises("coverage: sum", with_recipes(without(
-        lambda v, w: w["per_header_fits"] and v["reject_reasons"] == ["overclaim"])), "whole-document sum"))
-    results.append(expect_raises("coverage: u32", with_recipes(without(
-        lambda v, w: w["u32_sum_fits"])), "32-bit running sum"))
-    results.append(expect_raises("coverage: depth", with_recipes(without(
-        lambda v, w: v["nesting_depth"] == dbr.MAX_DEPTH_CEILING + 1)), "one level past the depth ceiling"))
+    for name, needle in (("nested_array16_each_header_fits_sum_overclaims", "per-header checks pass"),
+                         ("array32_sum_wraps_u32_small_first", "32-bit running sum"),
+                         ("map32_half_claim_wraps_u32_mul", "map term computed in 32 bits"),
+                         ("nested_fixarray_depth_1025_complete", "complete array spine"),
+                         ("nested_fixmap_depth_1025_complete", "complete map spine")):
+        results.append(expect_raises(f"coverage: drop {name}", with_recipes(without(name)), needle))
+
+    # Negative controls: a near-miss model forced to always pass must be caught.
+    real_walk = dbr.walk
+    for flag in ("per_header_fits", "u32_add_fits", "u32_mul_fits"):
+        def forced(data: bytes, flag: str = flag) -> dict:
+            return {**real_walk(data), flag: True}
+        with patch.object(dbr, "walk", forced):
+            results.append(expect_raises(f"control: {flag} always true", with_recipes(good), "the model is vacuous"))
+
+    results.extend(walk_table())
 
     results.append(expect_raises("require-extras", with_msgpack(None, good, require_extras=True), "not importable"))
     results.append(expect_raises("decoded reject", with_msgpack(lambda _: None, good), "decoded a reject vector"))

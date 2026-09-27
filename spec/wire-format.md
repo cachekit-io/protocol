@@ -377,7 +377,7 @@ let checksum: [u8; 8] = xxh3_64(&original_data).to_be_bytes();
 > [!IMPORTANT]
 > All three limits below MUST be enforced by every implementation of the ByteStorage envelope. The decompression bomb check uses integer arithmetic — do not substitute floating-point.
 > Additionally, a decoder MUST NOT allocate for declared MessagePack lengths
-> (collection, `bin`, `str`) more than the input can back: the declared slots,
+> (collection, `str`, `bin`, `ext`) more than the input can back: the declared slots,
 > summed over the **whole document**, MUST NOT exceed the input length minus one,
 > checked **before** anything is materialised. A 5-byte `bin32` header can
 > otherwise declare a 4 GiB allocation from a ~30-byte envelope. Checking each

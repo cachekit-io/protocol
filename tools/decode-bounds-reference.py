@@ -9,15 +9,16 @@ Usage:
     verify    (default) stdlib-only. Checks the file equals the recipes below,
               derives each vector's depth and declared slots with a header-only
               structural walk (never trusting the hand-entered tags), checks the
-              reject reasons against them, and checks the set still contains the
-              shapes that separate a conforming reader from a near miss. When
-              `msgpack` (msgpack-python) is importable, additionally checks the
-              real decoder rejects every reject vector and accepts every accept
-              vector. Rejection only: msgpack-python's own default limits reject
-              them, which proves each vector trips a stock decoder's limits; each SDK's explicit bound
-              and no-pre-allocation guard are tested in that SDK, not here.
-              `--require-extras` turns a missing msgpack into a failure (CI's
-              optional-deps leg).
+              reject reasons against them, and checks the set still holds a vector
+              each named near-miss structural guard would pass. When `msgpack`
+              (msgpack-python) is importable, additionally checks the real decoder
+              rejects every reject vector and accepts every accept vector.
+              A verdict says nothing about WHEN a reader rejected: a stock decoder
+              rejects every reject vector by its own limits or at end of input,
+              possibly after pre-allocating. Whether an SDK's structural guard
+              rejects each vector before materialising it is asserted in that SDK
+              (spec: Decode bounds), not here. `--require-extras` turns a missing
+              msgpack into a failure (CI's optional-deps leg).
     generate  Rewrites the vector file from the recipes below.
 """
 
@@ -62,7 +63,7 @@ def recipe(name: str, description: str, repeat_hex: str, count: int, suffix_hex:
 def build() -> dict:
     reject = [
         recipe("nested_array16_depth_2048",
-               "2048 nested array16 headers each claiming 2000 elements, 0 backing bytes. The LAB-2487 "
+               "2048 nested array16 headers each claiming 2000 elements, 0 backing bytes. The measured "
                "amplifier shape: an eager decoder pre-allocates 2000 slots per level before hitting EOF. "
                "2000 < input_len, so a per-collection cap of len(input) does NOT reject it.",
                "dc" + u16(2000), 2048, depth=2048, slots=2048 * 2000, reasons=["depth", "overclaim"]),
@@ -75,18 +76,20 @@ def build() -> dict:
                "de" + u16(2000), 2048, depth=2048, slots=2048 * 2 * 2000, reasons=["depth", "overclaim"]),
         recipe("nested_array16_each_header_fits_sum_overclaims",
                "30 nested array16 headers each claiming 2000 elements, then 2000 nils. Every header fits the bytes "
-               "that follow it and the nesting is below the depth floor, so only the sum over the whole document "
-               "(60 000 > input_len - 1) rejects it. A per-header check (claim <= remaining input) accepts it and "
-               "lets an eager decoder pre-allocate 30 x 2000 slots.",
+               "that follow it and the nesting is below the depth floor, so of the structural rules only the sum "
+               "over the whole document (60 000 > input_len - 1) catches it. A reader with per-header checks alone "
+               "pre-allocates 30 x 2000 slots and then rejects at end of input, so the verdict cannot tell the two "
+               "apart: only an SDK test asserting its guard's rejection can.",
                "dc" + u16(2000), 30, "c0" * 2000, depth=30, slots=30 * 2000, reasons=["overclaim"]),
-        recipe("nested_fixarray_depth_2048_complete",
-               "Structurally COMPLETE document ([[...[null]...]]) nested 2048 deep: every header is backed, "
-               "so only the depth bound rejects it. Isolates the depth rule from the allocation rule.",
-               "91", 2048, "c0", depth=2048, slots=2048, reasons=["depth"]),
         recipe("nested_fixarray_depth_1025_complete",
                "Structurally COMPLETE document nested 1025 deep, one level past the ceiling: only the depth bound "
                "rejects it, and a reader whose bound exceeds 1024 accepts it.",
                "91", MAX_DEPTH_CEILING + 1, "c0", depth=MAX_DEPTH_CEILING + 1, slots=MAX_DEPTH_CEILING + 1,
+               reasons=["depth"]),
+        recipe("nested_fixmap_depth_1025_complete",
+               "Map twin of nested_fixarray_depth_1025_complete ({\"\": {\"\": ... null}}): a guard that counts "
+               "depth on array headers only accepts it.",
+               "81a0", MAX_DEPTH_CEILING + 1, "c0", depth=MAX_DEPTH_CEILING + 1, slots=2 * (MAX_DEPTH_CEILING + 1),
                reasons=["depth"]),
         recipe("array16_overclaim_shallow",
                "One array16 header claiming 10 000 elements with 3 backing bytes.",
@@ -121,6 +124,9 @@ def build() -> dict:
         recipe("str32_overclaim",
                "str32 twin of bin32_overclaim.",
                "db" + u32(0xFFFFFFFF), 1, "41", depth=0, slots=0xFFFFFFFF, reasons=["overclaim"]),
+        recipe("ext32_overclaim",
+               "ext32 twin of bin32_overclaim (type 5, 1 backing byte): ext lengths count as slots too.",
+               "c9" + u32(0xFFFFFFFF), 1, "0541", depth=0, slots=0xFFFFFFFF, reasons=["overclaim"]),
         recipe("fixarray_short_by_one",
                "fixarray claiming 5 elements with 4 present: the minimal truncated document.",
                "95", 1, "c0c0c0c0", depth=1, slots=5, reasons=["overclaim"]),
@@ -130,6 +136,9 @@ def build() -> dict:
                "[[...[null]...]] nested 32 deep, complete. A conforming reader MUST accept it: the depth "
                "bound may not be tighter than 32.",
                "91", MIN_DEPTH_FLOOR, "c0", depth=MIN_DEPTH_FLOOR, slots=MIN_DEPTH_FLOOR, reasons=[]),
+        recipe("nested_fixmap_depth_32",
+               "Map twin of nested_fixarray_depth_32: a map counts one level, and a pair two slots.",
+               "81a0", MIN_DEPTH_FLOOR, "c0", depth=MIN_DEPTH_FLOOR, slots=2 * MIN_DEPTH_FLOOR, reasons=[]),
         recipe("array16_256_backed_nils",
                "array16 header claiming 256 elements with all 256 present. A *16 header that is fully "
                "backed by input is legitimate; the allocation rule is about backing, not header width.",
@@ -138,7 +147,7 @@ def build() -> dict:
     for v in accept:
         del v["reject_reasons"]
     return {
-        "version": "1.0.0",
+        "version": "1.1.0",
         "spec": "spec/interop-mode.md#decode-bounds",
         "generator": "tools/decode-bounds-reference.py generate (CPython stdlib)",
         "scope": "Any untrusted MessagePack decode in any SDK: interop/v1 values, the ByteStorage envelope bytes "
@@ -162,8 +171,11 @@ def build() -> dict:
         },
         "field_notes": {
             "construction": "input = bytes.fromhex(repeat_hex) * count + bytes.fromhex(suffix_hex)",
-            "nesting_depth": "collection headers along the deepest spine (str/bin count as 0)",
-            "declared_slots": "sum of every header's declared element/byte count; a map pair counts as two slots (key + value); a nested header counts as one element of its parent",
+            "nesting_depth": "collection headers along the deepest spine; a map counts one level, like an array "
+                             "(str/bin/ext and scalars count as 0)",
+            "declared_slots": "sum of every header's declared element/byte count (collections, str, bin, ext; fixext "
+                              "declares none); a map pair counts as two slots (key + value); a nested header counts "
+                              "as one element of its parent",
             "reject_reasons": "which rule(s) the vector violates; a maintainer note, not a normative message",
         },
         "reject_vectors": reject,
@@ -189,13 +201,20 @@ def walk(data: bytes) -> dict:
     """Header-only structural walk, the reference for the `nesting_depth` and `declared_slots` tags.
 
     Reads headers in document order and skips str/bin/ext payloads; stops at the end of the
-    root item or of the input. Also reports two near-miss readers' verdicts for the coverage
-    guards: `per_header_fits` (every claim <= the bytes after its header) and `u32_sum_fits`
-    (a 32-bit running sum, checked after every add, never exceeds len - 1).
+    root item or of the input. `complete` is framing only (one root item, nothing owed, no
+    trailing bytes): it does not check str UTF-8 or ext contents, so `a1ff` is complete.
+
+    Also reports what four near-miss structural guards conclude, for the coverage checks:
+    `per_header_fits` (every claim <= the bytes after its header), `u32_add_fits` (a 32-bit
+    running sum checked after every add; a term past 2^32 - 1 does not fit it), `u32_mul_fits`
+    (the map term 2 x pairs computed in 32 bits, summed exactly) and `array_depth` (depth
+    counted on array headers only).
     """
-    pos = depth = slots = sum32 = 0
-    per_header_fits = u32_sum_fits = True
-    owed: list[int] = []  # children still owed by each open collection
+    budget = len(data) - 1
+    pos = depth = array_depth = arrays_open = slots = sum_add32 = sum_mul = 0
+    per_header_fits = u32_add_fits = u32_mul_fits = True
+    complete = False
+    owed: list[list[int]] = []  # [children still owed, 1 if array] per open collection
     while pos < len(data):
         t = data[pos]
         pos += 1
@@ -223,27 +242,35 @@ def walk(data: bytes) -> dict:
             claim = 2 * n if kind == "map" else n
             slots += claim
             per_header_fits &= claim <= len(data) - pos
-            sum32 = (sum32 + claim) % 2**32
-            u32_sum_fits &= sum32 <= len(data) - 1
+            if claim < 2**32:
+                sum_add32 = (sum_add32 + claim) % 2**32
+                u32_add_fits &= sum_add32 <= budget
+            else:
+                u32_add_fits = False
+            sum_mul += claim % 2**32
+            u32_mul_fits &= sum_mul <= budget
             if kind in ("array", "map"):
+                is_array = int(kind == "array")
                 depth = max(depth, len(owed) + 1)
+                array_depth = max(array_depth, arrays_open + is_array)
                 if claim:
-                    owed.append(claim)
+                    owed.append([claim, is_array])
+                    arrays_open += is_array
                     continue
             else:
                 pos += n + (kind == "ext")  # payload (+ the ext type byte)
         if pos > len(data):
             break
         while owed:  # one item completed: settle every collection it finishes
-            owed[-1] -= 1
-            if owed[-1]:
+            owed[-1][0] -= 1
+            if owed[-1][0]:
                 break
-            owed.pop()
+            arrays_open -= owed.pop()[1]
         if not owed:
-            return {"nesting_depth": depth, "declared_slots": slots, "complete": pos == len(data),
-                    "per_header_fits": per_header_fits, "u32_sum_fits": u32_sum_fits}
-    return {"nesting_depth": depth, "declared_slots": slots, "complete": False,
-            "per_header_fits": per_header_fits, "u32_sum_fits": u32_sum_fits}
+            complete = pos == len(data)
+            break
+    return {"nesting_depth": depth, "declared_slots": slots, "complete": complete, "array_depth": array_depth,
+            "per_header_fits": per_header_fits, "u32_add_fits": u32_add_fits, "u32_mul_fits": u32_mul_fits}
 
 
 def check(condition: bool, name: str, detail: str) -> None:  # noqa: FBT001
@@ -271,17 +298,28 @@ def verify(document: dict, *, require_extras: bool = False) -> tuple[int, str]:
             check(v["nesting_depth"] <= MIN_DEPTH_FLOOR, v["name"], "accept vector deeper than the floor")
             check(w["complete"], v["name"], "accept vector is not one complete document")
 
-    # Coverage: each guard names a near-miss reader that would otherwise pass every verdict.
+    # Coverage: the set holds a vector each named near-miss STRUCTURAL GUARD would pass. These are
+    # guard-level facts from the walk. A decoder may still reject the same bytes later, at end of
+    # input, so they bind only an SDK test that asserts its guard rejected (spec: Decode bounds).
     def some_reject(test: Callable[[dict, dict], bool]) -> bool:
         return any(test(v, walked[v["name"]]) for v in document["reject_vectors"])
     check(some_reject(lambda v, w: v["reject_reasons"] == ["overclaim"] and w["per_header_fits"]
                       and 2 <= v["nesting_depth"] < MIN_DEPTH_FLOOR),
-          "coverage", "no reject vector needs the whole-document sum (per-header checks pass, nesting below the floor)")
-    check(some_reject(lambda v, w: v["reject_reasons"] == ["overclaim"] and w["u32_sum_fits"]),
+          "coverage", "no reject vector that per-header checks pass, nested below the depth floor")
+    check(some_reject(lambda v, w: v["reject_reasons"] == ["overclaim"] and w["u32_add_fits"]),
           "coverage", "no reject vector passes a 32-bit running sum checked after every add")
+    check(some_reject(lambda v, w: v["reject_reasons"] == ["overclaim"] and w["u32_mul_fits"]),
+          "coverage", "no reject vector passes a map term computed in 32 bits")
     check(some_reject(lambda v, w: v["reject_reasons"] == ["depth"] and w["complete"]
-                      and v["nesting_depth"] == MAX_DEPTH_CEILING + 1),
-          "coverage", "no complete reject vector sits one level past the depth ceiling")
+                      and w["array_depth"] == MAX_DEPTH_CEILING + 1),
+          "coverage", "no complete array spine one level past the depth ceiling")
+    check(some_reject(lambda v, w: v["reject_reasons"] == ["depth"] and w["complete"]
+                      and v["nesting_depth"] == MAX_DEPTH_CEILING + 1 and w["array_depth"] <= MAX_DEPTH_CEILING),
+          "coverage", "no complete map spine one level past the depth ceiling")
+    # Negative controls: each near-miss model must also reject something, or the guards above are vacuous.
+    for name, flag in (("array16_overclaim_shallow", "per_header_fits"), ("array32_sum_wraps_u32", "u32_add_fits"),
+                       ("array32_sum_wraps_u32", "u32_mul_fits")):
+        check(name in walked and not walked[name][flag], "coverage", f"{flag} passes {name}: the model is vacuous")
 
     total = len(document["reject_vectors"]) + len(document["accept_vectors"])
     try:
