@@ -4,23 +4,19 @@ All notable changes to the CacheKit Protocol Specification.
 
 ## [Unreleased]
 
-### Decision — TS/RS namespace isolation is a Python-SDK + `nsapi:` feature (LAB-640)
+### Decision — namespace isolation is a Python-SDK + `nsapi:` feature; other SDK namespaces are client-side (LAB-640)
 
 - New decision record
-  [decisions/namespace-isolation.md](decisions/namespace-isolation.md): records
-  the stage-1 direction for epic LAB-680. Server-side namespace isolation
-  (`allowed_namespaces` ACL, per-namespace quotas, the `ns:`/`nsapi:`
-  write-space split) is driven only by the key prefix, and **only cachekit-py
-  emits `ns:`** — so TS/RS SDK namespaces and interop-mode namespaces are
-  **client-side conventions**, scoped server-side to `default`/`open`. Chooses
-  **option 2** (document the asymmetry; no key-format change) over option 1
-  (TS/RS adopt `ns:` — rejected: key-stability break, billed-miss migration,
-  and it still leaves interop in `default`) and option 3 (per-key
-  default-namespace server override — deferred, reopenable). Interop keys stay
-  in `default` by the existing spec pin (tenant isolation comes from
-  authentication, not key parsing). Documentation-only: no spec key-format
-  change, no server change.
-  **Proposed (accepted on merge)** — the epic owner's merge is the ratification.
+  [decisions/namespace-isolation.md](decisions/namespace-isolation.md).
+  Server-side namespace isolation (per-API-key namespace grants, per-namespace
+  quotas, the `ns:`/`nsapi:` write-space split) is driven only by the key
+  prefix, and **only cachekit-py emits `ns:`** — so TS/RS SDK namespaces and
+  interop-mode namespaces are **client-side conventions**, scoped server-side
+  to the `default` open write space. Chooses **option 2** (document the
+  asymmetry; no key-format change) over option 1 (TS/RS adopt `ns:`) and
+  option 3 (per-key default-namespace override, deferred); see
+  [the record](decisions/namespace-isolation.md#options). Documentation-only:
+  no spec key-format change, no server change.
 
 ### SaaS API
 
