@@ -24,12 +24,19 @@ with neither prefix is scoped to the `default` namespace, an **open** write
 space that any key class may write
 ([Server-Side Requirements](../spec/cache-key-format.md#server-side-requirements)).
 
-**Only cachekit-py emits the `ns:` prefix.** Its auto-mode key generator
+**Only cachekit-py adds the `ns:` prefix.** Its auto-mode key generator
 prepends `ns:{namespace}:` when a namespace is set
 ([Full Key Structure](../spec/cache-key-format.md#full-key-structure)). No other
-SDK's key generation emits an `ns:` token; the feature matrix's
+SDK's key generation adds an `ns:` token of its own; the feature matrix's
 [namespace-semantics section](../sdk-feature-matrix.md#namespace-semantics-per-sdk-divergence)
-records each SDK's key shape with source citations. **Interop mode** keys are
+records each SDK's key shape with source citations. The server cannot tell who
+built a key, though, and TS and RS do not reserve the prefixes: a TS/RS
+namespace such as `ns:team`, or a caller-supplied key such as `ns:team:x` (TS
+always; RS only on a client built without `.namespace()`), reaches the server
+as an `ns:` key scoped to namespace `team`, not `default`. That is hand-crafting
+a prefix (see the caveats under [Decision](#decision)), not SDK namespace
+behaviour; where this record says TS/RS or interop keys land in `default`, it
+means keys that do not begin with a prefix. **Interop mode** keys are
 `{namespace}:{operation}:{args_hash}`, spec-pinned to **no `ns:` prefix**
 ([SaaS Considerations](../spec/interop-mode.md#saas-considerations)): *"the
 `{namespace}` segment is an SDK-level convention, not a SaaS routing element
@@ -37,11 +44,12 @@ records each SDK's key shape with source citations. **Interop mode** keys are
 
 ### Impact
 
-The rule is not specific to TS and RS: **because only cachekit-py emits `ns:`,
+The rule is not specific to TS and RS: **because only cachekit-py adds `ns:`,
 every non-Python SDK is affected identically** — TS, RS, and any other SDK in
 the fleet (the [feature matrix](../sdk-feature-matrix.md) also lists PHP), plus
-interop mode. For all of them the SDK-level "namespace" is a **client-side
-convention only**: the keys those SDKs generate are unprefixed, so server-side
+interop mode; this record writes "TS/RS" for the whole set. For all of them
+the SDK-level "namespace" is a **client-side convention only**: the keys those
+SDKs generate are unprefixed, so server-side
 isolation cannot see the namespace. Concretely, within one tenant:
 
 - Two TS/RS apps whose keys are SDK-generated cannot be isolated from each other
@@ -56,10 +64,8 @@ This asymmetry is security-relevant, and when this record was drafted it was
 undocumented. The bug was not that the server behaves this way; it was that a
 reader could not find out that it does. The specs now state it
 ([Server-Side Requirements](../spec/cache-key-format.md#server-side-requirements),
-"Default namespace"). This record makes it the intended contract rather than a
-gap awaiting a key-format fix. The isolation gap itself is **not** closed — it
-is accepted as a recorded residual risk (see
-[Residual risk](#residual-risk-accepted-not-closed) below).
+"Default namespace"), and this record makes it the intended contract; the gap
+itself stays open as an accepted [residual risk](#residual-risk-accepted-not-closed).
 
 ## Options
 
@@ -130,29 +136,35 @@ reopen — as a new decision, with its own review.
 ## Decision
 
 **Adopt option 2.** Server-side namespace isolation is a **Python-SDK +
-direct-`nsapi:`-API** feature. TS/RS SDK namespaces and interop-mode namespaces
-are **client-side conventions** with no per-namespace isolation, quota, or ACL
-effect; keys without an `ns:`/`nsapi:` prefix are scoped to the `default` open
-write space and are mutually readable and writable within a tenant. No cache-key
-format changes.
+direct-`nsapi:`-API** feature, and only for a namespace other than `default`.
+TS/RS SDK namespaces and interop-mode namespaces are **client-side
+conventions** with no per-namespace isolation, quota, or ACL effect; keys
+without an `ns:`/`nsapi:` prefix are scoped to the `default` open write space
+and are mutually readable and writable within a tenant. No cache-key format
+changes.
 
 Points that are decision, not mechanism:
 
-- **The asymmetry is documented, not removed.** The fix makes the shipped
-  behaviour discoverable; the isolation gap itself is accepted (see Residual
-  risk).
 - **`nsapi:` is the isolation path for *direct-API* writers — not a drop-in for
   the SDKs.** A caller that needs true server-side namespace isolation without
-  Python uses the `nsapi:{namespace}:{key}` write space explicitly. Three caveats
+  Python uses the `nsapi:{namespace}:{key}` write space explicitly. Four caveats
   a reader must not miss:
-  - **No SDK's key generation emits `nsapi:`.** Reaching it means hand-crafting
-    keys — through the raw HTTP API, or through an SDK's caller-supplied-key
-    `get`/`set` — with a direct (`ck_api_`) API key.
+  - **No SDK adds `nsapi:` of its own.** Writing it means hand-crafting the
+    prefix — through the raw HTTP API, an SDK's caller-supplied-key `get`/`set`,
+    or a TS/RS namespace value — with a direct (`ck_api_`) or legacy `ck_live_`
+    API key. A hand-crafted `ns:{namespace}:` key, such as one sent through the
+    TS SDK's caller-supplied-key `get`/`set` with a `ck_sdk_` key, gets the same
+    server-side scoping: the server checks the prefix, not which SDK built it.
   - **`ns:` and `nsapi:` are separate write spaces under one namespace name.**
     `ns:users:` and `nsapi:users:` are the same `users` namespace for grants and
     quotas; the write-space split only decides which key class may *write* each
     prefix, reads are open to both, and legacy `ck_live_` keys are exempt from
     the split ([Server-Side Requirements](../spec/cache-key-format.md#server-side-requirements)).
+  - **A prefix named `default` gets no grant isolation.** `ns:default:` and
+    `nsapi:default:` keys are gated by the same `default` grant as every
+    unprefixed key, so a grant cannot separate them from the tenant's
+    unprefixed TS/RS and interop traffic. A Python app with no namespace set,
+    or with `namespace="default"`, gets no namespace-grant isolation.
   - **Adopting `nsapi:` re-keys.** Moving keys currently written unprefixed onto
     `nsapi:` orphans the existing `default`-scoped entries into billed misses —
     the same cost class as option 1, but **scoped and opt-in** (one caller's
@@ -165,15 +177,15 @@ spec-pinned to carry **no `ns:` prefix**
 ([SaaS Considerations](../spec/interop-mode.md#saas-considerations)): the
 `{namespace}` segment is a cross-SDK key-organisation convention, and tenant
 isolation for interop comes from **authentication**, not key parsing. This
-decision does **not** change that pin. The SaaS validator is security-only, so
-interop keys are accepted and scope to `default`
-([Server-Side Requirements](../spec/cache-key-format.md#server-side-requirements)).
+decision does **not** change that pin. One edge: the interop
+[segment grammar](../spec/interop-mode.md#segment-grammar) rejects `:` but does
+not reserve `ns` or `nsapi`, so an interop namespace named either one yields a
+key the server parses as prefixed, not `default`: it is scoped to a namespace
+named after the operation, or rejected with `400` when the operation contains
+`.`. Neither name is safe as an interop namespace.
 
 Interop is therefore a *within-tenant-shared* space: within a tenant, interop
 entries are mutually accessible regardless of their `{namespace}` segment.
-Option 1 would not have improved this (interop cannot take an `ns:` prefix
-without breaking the cross-SDK grammar), which is the third reason it was
-rejected.
 
 ## Residual risk (accepted, not closed)
 
@@ -190,10 +202,12 @@ must not be read as "fixed":
     that does not depend on namespace grants. One tenant's `default` is not
     another's.
   - **A namespace-prefixed key under restricted grants** — Python's `ns:` or a
-    direct-API `nsapi:` key carries a real `{namespace}`, and per-key namespace
-    grants gate **both reads and writes** on it. This isolates the namespace
-    only from API keys whose grants are restricted: an unrestricted key in the
-    same tenant reads and writes every namespace, prefixed or not
+    direct-API `nsapi:` key carries a real `{namespace}` for any name other than
+    `default`, and per-key namespace grants gate **both reads and writes** on it.
+    This isolates the namespace only from API keys whose grants are restricted:
+    an unrestricted key in the same tenant reads every namespace, prefixed or
+    not, and writes every namespace within its key class's write spaces (a
+    legacy `ck_live_` key: all of them)
     ([Authentication](../spec/saas-api.md#authentication)). Moving
     currently-unprefixed traffic onto a prefix is the opt-in re-key (billed-miss)
     cost noted above.
@@ -203,15 +217,16 @@ must not be read as "fixed":
   `ns:`/`nsapi:` **write-space split**, which blocks cross-class *writes*
   (cache-poisoning defence, with the legacy-key exemption above) but leaves
   *reads* open to both classes — a write-space control, not read isolation.
-- **Cross-tenant separation is single-control.** For unprefixed and interop keys
-  it rests entirely on authentication-layer tenant scoping, with no key-level
-  second layer. Any SDK or server change that touches how the tenant is derived
-  must be treated as touching the only boundary these keys have.
+- **Cross-tenant separation is single-control.** For every key, prefixed or
+  not, server-side separation rests on authentication-layer tenant scoping,
+  with no key-level second layer: no cache key carries a tenant component
+  ([Authentication](../spec/saas-api.md#authentication)), and a namespace is
+  never a tenant boundary. Any SDK or server change that touches how the
+  tenant is derived must be treated as touching the only server-side boundary
+  every key has.
 
 ## Consequences
 
-- **Docs.** The specs listed under *Normative spec* above are the reader-facing
-  contract for this decision.
 - **SDK namespace handling stays a client-side convention.** Namespace work in
   the SDKs is convention-correctness work, not a step toward an `ns:` rewrite.
 

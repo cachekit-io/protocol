@@ -10,9 +10,11 @@ All notable changes to the CacheKit Protocol Specification.
   [decisions/namespace-isolation.md](decisions/namespace-isolation.md).
   Server-side namespace isolation (per-API-key namespace grants, per-namespace
   quotas, the `ns:`/`nsapi:` write-space split) is driven only by the key
-  prefix, and **only cachekit-py emits `ns:`** — so TS/RS SDK namespaces and
-  interop-mode namespaces are **client-side conventions**, scoped server-side
-  to the `default` open write space. Chooses **option 2** (document the
+  prefix, and namespace grants isolate only a namespace other than `default`.
+  **Only cachekit-py adds `ns:`** (in auto mode, when a namespace is set), so
+  TS/RS SDK namespaces
+  and interop-mode namespaces are **client-side conventions**, scoped
+  server-side to the `default` open write space. Chooses **option 2** (document the
   asymmetry; no key-format change) over option 1 (TS/RS adopt `ns:`) and
   option 3 (per-key default-namespace override, deferred); see
   [the record](decisions/namespace-isolation.md#options). Documentation-only:
