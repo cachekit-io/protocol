@@ -112,6 +112,15 @@ Lowercase ASCII letters, digits, `.`, `_`, `-`; 1–64 characters; must start wi
 letter or digit. SDKs MUST reject non-conforming segments with an error at decoration
 / registration time — never silently normalize.
 
+`namespace` additionally MUST NOT be `ns` or `nsapi`: the CachekitIO server parses a key
+starting `ns:` or `nsapi:` as namespace-prefixed
+([cache-key-format.md → Server-Side Requirements](cache-key-format.md#server-side-requirements)),
+so an interop key in either namespace would be rejected or scoped to a namespace named
+after the operation. The reservation is exact-match and namespace-only — `nsx` is a valid
+namespace, and `ns` and `nsapi` are valid operations. SDKs reject a reserved namespace
+like any other non-conforming segment, at decoration / registration time. The
+`reject_reserved_namespace_*` error vectors pin it.
+
 > [!WARNING]
 > **Full-string means full-string.** In Python, `re.match` with a `$` anchor still
 > accepts a trailing newline (`"users\n"` passes) — use `re.fullmatch`. A segment
@@ -374,7 +383,8 @@ Two vectors substantiate this end-to-end, not just by construction:
 ## SaaS Considerations
 
 The SaaS API is format-agnostic — keys are opaque strings and values are opaque
-bytes ([saas-api.md](saas-api.md)). Interop keys carry **no `ns:` prefix**; the
+bytes ([saas-api.md](saas-api.md)). Interop keys carry **no `ns:` or `nsapi:` prefix**
+— the reserved namespaces in [Segment grammar](#segment-grammar) guarantee it — so the
 `{namespace}` segment is an SDK-level convention, not a SaaS routing element (tenant
 isolation comes from authentication, not key parsing).
 
@@ -422,7 +432,8 @@ const getUser = cache.wrap(fetchUser, {
 
 An SDK implementation of interop mode MUST:
 
-1. Require explicit `namespace` and `operation`, validated against the segment grammar.
+1. Require explicit `namespace` and `operation`, validated against the segment grammar
+   (including the reserved namespaces `ns` and `nsapi`).
 2. Build the canonical argument array per the binding rules (named→positional,
    defaults applied where introspectable).
 3. Normalize and encode per this spec; reject out-of-model values with an error.
@@ -471,11 +482,11 @@ not re-litigated by accident.
 
 | Group | Count | Verifies |
 | :--- | :---: | :--- |
-| `key_vectors` | 33 | Canonical argument bytes (exact hex), args hash, full key — the `2.0`≡`2` collapse pair, supplementary-plane key sorting, heterogeneous and mixed-sign sets (byte order ≠ natural order), set dedupe (`{2, 2.0}` → `[2]`), datetime edge cases incl. pre-epoch, both collapse-range endpoints, and every `*16`-tier width boundary (uint/int ladders, str/bin/array/map headers, root array16) |
+| `key_vectors` | 34 | Canonical argument bytes (exact hex), args hash, full key — the `2.0`≡`2` collapse pair, supplementary-plane key sorting, heterogeneous and mixed-sign sets (byte order ≠ natural order), set dedupe (`{2, 2.0}` → `[2]`), datetime edge cases incl. pre-epoch, both collapse-range endpoints, every `*16`-tier width boundary (uint/int ladders, str/bin/array/map headers, root array16), and the reserved names outside the namespace segment (`nsx` namespace, `nsapi` operation) |
 | `value_vectors` | 4 | Plain-MessagePack value bytes (exact hex), float64 preservation in the value profile, temporal sentinel maps |
 | `aad_vectors` | 1 | AAD v0x03 bytes over an interop key (`format=msgpack`, `compressed=False`) |
 | `encryption_vectors` | 1 | Full HKDF-SHA256 → AES-256-GCM round-trip over plain-msgpack plaintext with the interop AAD (fixed nonce; decrypt-verified) |
-| `error_vectors` | 9 | Inputs that MUST be rejected (NaN, +Inf and −Inf as independent vectors, int overflow/underflow, naive datetime, bad segments incl. trailing newline). The `error` text is a maintainer note, not a normative message |
+| `error_vectors` | 11 | Inputs that MUST be rejected (NaN, +Inf and −Inf as independent vectors, int overflow/underflow, naive datetime, bad segments incl. trailing newline, the reserved namespaces `ns` and `nsapi`). The `error` text is a maintainer note, not a normative message |
 
 Inputs use a tagged-JSON convention (`{"$set": …}`, `{"$float": "2.0"}`,
 `{"$int": "…"}`, `{"$datetime": "…"}`, `{"$uuid": "…"}`, `{"$bytes": "<hex>"}`)

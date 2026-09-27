@@ -4,6 +4,25 @@ All notable changes to the CacheKit Protocol Specification.
 
 ## [Unreleased]
 
+### Interop mode — `ns` and `nsapi` are reserved namespaces (LAB-5876)
+
+- [`spec/interop-mode.md` → Segment grammar](spec/interop-mode.md#segment-grammar):
+  `namespace` MUST NOT be `ns` or `nsapi`. The segment pattern admitted both, but the
+  resulting key starts `ns:` / `nsapi:`, which the server parses as namespace-prefixed
+  ([cache-key-format.md → Server-Side Requirements](spec/cache-key-format.md#server-side-requirements)):
+  rejected when the operation contains `.`, otherwise scoped to a namespace named after
+  the operation. The reservation is exact-match and namespace-only; `ns` and `nsapi`
+  stay valid operations. SDKs reject a reserved namespace at decoration / registration
+  time. **Breaking for SDKs:** a namespace they accepted before now raises.
+- [`test-vectors/interop-mode.json`](test-vectors/interop-mode.json) 1.1.0: two error
+  vectors (`reject_reserved_namespace_ns`, `reject_reserved_namespace_nsapi`) and one key
+  vector (`reserved_names_outside_namespace`: namespace `nsx`, operation `nsapi`) that
+  pins the reservation as namespace-only and exact-match. Counts: 34 key, 11 error.
+  `tools/interop-reference.py` builds every key vector through its validating
+  `interop_key`; `tools/interop-crosscheck.mjs` checks the segment grammar on key vectors
+  as well as error vectors, with the reserved names hard-coded rather than read from the
+  fixture.
+
 ### Encryption — default-tenant conformance vector (LAB-4666)
 
 - [`test-vectors/encryption.json`](test-vectors/encryption.json) gains a `default_tenant`

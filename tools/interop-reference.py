@@ -40,6 +40,12 @@ from pathlib import Path
 # Implementations MUST full-string match (Python re.match would accept a
 # trailing newline because $ matches before it — use fullmatch, never match).
 SEGMENT_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{0,63}$")
+# Exact namespace values the grammar admits but the SaaS server parses as a key
+# prefix (spec/cache-key-format.md#server-side-requirements): a key starting
+# `ns:` or `nsapi:` would be scoped to a namespace named after the operation, or
+# rejected. Namespace-only and exact-match — `ns` as an operation, or `nsx` as a
+# namespace, cannot form either prefix.
+RESERVED_NAMESPACES = frozenset({"ns", "nsapi"})
 
 UINT64_MAX = 2**64 - 1
 INT64_MIN = -(2**63)
@@ -245,6 +251,11 @@ def interop_key(namespace: str, operation: str, args: list | tuple) -> str:
             raise InteropError(
                 f"invalid interop {name} {seg!r}: must full-string match ^[a-z0-9][a-z0-9._-]{{0,63}}$"
             )
+    if namespace in RESERVED_NAMESPACES:
+        raise InteropError(
+            f"invalid interop namespace {namespace!r}: 'ns' and 'nsapi' are reserved "
+            "(the server parses a key starting 'ns:' or 'nsapi:' as namespace-prefixed)"
+        )
     return f"{namespace}:{operation}:{args_hash(args)}"
 
 
@@ -585,6 +596,16 @@ KEY_VECTORS: list[dict] = [
         "operation": "op",
         "args": [42, "hello", {"b": 2, "a": 1}],
     },
+    {
+        "name": "reserved_names_outside_namespace",
+        "description": (
+            "The ns/nsapi reservation is namespace-only and exact-match: 'nsapi' as an operation "
+            "and 'nsx' as a namespace stay valid"
+        ),
+        "namespace": "nsx",
+        "operation": "nsapi",
+        "args": [1],
+    },
 ]
 
 VALUE_VECTORS: list[dict] = [
@@ -658,6 +679,20 @@ ERROR_VECTORS: list[dict] = [
         "args": [],
         "error": "segment validation must be a FULL-string match (Python re.match + $ accepts a trailing newline; use fullmatch)",
     },
+    {
+        "name": "reject_reserved_namespace_ns",
+        "namespace": "ns",
+        "operation": "get_user",
+        "args": [],
+        "error": "namespace 'ns' is reserved: the server parses a key starting 'ns:' as namespace-prefixed",
+    },
+    {
+        "name": "reject_reserved_namespace_nsapi",
+        "namespace": "nsapi",
+        "operation": "get_user",
+        "args": [],
+        "error": "namespace 'nsapi' is reserved: the server parses a key starting 'nsapi:' as namespace-prefixed",
+    },
 ]
 
 
@@ -676,7 +711,7 @@ def _build() -> dict:
                 "args": v["args"],
                 "canonical_args_hex": cab.hex(),
                 "args_hash": h,
-                "expected_key": f"{v['namespace']}:{v['operation']}:{h}",
+                "expected_key": interop_key(v["namespace"], v["operation"], args),
             }
         )
 
@@ -700,14 +735,18 @@ def _build() -> dict:
     aad = aad_v3(ENC_TENANT_ID, single_int["expected_key"])
 
     return {
-        "version": "1.0.0",
+        "version": "1.1.0",
         "spec": "spec/interop-mode.md",
         "generator": "tools/interop-reference.py (CPython stdlib)",
         "cross_checked_by": "tools/interop-crosscheck.mjs (independent encoder + @noble/hashes blake2b + WebCrypto HKDF/AES-GCM)",
         "hash_algorithm": "blake2b-256 (digest_size=32, unkeyed) over canonical MessagePack of the flat argument array",
         "key_format": "{namespace}:{operation}:{args_hash}",
         "segment_pattern": "^[a-z0-9][a-z0-9._-]{0,63}$",
-        "segment_pattern_note": "Full-string match REQUIRED (Python: re.fullmatch, not re.match — $ matches before a trailing newline).",
+        "segment_pattern_note": (
+            "Full-string match REQUIRED (Python: re.fullmatch, not re.match — $ matches before a trailing newline). "
+            "namespace additionally MUST NOT be exactly 'ns' or 'nsapi' (reserved: the server parses those key "
+            "prefixes). The reservation is namespace-only; operation has no reserved values."
+        ),
         "width_coverage_note": (
             "All *16 header boundaries (uint/int widths, str8->str16, bin8->bin16, fixarray->array16, "
             "fixmap->map16, including the root argument array) are pinned by vectors. The *32 tier "
