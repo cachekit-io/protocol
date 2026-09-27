@@ -53,6 +53,10 @@ def k2(doc: dict) -> dict:
     return next(v for v in doc["keyring"]["vectors"] if v["name"] == "encrypted_with_k2")
 
 
+def dt(doc: dict) -> dict:
+    return next(v for v in doc["default_tenant"]["vectors"] if v["name"] == "default_tenant_interop")
+
+
 def master_fingerprint(doc: dict, key_id: str) -> str:
     entry = next(e for e in doc["keyring"]["entries"] if e["id"] == key_id)
     return ev.key_fingerprint(bytes.fromhex(entry["master_key_hex"]))
@@ -88,6 +92,14 @@ STDLIB_CASES: dict[str, Callable[[dict], None]] = {
     "aad corrupted": lambda d: k1(d).__setitem__("aad_hex", "03" + k1(d)["aad_hex"][2:].replace("6b", "6c", 1)),
     "cache_key substituted": lambda d: k1(d).__setitem__("cache_key", "keyring:attacker:entry"),
     "frozen keyring vector renamed": lambda d: k1(d).__setitem__("name", "renamed"),
+    # intent-presets.md rule 5 — the default-tenant block is ground truth for "no tenant configured".
+    "default_tenant block deleted": lambda d: d.pop("default_tenant"),
+    "default_tenant is not the literal": lambda d: d["default_tenant"].__setitem__("tenant_id", "cross-sdk-test"),
+    "default_tenant fingerprint corrupted": lambda d: d["default_tenant"].__setitem__("derived_key_fingerprint_hex", "00" * 16),
+    "default_tenant aad tenant component swapped": lambda d: dt(d).__setitem__(
+        "aad_hex", ev.aad_v3("cross-sdk-test", dt(d)["cache_key"], fmt="msgpack", compressed=False).hex()
+    ),
+    "frozen default_tenant vector renamed": lambda d: dt(d).__setitem__("name", "renamed"),
 }
 
 SEAL_CASES: dict[str, Callable[[dict], None]] = {
@@ -98,6 +110,10 @@ SEAL_CASES: dict[str, Callable[[dict], None]] = {
     # The current entry carrying k1's sealed bytes: encrypted_with is KEYRING_ORDER[0], so the current-only guard is
     # skipped and only the entry-index guard can reject it — the case above is caught by both guards.
     "current vector sealed under retired key": lambda d: k2(d).update({f: k1(d)[f] for f in PAYLOAD_FIELDS}),
+    # Bytes sealed under tenant "cross-sdk-test" must not verify as the default-tenant vector.
+    "default_tenant sealed under another tenant": lambda d: dt(d).__setitem__(
+        "ciphertext_hex", next(v for v in d["vectors"] if v["name"] == "basic_bytes")["ciphertext_hex"]
+    ),
 }
 
 
