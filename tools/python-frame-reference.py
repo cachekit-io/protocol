@@ -226,11 +226,13 @@ def verify() -> int:
         if "expected_payload_hex" in vec and payload.hex() != vec["expected_payload_hex"]:
             print(f"FAIL {name}: payload mismatch")
             vec_failed += 1
+        # Keyed on presence, not on None: a present JSON null is a non-object,
+        # not "absent", so it cannot skip every envelope check below.
         env = vec.get("payload_envelope")
-        if env is not None and not isinstance(env, dict):
+        if "payload_envelope" in vec and not isinstance(env, dict):
             print(f"FAIL {name}: payload_envelope must be an object, got {type(env).__name__}")
             vec_failed += 1
-        elif env is not None:
+        elif "payload_envelope" in vec:
             declared = env.get("envelope_encoding")
             if declared is None:
                 print(f"FAIL {name}: payload_envelope must declare envelope_encoding ('bin' or 'int-array')")

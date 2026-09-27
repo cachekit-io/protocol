@@ -162,6 +162,15 @@ for bad in (["not", "an", "object"], "not an object"):
     except Exception as e:  # noqa: BLE001 - any traceback is the failure under test
         rc, out = None, f"raised {e!r}"
     check(f"{kind} payload_envelope: verify exits 1 with a FAIL line", rc == 1 and "payload_envelope must be an object" in out)
+# A present null is a non-object too, not "absent". On a vector outside the twin
+# pair nothing else fires and the encoding coverage floor still holds.
+doc = copy.deepcopy(COMMITTED)
+next(v for v in doc["frame_vectors"] if v["name"] == "raw_payload_frame")["payload_envelope"] = None
+rc, out = run_verify(doc)
+check(
+    "null payload_envelope on a non-twin vector: verify exits 1 with a FAIL line",
+    rc == 1 and "FAIL raw_payload_frame: payload_envelope must be an object" in out,
+)
 
 # --- a dangling declaration is a failure, not a silent skip ---
 doc, _ = mutated(lambda t: t.__setitem__("twin_of", "no_such_vector"))
