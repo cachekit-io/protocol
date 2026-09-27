@@ -81,9 +81,13 @@ else.
 > **Two serializer identities that the wire format records differently MUST NOT be mapped
 > onto one code by construction.** The guarantee is probabilistic, not absolute: the derived
 > code carries 16 bits, so two identities it records differently can still collide, at ≈1 in
-> 2^16 per pair. Such a collision costs hit rate only — that one pair evicts each other
-> exactly as a constant code makes every pair do — and never yields a wrong value, because
-> the stored serializer name still differs and the read-side check below rejects it.
+> 2^16 per pair. Between honestly written entries, such a collision costs hit rate only —
+> that one pair evicts each other exactly as a constant code makes every pair do — and never
+> yields a wrong value, because the stored serializer name still differs and the read-side
+> check below rejects it. The recorded name is not an integrity control against a writer with
+> backend write access: the CK v3 frame header that carries it is plaintext and
+> unauthenticated, even for encrypted entries (see the
+> [frame header caution](wire-format.md#python-ck-v3-frame)).
 >
 > **An SDK that offers more than one serializer identity MUST record the serializer name in
 > the storage container of every serialized entry it stores under a key in this format
@@ -102,9 +106,10 @@ else.
 > `cachekit-py`: reference caching, code `l`, and caches configured with no backend).
 >
 > `cache_key` is an AES-256-GCM AAD input (see [Encryption](encryption.md)). Two serializers
-> sharing a code therefore share the **`cache_key` AAD component**; when they also share the
-> `format` token, AAD binding does not separate them, and the cipher is not a backstop for a
-> missing name check.
+> sharing a code therefore share the **`cache_key` AAD component**, and a reader takes the
+> `format` component from the entry's stored metadata, not from its own serializer (see
+> [Encryption](encryption.md#format-tokens)). AAD binding does not separate them,
+> whatever their `format` tokens, and the cipher is not a backstop for a missing name check.
 >
 > **Conversely, one identity MUST always produce one code.** Derive it from the serializer
 > configuration alone — the canonical name the wire format records, or an SDK-defined

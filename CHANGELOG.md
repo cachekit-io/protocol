@@ -11,7 +11,10 @@ All notable changes to the CacheKit Protocol Specification.
   two identities the wire format records differently MUST NOT be mapped onto
   one code by construction. An identity outside the code table gets `x` + the
   2-byte `blake2b` digest of its UTF-8 identity as 4 lowercase hex characters;
-  the collision guarantee is stated as probabilistic (16 bits). An SDK that
+  the collision guarantee is stated as probabilistic (16 bits). Between honestly
+  written entries a collision costs hit rate only, never a wrong value; the
+  recorded serializer name is not an integrity control against a writer with
+  backend write access. An SDK that
   offers more than one serializer identity MUST record the serializer name in
   the container of each serialized entry under a key in this format, and MUST
   compare it against its own on every read of one, before decoding; for such an
@@ -26,8 +29,9 @@ All notable changes to the CacheKit Protocol Specification.
   the identity distinguish configurations that write different bytes, and
   wherever it does not, those configurations MUST be keyed under different
   `ns:` namespaces (the 16-bit code is not a collision-resistant separator). The
-  `cache_key` AAD component is identical for serializers sharing a code, so the
-  cipher is no backstop between serializers that also share a `format` token.
+  `cache_key` AAD component is identical for serializers sharing a code, and a
+  reader takes `format` from the stored entry, so the cipher is no backstop
+  between serializers sharing a code.
   The table gains `l` (reference caching — shipped, never documented) and a
   `Canonical name` column, and drops its `Cross-language?` column: no
   serializer code makes these keys shareable across SDKs, and the Cross-SDK Key
