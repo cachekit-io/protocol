@@ -13,7 +13,8 @@
 > each registry or the [SDK feature matrix](../sdk-feature-matrix.md#compliance-status) for current versions.
 > Server-side: the CachekitIO validator accepts interop-format keys
 > (`{namespace}:{operation}:{args_hash}` scopes to the `default` namespace;
-> see [cache-key-format.md → Server-Side Requirements](cache-key-format.md#server-side-requirements)).
+> see [cache-key-format.md → Server-Side Requirements](cache-key-format.md#server-side-requirements)),
+> except a key with `..` in a segment ([SaaS Considerations](#saas-considerations)).
 > Design discussion: [Issue #1](https://github.com/cachekit-io/protocol/issues/1) ·
 > Test vectors: [`test-vectors/interop-mode.json`](../test-vectors/interop-mode.json) ·
 > Reference implementation: [`tools/interop-reference.py`](../tools/interop-reference.py)
@@ -116,10 +117,12 @@ letter or digit. SDKs MUST reject non-conforming segments with an error at decor
 starting `ns:` or `nsapi:` as namespace-prefixed
 ([cache-key-format.md → Server-Side Requirements](cache-key-format.md#server-side-requirements)),
 so an interop key in either namespace would be rejected or scoped to a namespace named
-after the operation. The reservation is exact-match and namespace-only — `nsx` is a valid
-namespace, and `ns` and `nsapi` are valid operations. SDKs reject a reserved namespace
-like any other non-conforming segment, at decoration / registration time. The
-`reject_reserved_namespace_*` error vectors pin it.
+after the operation. SDKs reject a reserved namespace like any other non-conforming
+segment, at decoration / registration time and regardless of the configured backend:
+interop keys are portable, so a namespace valid on one backend is valid on all. The
+reservation is exact-match and namespace-only — `nsapix` is a valid namespace, and `ns`
+and `nsapi` are valid operations. The `reject_reserved_namespace_*` error vectors and the
+`reservation_scope` key vector pin it.
 
 > [!WARNING]
 > **Full-string means full-string.** In Python, `re.match` with a `$` anchor still
@@ -395,8 +398,10 @@ isolation comes from authentication, not key parsing).
 > accepts interop-format keys; see
 > [cache-key-format.md → Server-Side Requirements](cache-key-format.md#server-side-requirements).
 > The interop segment grammar (lowercase, no `:` beyond the two delimiters, no `/`,
-> max 194 chars) is deliberately a strict subset of what the security-only
-> validator accepts.
+> max 194 chars, no reserved namespace) is deliberately a subset of what the
+> security-only validator accepts, with one known exception: the grammar admits `..`
+> inside a segment, and the validator rejects `..` anywhere in a key (the Traversal
+> row), so such a key fails with `400`.
 
 ---
 
@@ -482,7 +487,7 @@ not re-litigated by accident.
 
 | Group | Count | Verifies |
 | :--- | :---: | :--- |
-| `key_vectors` | 34 | Canonical argument bytes (exact hex), args hash, full key — the `2.0`≡`2` collapse pair, supplementary-plane key sorting, heterogeneous and mixed-sign sets (byte order ≠ natural order), set dedupe (`{2, 2.0}` → `[2]`), datetime edge cases incl. pre-epoch, both collapse-range endpoints, every `*16`-tier width boundary (uint/int ladders, str/bin/array/map headers, root array16), and the reserved names outside the namespace segment (`nsx` namespace, `nsapi` operation) |
+| `key_vectors` | 34 | Canonical argument bytes (exact hex), args hash, full key — the `2.0`≡`2` collapse pair, supplementary-plane key sorting, heterogeneous and mixed-sign sets (byte order ≠ natural order), set dedupe (`{2, 2.0}` → `[2]`), datetime edge cases incl. pre-epoch, both collapse-range endpoints, every `*16`-tier width boundary (uint/int ladders, str/bin/array/map headers, root array16), and the reservation's exact-match, namespace-only scope (`nsapix` namespace, `nsapi` operation) |
 | `value_vectors` | 4 | Plain-MessagePack value bytes (exact hex), float64 preservation in the value profile, temporal sentinel maps |
 | `aad_vectors` | 1 | AAD v0x03 bytes over an interop key (`format=msgpack`, `compressed=False`) |
 | `encryption_vectors` | 1 | Full HKDF-SHA256 → AES-256-GCM round-trip over plain-msgpack plaintext with the interop AAD (fixed nonce; decrypt-verified) |

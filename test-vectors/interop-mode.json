@@ -595,16 +595,16 @@
       "expected_key": "t:op:03a0edbae0c1b5816c431652268d1527730175cdc0b45807cb07e1025ff971f6"
     },
     {
-      "name": "reserved_names_outside_namespace",
-      "description": "The ns/nsapi reservation is namespace-only and exact-match: 'nsapi' as an operation and 'nsx' as a namespace stay valid",
-      "namespace": "nsx",
+      "name": "reservation_scope",
+      "description": "The ns/nsapi reservation is exact-match and namespace-only: namespace 'nsapix' (rejected by an ns* or nsapi* prefix match) and operation 'nsapi' stay valid",
+      "namespace": "nsapix",
       "operation": "nsapi",
       "args": [
         1
       ],
       "canonical_args_hex": "9101",
       "args_hash": "405f09a3617bcc1425ea95b9840d9c2713e3ecebd5a3227abc599317b732e21a",
-      "expected_key": "nsx:nsapi:405f09a3617bcc1425ea95b9840d9c2713e3ecebd5a3227abc599317b732e21a"
+      "expected_key": "nsapix:nsapi:405f09a3617bcc1425ea95b9840d9c2713e3ecebd5a3227abc599317b732e21a"
     }
   ],
   "value_vectors": [
@@ -730,14 +730,14 @@
       "namespace": "ns",
       "operation": "get_user",
       "args": [],
-      "error": "namespace 'ns' is reserved: the server parses a key starting 'ns:' as namespace-prefixed"
+      "error": "namespace 'ns' is reserved: the server parses a key starting 'ns:' as namespace-prefixed (here it would scope the key to a namespace named 'get_user')"
     },
     {
       "name": "reject_reserved_namespace_nsapi",
       "namespace": "nsapi",
-      "operation": "get_user",
+      "operation": "users.fetch_by_id",
       "args": [],
-      "error": "namespace 'nsapi' is reserved: the server parses a key starting 'nsapi:' as namespace-prefixed"
+      "error": "namespace 'nsapi' is reserved: the server parses a key starting 'nsapi:' as namespace-prefixed (rejected whatever the operation, including one the server would 400 on for its '.')"
     }
   ],
   "aad_vectors": [

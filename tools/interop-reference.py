@@ -43,8 +43,8 @@ SEGMENT_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{0,63}$")
 # Exact namespace values the grammar admits but the SaaS server parses as a key
 # prefix (spec/cache-key-format.md#server-side-requirements): a key starting
 # `ns:` or `nsapi:` would be scoped to a namespace named after the operation, or
-# rejected. Namespace-only and exact-match — `ns` as an operation, or `nsx` as a
-# namespace, cannot form either prefix.
+# rejected. Namespace-only and exact-match — `ns` as an operation, or `nsapix` as
+# a namespace, cannot form either prefix.
 RESERVED_NAMESPACES = frozenset({"ns", "nsapi"})
 
 UINT64_MAX = 2**64 - 1
@@ -597,12 +597,12 @@ KEY_VECTORS: list[dict] = [
         "args": [42, "hello", {"b": 2, "a": 1}],
     },
     {
-        "name": "reserved_names_outside_namespace",
+        "name": "reservation_scope",
         "description": (
-            "The ns/nsapi reservation is namespace-only and exact-match: 'nsapi' as an operation "
-            "and 'nsx' as a namespace stay valid"
+            "The ns/nsapi reservation is exact-match and namespace-only: namespace 'nsapix' "
+            "(rejected by an ns* or nsapi* prefix match) and operation 'nsapi' stay valid"
         ),
-        "namespace": "nsx",
+        "namespace": "nsapix",
         "operation": "nsapi",
         "args": [1],
     },
@@ -684,14 +684,20 @@ ERROR_VECTORS: list[dict] = [
         "namespace": "ns",
         "operation": "get_user",
         "args": [],
-        "error": "namespace 'ns' is reserved: the server parses a key starting 'ns:' as namespace-prefixed",
+        "error": (
+            "namespace 'ns' is reserved: the server parses a key starting 'ns:' as namespace-prefixed "
+            "(here it would scope the key to a namespace named 'get_user')"
+        ),
     },
     {
         "name": "reject_reserved_namespace_nsapi",
         "namespace": "nsapi",
-        "operation": "get_user",
+        "operation": "users.fetch_by_id",
         "args": [],
-        "error": "namespace 'nsapi' is reserved: the server parses a key starting 'nsapi:' as namespace-prefixed",
+        "error": (
+            "namespace 'nsapi' is reserved: the server parses a key starting 'nsapi:' as namespace-prefixed "
+            "(rejected whatever the operation, including one the server would 400 on for its '.')"
+        ),
     },
 ]
 

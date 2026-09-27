@@ -13,11 +13,17 @@ All notable changes to the CacheKit Protocol Specification.
   rejected when the operation contains `.`, otherwise scoped to a namespace named after
   the operation. The reservation is exact-match and namespace-only; `ns` and `nsapi`
   stay valid operations. SDKs reject a reserved namespace at decoration / registration
-  time. **Breaking for SDKs:** a namespace they accepted before now raises.
+  time, on every backend. **Breaking for any deployment that uses namespace `ns` or
+  `nsapi`, on any backend:** it now raises at startup; migrate by renaming the namespace
+  (a full cache miss for that namespace).
 - [`test-vectors/interop-mode.json`](test-vectors/interop-mode.json) 1.1.0: two error
   vectors (`reject_reserved_namespace_ns`, `reject_reserved_namespace_nsapi`) and one key
-  vector (`reserved_names_outside_namespace`: namespace `nsx`, operation `nsapi`) that
-  pins the reservation as namespace-only and exact-match. Counts: 34 key, 11 error.
+  vector (`reservation_scope`: namespace `nsapix`, operation `nsapi`) that pins the
+  reservation as namespace-only and exact-match. Counts: 34 key, 11 error.
+- SaaS Considerations no longer calls the grammar a strict subset of what the server
+  accepts: the grammar admits `..` inside a segment, which the server rejects.
+- SDK feature matrix: the "Test vectors in CI" cells note that fixture 1.1.0 is not yet
+  in any released SDK, linking the SDK PRs that vendor it.
   `tools/interop-reference.py` builds every key vector through its validating
   `interop_key`; `tools/interop-crosscheck.mjs` checks the segment grammar on key vectors
   as well as error vectors, with the reserved names hard-coded rather than read from the
