@@ -14,10 +14,11 @@ All notable changes to the CacheKit Protocol Specification.
   (17 reject + 3 accept) with [`tools/decode-bounds-reference.py`](tools/decode-bounds-reference.py),
   which derives every vector's depth and slot tags with a structural walk, and its
   mutation suite. The SDKs vendor earlier revisions; see the matrix's footnote 16.
-- An SDK's conformance test MUST assert that its structural guard rejects each reject
-  vector at every untrusted decode entry point on its read path, before materialising
-  it. A verdict alone does not show when a reader rejected, and a direct guard call
-  alone does not show that the read path runs the guard.
+- An SDK's conformance test MUST assert that its structural guard rejects each
+  reject vector at every untrusted decode entry point (including invalidation
+  events), before materialising it; a size cap that rejects first also counts. A
+  verdict alone does not show when a reader rejected, and a direct guard call alone
+  does not show that the read path runs the guard.
 - [`spec/wire-format.md` → Security Limits](spec/wire-format.md#security-limits)
   states the whole-document slot rule (per-header checks do not satisfy it; ext
   lengths count) for the envelope bytes and the payload inside them, and the
@@ -25,7 +26,8 @@ All notable changes to the CacheKit Protocol Specification.
 - Matrix: ByteStorage is ⚠️ in all three SDKs, because each decodes the envelope with
   `cachekit-core`'s `ByteStorage::retrieve`, which has no step-2 pre-scan. The
   decode-bounds test cells for Python and Rust are ⚠️ until their tests assert the
-  guard's rejection.
+  guard's rejection, and TypeScript's until its envelope entry point has a guard to
+  assert.
 - Open: the shared depth value, and any cap on the ~70× materialisation of *legal*
   payloads, stay [protocol#20](https://github.com/cachekit-io/protocol/issues/20)'s
   items.

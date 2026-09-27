@@ -496,11 +496,13 @@ reader rejected: a stock decoder's default limits reject every reject vector tod
 and a reader with per-header checks alone rejects the incomplete ones at end of input,
 after it has pre-allocated for them. An SDK's conformance test MUST therefore assert
 that its structural guard rejects each reject vector before anything is materialised,
-by driving each reject vector through every untrusted decode entry point on the SDK's
-read path (below its conversion to a cache miss) and asserting an error that only the
-guard produces; calling the guard directly as well is fine, but on its own does not
-show that the read path runs it. A run that only asserts that a decode fails does not
-demonstrate conformance.
+by driving each reject vector through every untrusted decode entry point (value
+reads, and any other untrusted decode such as invalidation events), below the point
+where the SDK turns the error into a cache miss or drops it, and asserting an error
+that only a pre-decode check produces: the structural guard, or a size cap that entry
+point applies ahead of it. Calling the guard directly as well is fine, but on its own
+does not show that the read path runs it. A run that only asserts that a decode fails
+does not demonstrate conformance.
 [`test-vectors/decode-bounds.json`](../test-vectors/decode-bounds.json) pins the
 bytes every decoder MUST reject (17) and MUST accept (3); the same rules apply to
 any other untrusted MessagePack decode in an SDK (auto-mode payloads after the
