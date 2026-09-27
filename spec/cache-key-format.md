@@ -85,9 +85,9 @@ else.
 > that one pair evicts each other exactly as a constant code makes every pair do — and never
 > yields a wrong value, because the stored serializer name still differs and the read-side
 > check below rejects it. The recorded name is not an integrity control against a writer with
-> backend write access: the CK v3 frame header that carries it is plaintext and
-> unauthenticated, even for encrypted entries (see the
-> [frame header caution](wire-format.md#python-ck-v3-frame)).
+> backend write access: in the CK v3 frame it is a plaintext header field that is not an
+> [AAD](encryption.md#additional-authenticated-data-aad) input, so nothing authenticates it,
+> even for encrypted entries (see the [frame header caution](wire-format.md#python-ck-v3-frame)).
 >
 > **An SDK that offers more than one serializer identity MUST record the serializer name in
 > the storage container of every serialized entry it stores under a key in this format
