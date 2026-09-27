@@ -167,9 +167,10 @@ for bad in (["not", "an", "object"], "not an object"):
 doc = copy.deepcopy(COMMITTED)
 next(v for v in doc["frame_vectors"] if v["name"] == "raw_payload_frame")["payload_envelope"] = None
 rc, out = run_verify(doc)
+fail_lines = [line for line in out.splitlines() if line.startswith("FAIL")]
 check(
-    "null payload_envelope on a non-twin vector: verify exits 1 with a FAIL line",
-    rc == 1 and "FAIL raw_payload_frame: payload_envelope must be an object" in out,
+    "null payload_envelope on a non-twin vector: verify exits 1, and its FAIL line is the only one",
+    rc == 1 and fail_lines == ["FAIL raw_payload_frame: payload_envelope must be an object, got NoneType"],
 )
 
 # --- a dangling declaration is a failure, not a silent skip ---

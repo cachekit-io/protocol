@@ -12,7 +12,8 @@ All notable changes to the CacheKit Protocol Specification.
   only compared twin against twin, so two twins carrying the same wrong value passed.
 - The `twin_of` compare of `value_json` is type-strict (`true` no longer equals `1`).
 - A `payload_envelope` that is present but not an object is a FAIL line in `verify` and a
-  warning in `generate`, instead of a traceback.
+  warning in `generate`. Before, a list or string raised a traceback, and a present `null`
+  passed by skipping every envelope check.
 - `spec/wire-format.md`'s `Verify:` block lists the mutation suite CI already runs.
 - `test-vectors/python-frame.json` is unchanged.
 
