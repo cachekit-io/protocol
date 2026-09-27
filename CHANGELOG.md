@@ -4,6 +4,18 @@ All notable changes to the CacheKit Protocol Specification.
 
 ## [Unreleased]
 
+### Tooling — stdlib python-frame verify holds on its own (LAB-5341)
+
+- `tools/python-frame-reference.py verify` now LZ4-decompresses each envelope vector's
+  `compressed_data` (the strict block decoder from `tools/interop-v2-reference.py`) and
+  rejects a `payload_envelope.inner_msgpack_hex` that does not match. Before, the field was
+  only compared twin against twin, so two twins carrying the same wrong value passed.
+- The `twin_of` compare of `value_json` is type-strict (`true` no longer equals `1`).
+- A `payload_envelope` that is present but not an object is a FAIL line in `verify` and a
+  warning in `generate`, instead of a traceback.
+- `spec/wire-format.md`'s `Verify:` block lists the mutation suite CI already runs.
+- `test-vectors/python-frame.json` is unchanged.
+
 ### Encryption — default-tenant conformance vector (LAB-4666)
 
 - [`test-vectors/encryption.json`](test-vectors/encryption.json) gains a `default_tenant`

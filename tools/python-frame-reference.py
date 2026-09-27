@@ -11,8 +11,9 @@ implementation.
 Modes:
     verify    (default) stdlib-only. Re-parses every frame vector with an
               independent minimal parser (no cachekit import) and checks the
-              expected header/payload; checks every error vector is rejected.
-              Runs in CI.
+              expected header/payload, including the ByteStorage envelope down
+              to the LZ4-decompressed inner msgpack (inner_msgpack_hex);
+              checks every error vector is rejected. Runs in CI.
     generate  Upserts the vector file by vector name (LAB-1203): every vector
               the installed wheel can reproduce is rebuilt, and rewritten only
               if its content actually changed; every other committed vector is
@@ -51,7 +52,10 @@ spec/wire-format.md:
 The ByteStorage envelope codec is NOT reimplemented here: encode/decode come
 from tools/wire-format-reference.py, the single shared implementation of the
 encoding these fixtures exist to pin (stdlib-only, so `verify` stays
-dependency-free).
+dependency-free). LZ4 decompression of compressed_data likewise comes from
+tools/interop-v2-reference.py's strict block decoder, which rejects truncation,
+bad offsets and any output length other than original_size: a reader-lenient
+decoder here would silently weaken the inner_msgpack_hex check.
 """
 
 from __future__ import annotations
@@ -80,18 +84,19 @@ BIN_DESCRIPTION = (
 )
 
 
-def _load_wire_format_codec() -> ModuleType:
-    """Load tools/wire-format-reference.py as a module (hyphenated filename)."""
-    path = Path(__file__).resolve().parent / "wire-format-reference.py"
-    spec = importlib.util.spec_from_file_location("wire_format_reference", path)
+def _load_tool(filename: str, module_name: str) -> ModuleType:
+    """Load a sibling stdlib-only reference tool as a module (hyphenated filename)."""
+    path = Path(__file__).resolve().parent / filename
+    spec = importlib.util.spec_from_file_location(module_name, path)
     if spec is None or spec.loader is None:
-        raise ImportError(f"cannot load envelope codec from {path}")
+        raise ImportError(f"cannot load {path}")
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
 
 
-_wire = _load_wire_format_codec()
+_wire = _load_tool("wire-format-reference.py", "wire_format_reference")
+_lz4_block_decompress = _load_tool("interop-v2-reference.py", "interop_v2_reference").lz4_block_decompress
 
 
 class FrameError(ValueError):
@@ -165,9 +170,12 @@ def _twin_divergence(twin: dict, by_name: dict[str, dict]) -> str | None:
     if base is None:
         return f"twin_of names unknown vector {twin['twin_of']!r}"
     for side in (twin, base):
-        missing = [k for k in ("value_json", "frame_hex", "expected_payload_hex", "payload_envelope") if side.get(k) is None]
-        env = side.get("payload_envelope") or {}
-        missing += [f"payload_envelope.{f}" for f in _TWIN_ENVELOPE_FIELDS if env.get(f) is None]
+        missing = [k for k in ("value_json", "frame_hex", "expected_payload_hex") if side.get(k) is None]
+        env = side.get("payload_envelope")
+        if isinstance(env, dict):
+            missing += [f"payload_envelope.{f}" for f in _TWIN_ENVELOPE_FIELDS if env.get(f) is None]
+        else:
+            missing.append("payload_envelope (object)")
         if missing:
             return f"twin_of requires envelope vectors on both sides; {side['name']!r} lacks {', '.join(missing)}"
     twin_env, base_env = twin["payload_envelope"], base["payload_envelope"]
@@ -177,7 +185,9 @@ def _twin_divergence(twin: dict, by_name: dict[str, dict]) -> str | None:
             f"{twin_env.get('envelope_encoding')!r} — a twin must differ from its base in encoding"
         )
     mismatches: list[str] = []
-    if twin["value_json"] != base["value_json"]:
+    # Serialised, not `!=`: Python has True == 1 == 1.0, so a twin carrying
+    # `1` against a base carrying `true` would compare equal.
+    if json.dumps(twin["value_json"], sort_keys=True) != json.dumps(base["value_json"], sort_keys=True):
         mismatches.append("value_json")
     if _frame_prefix_hex(twin) != _frame_prefix_hex(base):
         mismatches.append("frame prefix (magic/version/header bytes)")
@@ -217,7 +227,10 @@ def verify() -> int:
             print(f"FAIL {name}: payload mismatch")
             vec_failed += 1
         env = vec.get("payload_envelope")
-        if env:
+        if env is not None and not isinstance(env, dict):
+            print(f"FAIL {name}: payload_envelope must be an object, got {type(env).__name__}")
+            vec_failed += 1
+        elif env is not None:
             declared = env.get("envelope_encoding")
             if declared is None:
                 print(f"FAIL {name}: payload_envelope must declare envelope_encoding ('bin' or 'int-array')")
@@ -260,7 +273,20 @@ def verify() -> int:
                             print(f"FAIL {name}: payload_envelope field(s) disagree with the envelope bytes: {', '.join(drifted)}")
                             vec_failed += 1
                         else:
-                            observed_encodings.add(actual)
+                            # Checked against the bytes, not only twin against
+                            # twin: two twins carrying the same wrong value (or
+                            # one vector with no twin) must still fail here.
+                            try:
+                                inner = _lz4_block_decompress(data, size)
+                            except ValueError as e:
+                                print(f"FAIL {name}: LZ4 decompress: {e}")
+                                vec_failed += 1
+                            else:
+                                if env.get("inner_msgpack_hex") != inner.hex():
+                                    print(f"FAIL {name}: decompressed payload does not match payload_envelope.inner_msgpack_hex")
+                                    vec_failed += 1
+                                else:
+                                    observed_encodings.add(actual)
         det = vec.get("arrow_detection")
         if det:
             off = det["ipc_magic_offset"]
