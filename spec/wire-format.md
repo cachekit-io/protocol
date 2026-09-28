@@ -536,7 +536,7 @@ MAGIC b"CK" (0x43 0x4B) | VERSION u8 (0x03) | HDR_LEN u32 big-endian | HEADER | 
 | `default`, `auto` | ByteStorage envelope (this document) over MessagePack |
 | `arrow` | **Arrow envelope**: `[8-byte xxHash3-64 checksum][Arrow IPC file]` (IPC magic `b"ARROW1"` at payload offset 8) |
 | `orjson` | `[8-byte xxHash3-64 checksum][JSON bytes]` |
-| A serializer instance's bare class name (`StandardSerializer`, `ArrowSerializer`, a custom class) | That serializer's own output; a built-in class writes the same payload as its string name above |
+| A serializer instance's bare class name (`StandardSerializer`, `ArrowSerializer`, a custom class) | That serializer's own output; a built-in class writes the same payload as its string name above. Classes sharing a bare name, and differently configured instances of one class, record the same `s` (see the [`ns:` rule](cache-key-format.md#serializer-codes)) |
 | any, encrypted | Ciphertext per [encryption.md](encryption.md) |
 
 With integrity checking disabled, `default`/`auto` payloads are raw MessagePack (no
