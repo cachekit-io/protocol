@@ -31,12 +31,12 @@ Releases are cut from a branch named `release/<version>`. That prefix is the CI 
 
 ```bash
 git checkout -b release/1.1.0 origin/main
-uvx scriv@1.8.0 collect --version 1.1.0
+python3 tools/changelog-collect.py 1.1.0
 ```
 
-`scriv collect` writes a `## [1.1.0] - <date>` section at the
-`<!-- scriv-insert-here -->` marker in `CHANGELOG.md` and deletes the collected fragments.
-This README and `scriv.ini` stay, and so do both markers. Everything merged between
-1.0.0 and this directory's introduction is in `20260328_unreleased-since-1.0.0.md`, which
-sorts first, so the first release's section contains it. Check with
-`uvx scriv@1.8.0 print --version 1.1.0` before publishing.
+`tools/changelog-collect.py` writes a `## [1.1.0] - <date>` section at the
+`<!-- changelog-insert-here -->` marker in `CHANGELOG.md`, holding every fragment verbatim
+in filename order, and deletes the collected fragments. It never regroups or rewrites
+entries. This README stays, and so does the marker. Everything merged between 1.0.0 and
+this directory's introduction is in `20260328_unreleased-since-1.0.0.md`, which sorts
+first, so the first release's section contains it.

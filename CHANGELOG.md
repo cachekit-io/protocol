@@ -7,9 +7,7 @@ All notable changes to the CacheKit Protocol Specification.
 New entries go in [`changelog.d/`](changelog.d/README.md), one file per change, and are
 collected into a version section here at each release.
 
-<!-- scriv-insert-here -->
-
-<!-- scriv-end-here -->
+<!-- changelog-insert-here -->
 
 ## [1.0.0] - 2026-03-28
 
