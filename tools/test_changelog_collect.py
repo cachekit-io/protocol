@@ -12,6 +12,7 @@ Run: python3 tools/test_changelog_collect.py     (exit 1 on any failure)
 from __future__ import annotations
 
 import importlib.util
+import re
 import shutil
 import sys
 import tempfile
@@ -55,6 +56,32 @@ def refuses(tmp: Path, name: str, changelog: str, fragments: dict[str, str], ver
     check(f"refuses {name}, writes nothing", raised and untouched)
 
 
+def dry_run_next_release(tmp: Path) -> None:
+    """Collect the real repo's pending fragments into a copy, under a version one minor
+    above the newest released one, so the check stays valid after every release."""
+    real = Path(tempfile.mkdtemp(dir=tmp))
+    shutil.copy(REPO / "CHANGELOG.md", real / "CHANGELOG.md")
+    shutil.copytree(REPO / "changelog.d", real / "changelog.d")
+    pending = [p.read_text().strip() for p in sorted((real / "changelog.d").glob("*.md")) if p.name != "README.md"]
+    if not pending:
+        print("skip repo dry run: no pending fragments (fresh after a release)")
+        return
+    text = (real / "CHANGELOG.md").read_text()
+    released = [tuple(map(int, v)) for v in re.findall(r"^## \[(\d+)\.(\d+)\.(\d+)\]", text, re.MULTILINE)]
+    major, minor, _ = max(released)
+    version = f"{major}.{minor + 1}.0"
+    cc.collect(real, version, "2026-10-01")
+    head, rest = text.split(cc.MARKER)
+    prefix = f"{head}{cc.MARKER}\n\n## [{version}] - 2026-10-01\n\n"
+    suffix = rest.lstrip("\n")
+    out = (real / "CHANGELOG.md").read_text()
+    intact = out.startswith(prefix) and out.endswith(suffix)
+    body = out[len(prefix) : len(out) - len(suffix)] if intact else ""
+    check(
+        f"repo: next release ({version}) holds every pending fragment verbatim", intact and body.strip() == "\n\n".join(pending)
+    )
+
+
 def main() -> int:
     tmp = Path(tempfile.mkdtemp())
     try:
@@ -88,14 +115,7 @@ def main() -> int:
             and want.split(cc.MARKER)[1].lstrip("\n") in out2,
         )
 
-        # The real repo: the first release carries the whole pre-fragment block verbatim.
-        real = Path(tempfile.mkdtemp(dir=tmp))
-        shutil.copy(REPO / "CHANGELOG.md", real / "CHANGELOG.md")
-        shutil.copytree(REPO / "changelog.d", real / "changelog.d")
-        legacy = [p.read_text().strip() for p in sorted((real / "changelog.d").glob("*.md")) if p.name != "README.md"]
-        cc.collect(real, "1.1.0", "2026-10-01")
-        body = (real / "CHANGELOG.md").read_text().split("## [1.1.0] - 2026-10-01\n\n", 1)[1].split("\n## [1.0.0]", 1)[0]
-        check("repo: first release holds every pending fragment verbatim", body.strip() == "\n\n".join(legacy))
+        dry_run_next_release(tmp)
 
         refuses(tmp, "missing marker", BASE.replace(cc.MARKER, ""), {"a.md": "x\n"})
         refuses(tmp, "repeated marker", BASE + cc.MARKER + "\n", {"a.md": "x\n"})
