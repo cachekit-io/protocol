@@ -173,7 +173,10 @@ def _twin_divergence(twin: dict, by_name: dict[str, dict]) -> str | None:
         missing = [k for k in ("value_json", "frame_hex", "expected_payload_hex") if side.get(k) is None]
         env = side.get("payload_envelope")
         if isinstance(env, dict):
-            missing += [f"payload_envelope.{f}" for f in _TWIN_ENVELOPE_FIELDS if env.get(f) is None]
+            # envelope_encoding too: a missing one would otherwise count as a
+            # distinct encoding and satisfy "differs in encoding" vacuously.
+            required = ("envelope_encoding", *_TWIN_ENVELOPE_FIELDS)
+            missing += [f"payload_envelope.{f}" for f in required if env.get(f) is None]
         else:
             missing.append("payload_envelope (object)")
         if missing:

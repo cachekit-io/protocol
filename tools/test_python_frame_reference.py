@@ -20,6 +20,7 @@ import io
 import json
 import sys
 import tempfile
+import traceback
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -159,8 +160,9 @@ for bad in (["not", "an", "object"], "not an object"):
     doc, _ = mutated(lambda t, bad=bad: t.__setitem__("payload_envelope", bad))
     try:
         rc, out = run_verify(doc)
-    except Exception as e:  # noqa: BLE001 - any traceback is the failure under test
-        rc, out = None, f"raised {e!r}"
+    except Exception:  # noqa: BLE001 - any traceback is the failure under test
+        traceback.print_exc()  # shows where it raised: verify() or this harness
+        rc, out = None, ""
     check(f"{kind} payload_envelope: verify exits 1 with a FAIL line", rc == 1 and "payload_envelope must be an object" in out)
 # A present null is a non-object too, not "absent". On a vector outside the twin
 # pair nothing else fires and the encoding coverage floor still holds.
@@ -210,6 +212,16 @@ doc, twin = mutated(lambda t: t["payload_envelope"].__setitem__("inner_msgpack_h
 next(v for v in doc["frame_vectors"] if v["name"] == LEGACY_NAME)["payload_envelope"]["inner_msgpack_hex"] = None
 rc, out = run_verify(doc)
 check("null envelope subfield on both sides: verify exits 1", rc == 1 and "lacks payload_envelope.inner_msgpack_hex" in out)
+
+# A missing envelope_encoding is "lacking", not a distinct encoding that satisfies "differs in encoding".
+doc = copy.deepcopy(COMMITTED)
+next(v for v in doc["frame_vectors"] if v["name"] == LEGACY_NAME)["payload_envelope"].pop("envelope_encoding")
+rc, out = run_verify(doc)
+check(
+    "base lacking envelope_encoding: the twin FAILs too, naming it",
+    rc == 1 and f"FAIL {BIN_NAME}: twin_of requires envelope vectors on both sides; "
+    f"{LEGACY_NAME!r} lacks payload_envelope.envelope_encoding" in out,
+)
 
 doc, _ = mutated(lambda t: t.__setitem__("twin_of", [LEGACY_NAME]))
 rc, out = run_verify(doc)
@@ -262,6 +274,7 @@ def warn_output(vectors: list[dict]) -> tuple[bool, str]:
         with contextlib.redirect_stderr(buf):
             pfr._warn_twin_divergence(vectors)
     except Exception:  # noqa: BLE001 - generate must never raise here, whatever the type
+        traceback.print_exc()
         raised = True
     return raised, buf.getvalue()
 
@@ -288,6 +301,12 @@ for bad in (["not", "an", "object"], "not an object"):
     )
 raised, err = warn_output([SYNTH_LEGACY, {**SYNTH_TWIN, "value_json": {"a": True}}])
 check("generate: value_json 1 vs true -> warns (type-strict compare)", not raised and "value_json" in err)
+no_encoding = {k: v for k, v in SYNTH_LEGACY["payload_envelope"].items() if k != "envelope_encoding"}
+raised, err = warn_output([{**SYNTH_LEGACY, "payload_envelope": no_encoding}, SYNTH_TWIN])
+check(
+    "generate: base lacking envelope_encoding -> warns, does not raise",
+    not raised and "lacks payload_envelope.envelope_encoding" in err,
+)
 
 # --- _upsert: the declaration survives a rebuild and never causes churn ---
 committed = [copy.deepcopy(SYNTH_TWIN) | {"generator": "old wheel"}]

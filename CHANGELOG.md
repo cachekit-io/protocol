@@ -11,6 +11,9 @@ All notable changes to the CacheKit Protocol Specification.
   rejects a `payload_envelope.inner_msgpack_hex` that does not match. Before, the field was
   only compared twin against twin, so two twins carrying the same wrong value passed.
 - The `twin_of` compare of `value_json` is type-strict (`true` no longer equals `1`).
+- A `twin_of` pair where either side lacks `payload_envelope.envelope_encoding` fails the twin
+  gate in `verify` and warns in `generate`, naming the missing field. Before, a missing
+  encoding counted as a distinct one, so the twin passed and `generate` stayed silent.
 - A `payload_envelope` that is present but not an object is a FAIL line in `verify` and a
   warning in `generate`. Before, a list or string raised a traceback, and a present `null`
   passed by skipping every envelope check.
