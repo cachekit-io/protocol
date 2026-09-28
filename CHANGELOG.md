@@ -29,6 +29,14 @@ All notable changes to the CacheKit Protocol Specification.
   as well as error vectors, with the reserved names hard-coded rather than read from the
   fixture.
 
+### Wire format — vendored-fixture coverage note corrected (LAB-1750)
+
+- [`spec/wire-format.md`](spec/wire-format.md) no longer says `cachekit-core` vendors
+  fixture 1.1.0. It pins 1.1.1, so `width_boundary_bin16_bin` has a canonical-writer
+  (`lz4_flex`) compressed-byte and xxh3-64 checksum check. The section now states the rule
+  for anyone vendoring the fixture: derive each `*_bin` twin's expected marker from its
+  decoded `compressed_data` length, never assume bin8 or accept any `bin` width.
+
 ### Encryption — default-tenant conformance vector (LAB-4666)
 
 - [`test-vectors/encryption.json`](test-vectors/encryption.json) gains a `default_tenant`
