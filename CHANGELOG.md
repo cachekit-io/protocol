@@ -4,6 +4,31 @@ All notable changes to the CacheKit Protocol Specification.
 
 ## [Unreleased]
 
+### Interop mode — `ns` and `nsapi` are reserved namespaces (LAB-5876)
+
+- [`spec/interop-mode.md` → Segment grammar](spec/interop-mode.md#segment-grammar):
+  `namespace` MUST NOT be `ns` or `nsapi`. The segment pattern admitted both, but the
+  resulting key starts `ns:` / `nsapi:`, which the server parses as namespace-prefixed
+  ([cache-key-format.md → Server-Side Requirements](spec/cache-key-format.md#server-side-requirements)):
+  rejected when the operation contains `.`, otherwise scoped to a namespace named after
+  the operation. The reservation is exact-match and namespace-only; `ns` and `nsapi`
+  stay valid operations. SDKs reject a reserved namespace at decoration / registration
+  time, on every backend. **Breaking for any deployment that uses namespace `ns` or
+  `nsapi`, on any backend:** it now raises at startup; migrate by renaming the namespace
+  (a full cache miss for that namespace).
+- [`test-vectors/interop-mode.json`](test-vectors/interop-mode.json) 1.1.0: two error
+  vectors (`reject_reserved_namespace_ns`, `reject_reserved_namespace_nsapi`) and one key
+  vector (`reservation_scope`: namespace `nsapix`, operation `nsapi`) that pins the
+  reservation as namespace-only and exact-match. Counts: 34 key, 11 error.
+- SaaS Considerations no longer calls the grammar a strict subset of what the server
+  accepts: the grammar admits `..` inside a segment, which the server rejects.
+- SDK feature matrix: the "Test vectors in CI" cells note that fixture 1.1.0 is not yet
+  in any released SDK, linking the SDK PRs that vendor it.
+  `tools/interop-reference.py` builds every key vector through its validating
+  `interop_key`; `tools/interop-crosscheck.mjs` checks the segment grammar on key vectors
+  as well as error vectors, with the reserved names hard-coded rather than read from the
+  fixture.
+
 ### Wire format — vendored-fixture coverage note corrected (LAB-1750)
 
 - [`spec/wire-format.md`](spec/wire-format.md) no longer says `cachekit-core` vendors
