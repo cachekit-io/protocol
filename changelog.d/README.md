@@ -19,7 +19,10 @@ then bullets.
 - **Breaking for …:** who is affected and how to migrate, when it applies.
 ```
 
-Files are collected in filename order, so the date prefix keeps entries in merge order.
+Files are collected in filename order, so entries appear in the order they were written,
+not the order they merged. Never let one entry's meaning depend on appearing before or
+after another.
+
 A change that needs no changelog entry does not add a file.
 
 ## Releasing
@@ -33,6 +36,7 @@ uvx scriv@1.8.0 collect --version 1.1.0
 
 `scriv collect` writes a `## [1.1.0] - <date>` section at the
 `<!-- scriv-insert-here -->` marker in `CHANGELOG.md` and deletes the collected fragments.
-This README and `scriv.ini` stay, and so do both markers. Entries written before this
-directory existed sit below `<!-- scriv-end-here -->`, so the first release's section
-picks them up without a hand edit.
+This README and `scriv.ini` stay, and so do both markers. Everything merged between
+1.0.0 and this directory's introduction is in `20260328_unreleased-since-1.0.0.md`, which
+sorts first, so the first release's section contains it. Check with
+`uvx scriv@1.8.0 print --version 1.1.0` before publishing.
