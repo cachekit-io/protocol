@@ -44,10 +44,10 @@ means keys that do not begin with a prefix. **Interop mode** keys are
 
 ### Impact
 
-The rule is not specific to TS and RS: **because only cachekit-py adds `ns:`,
-every non-Python SDK is affected identically** — TS, RS, and any other SDK in
-the fleet (the [feature matrix](../sdk-feature-matrix.md) also lists PHP), plus
-interop mode; this record writes "TS/RS" for the whole set. For all of them
+The rule is not specific to TS and RS: **because the server keys isolation on
+the prefix and only cachekit-py adds `ns:`, the documented TS, RS and interop
+paths are affected identically**, and so is any future SDK whose keys carry no
+prefix; this record writes "TS/RS" for that set. For all of them
 the SDK-level "namespace" is a **client-side convention only**: the keys those
 SDKs generate are unprefixed, so server-side
 isolation cannot see the namespace. Concretely, within one tenant:
