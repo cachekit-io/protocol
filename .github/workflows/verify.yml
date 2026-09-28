@@ -79,3 +79,29 @@ jobs:
         run: |
           python3 tools/test_check_version_floors.py
           python3 tools/check-version-floors.py
+
+      # Includes a dry run of the next release against the real CHANGELOG.md and
+      # changelog.d/, so a fragment or marker that would break it fails here first.
+      - name: Changelog collect (stdlib only)
+        run: python3 tools/test_changelog_collect.py
+
+  # Every PR that added its entry under the shared `## [Unreleased]` heading
+  # conflicted with every other open PR that did the same. Entries go in
+  # changelog.d/ (one file each); only a release/* branch rewrites CHANGELOG.md.
+  changelog-fragments:
+    name: CHANGELOG.md is edited only by releases
+    if: github.event_name == 'pull_request' && !startsWith(github.head_ref, 'release/')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          fetch-depth: 2
+          persist-credentials: false
+
+      - name: Changelog entries are fragments in changelog.d/
+        run: |
+          # HEAD is GitHub's test merge of the PR into its base, so HEAD^1 is the base tip.
+          if ! git diff --quiet HEAD^1 HEAD -- CHANGELOG.md; then
+            echo "::error file=CHANGELOG.md::Put the entry in a new file under changelog.d/ instead (see changelog.d/README.md). CHANGELOG.md changes only on a release/* branch."
+            exit 1
+          fi
