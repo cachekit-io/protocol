@@ -161,7 +161,7 @@ for bad in (["not", "an", "object"], "not an object"):
     try:
         rc, out = run_verify(doc)
     except Exception:  # noqa: BLE001 - any traceback is the failure under test
-        traceback.print_exc()  # shows where it raised: verify() or this harness
+        traceback.print_exc(file=sys.stdout)  # shows where it raised: verify() or this harness
         rc, out = None, ""
     check(f"{kind} payload_envelope: verify exits 1 with a FAIL line", rc == 1 and "payload_envelope must be an object" in out)
 # A present null is a non-object too, not "absent". On a vector outside the twin
@@ -274,7 +274,7 @@ def warn_output(vectors: list[dict]) -> tuple[bool, str]:
         with contextlib.redirect_stderr(buf):
             pfr._warn_twin_divergence(vectors)
     except Exception:  # noqa: BLE001 - generate must never raise here, whatever the type
-        traceback.print_exc()
+        traceback.print_exc(file=sys.stdout)
         raised = True
     return raised, buf.getvalue()
 

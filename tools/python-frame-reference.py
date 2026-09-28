@@ -142,6 +142,8 @@ def parse_frame(frame: bytes) -> tuple[dict, bytes]:
     return header, frame[header_end:]
 
 
+# Fields a twin must share with its base. envelope_encoding must DIFFER, so it is
+# not listed here; _twin_divergence requires its presence separately.
 _TWIN_ENVELOPE_FIELDS = ("compressed_data_hex", "checksum_hex", "original_size", "format", "inner_msgpack_hex")
 
 
@@ -182,10 +184,10 @@ def _twin_divergence(twin: dict, by_name: dict[str, dict]) -> str | None:
         if missing:
             return f"twin_of requires envelope vectors on both sides; {side['name']!r} lacks {', '.join(missing)}"
     twin_env, base_env = twin["payload_envelope"], base["payload_envelope"]
-    if twin_env.get("envelope_encoding") == base_env.get("envelope_encoding"):
+    if twin_env["envelope_encoding"] == base_env["envelope_encoding"]:
         return (
             f"declared twin_of {base['name']!r} but both carry envelope_encoding "
-            f"{twin_env.get('envelope_encoding')!r} — a twin must differ from its base in encoding"
+            f"{twin_env['envelope_encoding']!r} — a twin must differ from its base in encoding"
         )
     mismatches: list[str] = []
     # Serialised, not `!=`: Python has True == 1 == 1.0, so a twin carrying
