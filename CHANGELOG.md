@@ -4,6 +4,13 @@ All notable changes to the CacheKit Protocol Specification.
 
 ## [Unreleased]
 
+New entries go in [`changelog.d/`](changelog.d/README.md), one file per change, and are
+collected into a version section here at each release.
+
+<!-- scriv-insert-here -->
+
+<!-- scriv-end-here -->
+
 ### Interop mode — `ns` and `nsapi` are reserved namespaces (LAB-5876)
 
 - [`spec/interop-mode.md` → Segment grammar](spec/interop-mode.md#segment-grammar):
