@@ -41,8 +41,7 @@ This document specifies two layers:
    decode byte-identity for every vector and re-encode byte-identity for the
    canonical `*_bin` vectors only — legacy array-of-integers vectors are
    decode-only, retained as legacy-read proof. That re-encode assertion covers
-   only the vectors the pinned file contains (core vendors 1.1.1, so every
-   `*_bin` twin, the `bin16` pair included). Byte-canonicity scopes to the
+   only the vectors the pinned file contains. Byte-canonicity scopes to the
    envelope's MessagePack encoding and to the **canonical writer's** output:
    the LZ4 bytes inside `compressed_data` are not reproducible across
    conforming compressors — see
@@ -293,19 +292,13 @@ This is the same doctrine [interop v2](interop-v2.md) records for its
 compressed-values profile. The pinned bytes are the **canonical implementation's**
 output (`lz4_flex` via `cachekit-core`), enforced by the re-encode byte-identity
 assertions in `cachekit-core/tests/wire_format_vectors.rs` — **for the vectors
-present in the fixture that repo vendors**. cachekit-core vendors 1.1.1 and pins
-`version == "1.1.1"`, so `width_boundary_bin16_bin` gets the canonical-writer
-(`lz4_flex`) compressed-byte check and its xxh3-64 checksum is recomputed on
-every run. That repo's bin-twin check derives each twin's expected marker from
-the decoded `compressed_data` length (`≤255 → 0xc4`, `≤65535 → 0xc5`, else
-`0xc6`) rather than accepting any `bin` width, so the `bin16` twin is held to
-`0xc5` (303-byte `compressed_data`). Any consumer vendoring the fixture should
-derive the marker the same way: an assertion that every twin is bin8 fails on
-1.1.1, and one that accepts all three widths cannot detect a non-shortest
-header. Independently, this repo's `tools/wire-format-reference.py verify`
-asserts legacy and bin re-encode byte-identity for the pair on every run, and
-liblz4 reproduces its compressed bytes on the optional `lz4` leg. The
-reference liblz4 mapping above (`lz4.block`) is **decode-verified against
+present in the fixture that repo vendors**, which recompute each twin's
+`lz4_flex` bytes and xxh3-64 checksum. Anyone vendoring the fixture should
+derive each `*_bin` twin's expected marker from its decoded `compressed_data`
+length (`≤255 → 0xc4`, `≤65535 → 0xc5`, else `0xc6`), as cachekit-core does. An
+assertion that every twin is bin8 fails on `width_boundary_bin16_bin` (`0xc5`,
+303-byte `compressed_data`), and one that accepts all three widths cannot
+detect a non-shortest header. The reference liblz4 mapping above (`lz4.block`) is **decode-verified against
 every vector** in this repo's CI (`tools/wire-format-reference.py verify`,
 optional `lz4` leg); on encode it reproduces every pair except
 `large_compressible` byte-for-byte, which is an observation, not a guarantee —
