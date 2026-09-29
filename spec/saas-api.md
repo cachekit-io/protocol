@@ -476,7 +476,7 @@ SDKs SHOULD send cache metrics headers for rate limiting and observability:
 | `429` | Too Many Requests | Rate limited |
 | `500` | Internal Server Error | Backend failure |
 | `502` | Bad Gateway | Upstream failure |
-| `503` | Service Unavailable | Backend overloaded, or a backend fault while authenticating the key (`Retry-After` set). Retry; do not surface as "invalid API key" |
+| `503` | Service Unavailable | Backend overloaded or transiently unavailable, or a backend fault while authenticating the key (`Retry-After` set). A transient storage fault answers `503` on every cache operation, reads and writes alike; `500` is left for a genuine backend failure. Retry; do not surface as "invalid API key" |
 
 ### Error Classification
 
