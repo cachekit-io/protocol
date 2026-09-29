@@ -8,7 +8,7 @@ compressed-values profile spec:
     vector generation has no third-party dependency
   - the normative reader algorithm, including every Security-Limits bound
   - a 4.3 MB constructed container that fails a reader computing the ratio
-    product in 32 bits (mutation-tested by tools/test_interop_v2_reference.py)
+    product in 32 bits, signed or unsigned (mutation-tested by tools/test_interop_v2_reference.py)
   - v2 AAD construction (compressed = "True", the frozen token)
   - test-vector generator + self-verifier for ../test-vectors/interop-v2.json
 
@@ -61,11 +61,17 @@ v1 = _load_v1()
 MAX_UNCOMPRESSED = 512 * 1024 * 1024
 MAX_COMPRESSED = 512 * 1024 * 1024
 MAX_RATIO = 1000
-# Smallest payload length whose ratio product no longer fits 32 bits:
-# ceil(2**32 / 1000) = 4,294,968. At and above it a decoder that multiplies in
-# 32-bit width computes the wrong bound (704 B here), so only a vector at least
-# this large can tell a conforming reader from a wrapping one.
+# Smallest payload length whose ratio product overflows UNSIGNED 32 bits:
+# ceil(2**32 / 1000) = 4,294,968. Below it a u32 product is exact, so only a
+# vector at least this large catches a u32 reader. A signed 32-bit product
+# already overflows from ceil(2**31 / 1000) = 2,147,484 B; at this length both
+# wrap to the same 704, so one vector catches both.
 RATIO_WRAP_THRESHOLD = -(-(1 << 32) // MAX_RATIO)
+
+
+def ratio_bound_u32_wrapped(payload_len: int) -> int:
+    """The bound a reader that multiplies in 32-bit width computes (signed and unsigned agree at >= the threshold)."""
+    return (MAX_RATIO * payload_len) % (1 << 32)
 
 MAGIC = 0xC1
 CONTAINER_VERSION = 0x02
@@ -317,8 +323,8 @@ def ratio_bound(payload_len: int) -> int:
     return MAX_RATIO * payload_len
 
 
-def decode_container(data: bytes) -> bytes:
-    """Normative reader algorithm steps 2-5: container bytes -> plain value bytes."""
+def parse_container(data: bytes) -> tuple[int, int, bytes]:
+    """Container bytes -> (method, original_size, payload), structure only; no bounds applied."""
     if len(data) < 2:
         msg = "truncated container (magic + version bytes required)"
         raise V2Error(msg)
@@ -333,7 +339,12 @@ def decode_container(data: bytes) -> bytes:
     original_size = r.read_uint()
     payload = r.read_bin()
     r.expect_exhausted()
+    return method, original_size, payload
 
+
+def decode_container(data: bytes) -> bytes:
+    """Normative reader algorithm steps 2-5: container bytes -> plain value bytes."""
+    method, original_size, payload = parse_container(data)
     if method not in (METHOD_NONE, METHOD_LZ4_BLOCK):
         raise V2Error(f"unknown compression method {method}")
     # Security Limits — all BEFORE any decompression, integer arithmetic only.
@@ -429,7 +440,7 @@ def _build_wrap_threshold_vector() -> dict:
     A real LZ4 block of that length cannot decompress to a few hundred bytes, so the
     vector is a literals-only block carrying a bin32 of zeros. Its original_size is
     ~0.996 x payload_len: far inside the 1000:1 bound, and far above the 704 B a
-    32-bit product yields. 4.3 MB of hex is not shippable, hence `construction`.
+    32-bit product yields. 8.6 MB of hex is not shippable, hence the `*_construction` segment lists.
     """
     payload_len = RATIO_WRAP_THRESHOLD
     # Literals-only block: token 0xF0, then the literal length as 255-runs plus a
@@ -461,18 +472,17 @@ def _build_wrap_threshold_vector() -> dict:
         "name": "lz4_ratio_product_wraps_32_bits",
         "description": (
             f"method 1 container whose payload is {payload_len} B = ceil(2^32/1000), the first length at "
-            "which 1000 * payload_len overflows 32 bits. original_size is well inside the 1000:1 bound, so "
-            "readers MUST accept it and decode it to the constructed value. A reader that computes the "
-            f"product in 32-bit width gets {(MAX_RATIO * payload_len) % (1 << 32)} instead (signed or unsigned "
-            "wrap alike) and rejects it as a ratio bomb; so does one that rejects on 32-bit overflow. "
-            "Run it at the spec's limits: a deployment MAY reject it under a stricter value-size ceiling, "
-            "but a conformance run must not apply one."
+            "which 1000 * payload_len overflows unsigned 32 bits. original_size is well inside the 1000:1 "
+            "bound, so readers MUST accept it and decode it to the constructed value. A reader that computes "
+            f"the product in 32-bit width gets {ratio_bound_u32_wrapped(payload_len)} instead (signed or "
+            "unsigned wrap alike) and rejects it as a ratio bomb; so does one that rejects on 32-bit overflow. "
+            "An SDK with a 32-bit build MUST run this vector on that target: a pointer-width product passes it "
+            "on a 64-bit host. Run it at the spec's limits, never a deployment's stricter value-size ceiling."
         ),
         "method": METHOD_LZ4_BLOCK,
         "original_size": original_size,
         "payload_len": payload_len,
         "container_len": len(container),
-        "ratio_bound_u32_wrapped": (MAX_RATIO * payload_len) % (1 << 32),
         "container_construction": container_construction,
         "value_construction": value_construction,
     }
@@ -801,21 +811,24 @@ def _self_check(built: dict) -> None:
     # Constructed containers: readers MUST accept them. At least one has to be
     # beyond the 32-bit wrap threshold with an original_size above the wrapped bound,
     # or the suite passes a reader that multiplies in 32 bits (it did, before 1.1.0).
-    discriminating = 0
+    # Measured from the parsed bytes, never the declared fields, which could lie.
+    discriminating = []
     for cv in built["constructed_container_vectors"]:
         container = construct(cv["container_construction"])
         _require(len(container) == cv["container_len"], f"constructed {cv['name']}: container_len mismatch")
+        method, original_size, payload = parse_container(container)
+        _require(
+            (method, original_size, len(payload)) == (cv["method"], cv["original_size"], cv["payload_len"]),
+            f"constructed {cv['name']}: declared method/original_size/payload_len disagree with its bytes",
+        )
         try:
             got = decode_container(container)
         except V2Error as e:
             msg = f"constructed vector {cv['name']} rejected: {e}"
             raise SelfCheckError(msg) from e
         _require(got == construct(cv["value_construction"]), f"constructed {cv['name']} does not decode to its value")
-        _require(len(got) == cv["original_size"], f"constructed {cv['name']}: original_size mismatch")
-        wrapped = (MAX_RATIO * cv["payload_len"]) % (1 << 32)
-        _require(wrapped == cv["ratio_bound_u32_wrapped"], f"constructed {cv['name']}: wrapped bound mismatch")
-        discriminating += cv["payload_len"] >= RATIO_WRAP_THRESHOLD and cv["original_size"] > wrapped
-    _require(discriminating, "no constructed vector fails a reader that computes the ratio product in 32 bits")
+        discriminating.append(len(payload) >= RATIO_WRAP_THRESHOLD and original_size > ratio_bound_u32_wrapped(len(payload)))
+    _require(any(discriminating), "no constructed vector fails a reader that computes the ratio product in 32 bits")
 
     by_name = {c["name"]: c for c in built["container_vectors"]}
     # The inherited-value-profile claim: identical inner bytes across the two wraps,

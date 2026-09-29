@@ -35,17 +35,20 @@ function fromHex(s, field) {
 
 // A `*_construction` field: each segment's hex repeated `count` times, in order.
 // Buffer.alloc(n, fill) tiles `fill`, so a 4 MB run of one byte costs one call.
-function construct(segments, field) {
+// The total is checked against the declared length BEFORE allocating, so a
+// corrupted count fails by name instead of exhausting memory.
+function construct(segments, field, expectedLen) {
   if (!Array.isArray(segments) || segments.length === 0) throw new Error(`${field} is not a non-empty segment list`);
-  return Buffer.concat(
-    segments.map((seg, k) => {
-      const unit = fromHex(seg.hex, `${field}[${k}].hex`);
-      if (!Number.isSafeInteger(seg.count) || seg.count < 0 || unit.length === 0) {
-        throw new Error(`${field}[${k}] needs non-empty hex and a non-negative integer count`);
-      }
-      return Buffer.alloc(unit.length * seg.count, unit);
-    }),
-  );
+  const units = segments.map((seg, k) => {
+    const unit = fromHex(seg.hex, `${field}[${k}].hex`);
+    if (!Number.isSafeInteger(seg.count) || seg.count < 0 || unit.length === 0) {
+      throw new Error(`${field}[${k}] needs non-empty hex and a non-negative integer count`);
+    }
+    return [unit, seg.count];
+  });
+  const total = units.reduce((sum, [unit, count]) => sum + unit.length * count, 0);
+  if (total !== expectedLen) throw new Error(`${field} builds ${total} B, expected ${expectedLen} B`);
+  return Buffer.concat(units.map(([unit, count]) => Buffer.alloc(unit.length * count, unit)));
 }
 
 // --- LZ4 block decompressor (independent implementation) --------------------
@@ -283,27 +286,32 @@ for (const v of doc.container_vectors) {
   }
 }
 
-// Required, not `?? []`: the wrap-threshold vector is the only one that fails a
-// reader computing the ratio product in 32 bits, so a file without it must not pass.
-if (!Array.isArray(doc.constructed_container_vectors) || doc.constructed_container_vectors.length === 0) {
-  failures++;
-  console.error("FAIL constructed_container_vectors: missing or empty");
-}
+// The only vectors that fail a reader computing the ratio product in 32 bits, so
+// the group is required, and at least one vector must actually do that, measured
+// from the parsed bytes (a payload at or above ceil(2^32/1000) whose
+// original_size exceeds the wrapped bound). A file without one must not pass.
+const U32_WRAP_THRESHOLD = Math.ceil(2 ** 32 / 1000);
+let discriminating = 0;
 for (const v of doc.constructed_container_vectors ?? []) {
   try {
-    const container = construct(v.container_construction, `${v.name}.container_construction`);
-    check(v.name, "container_len", v.container_len, container.length);
+    const container = construct(v.container_construction, `${v.name}.container_construction`, v.container_len);
     const value = decodeContainer(container);
-    const expected = construct(v.value_construction, `${v.name}.value_construction`);
+    const expected = construct(v.value_construction, `${v.name}.value_construction`, v.original_size);
     check(v.name, "decoded value bytes", true, value.equals(expected));
     const parsed = parseContainer(container);
     check(v.name, "method", BigInt(v.method), parsed.method);
     check(v.name, "original_size", BigInt(v.original_size), parsed.originalSize);
     check(v.name, "payload_len", v.payload_len, parsed.payload.length);
+    const len = parsed.payload.length;
+    if (len >= U32_WRAP_THRESHOLD && parsed.originalSize > (MAX_RATIO * BigInt(len)) % 2n ** 32n) discriminating++;
   } catch (err) {
     failures++;
     console.error(`FAIL ${v.name} (constructed container): ${err.message ?? err}`);
   }
+}
+if (discriminating === 0) {
+  failures++;
+  console.error("FAIL constructed_container_vectors: no vector fails a reader computing the ratio product in 32 bits");
 }
 
 for (const v of doc.aad_vectors) {
@@ -399,7 +407,7 @@ if (failures > 0) {
   process.exit(1);
 }
 console.log(
-  `OK: ${doc.container_vectors.length} container, ${doc.constructed_container_vectors.length} constructed container, ` +
+  `OK: ${doc.container_vectors.length} container, ${doc.constructed_container_vectors?.length} constructed container, ` +
     `${doc.aad_vectors.length} AAD, ` +
     `${(doc.encryption_vectors ?? []).length} encryption, ${doc.reject_vectors.length} reject, ` +
     `${(doc.crypto_reject_vectors ?? []).length} crypto-reject vectors verified independently`,

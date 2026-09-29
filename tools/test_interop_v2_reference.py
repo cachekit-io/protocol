@@ -2,12 +2,15 @@
 """Mutation tests: the interop/v2 vectors fail a reader that computes the ratio product in 32 bits.
 
 The spec's >=64-bit rule is only enforceable if some published vector fails a reader
-that breaks it. Until fixture 1.1.0 none did: every vector was under 300 B, and 32-bit
-arithmetic goes wrong only from a 4,294,968 B payload. So this suite swaps the reference
-reader's ratio product for three non-conforming ones and checks two things for each:
-  - the vector groups published in 1.0.0 all still pass (the gap was real), and
+that breaks it. Until fixture 1.1.0 none did: every interop-v2 vector was under 300 B,
+and a 32-bit product goes wrong only from 2,147,484 B (signed) or 4,294,968 B (unsigned).
+So this suite swaps the reference reader's ratio product for three non-conforming ones
+and checks two things for each:
+  - every hex-pinned container, reject and encryption-plaintext vector still passes
+    (the gap was real; the AAD and crypto-reject groups never reach the product), and
   - `lz4_ratio_product_wraps_32_bits` fails, by name.
-It also drops that vector and checks the coverage guard in _self_check fires.
+It also drops that vector, and substitutes one whose declared payload_len lies about a
+small payload, and checks the coverage guard in _self_check fires on both.
 Same doctrine as test_check_spec_duplication.py: a guard not shown to fail is no guard.
 Nothing here touches test-vectors/interop-v2.json.
 
@@ -43,14 +46,14 @@ def overflow_rejects(n: int) -> int:
 
 # name -> non-conforming ratio product; each must differ from the real one at the vector.
 MUTANTS: dict[str, Callable[[int], int]] = {
-    "u32 wrap": lambda n: (iv2.MAX_RATIO * n) % U32,
+    "u32 wrap": iv2.ratio_bound_u32_wrapped,
     "i32 wrap": lambda n: (iv2.MAX_RATIO * n + (1 << 31)) % U32 - (1 << 31),
     "u32 reject-on-overflow": overflow_rejects,
 }
 
 
-def old_groups_pass(built: dict) -> None:
-    """Every vector group published in 1.0.0, read with whatever ratio_bound is patched in."""
+def assert_hex_vectors_pass(built: dict) -> None:
+    """Container, reject and encryption-plaintext vectors, read with whatever ratio_bound is patched in."""
     for cv in built["container_vectors"]:
         got = iv2.decode_container(bytes.fromhex(cv["container_hex"]))
         iv2._require(got.hex() == cv["value_msgpack_hex"], f"{cv['name']} misdecoded")
@@ -79,9 +82,9 @@ def main() -> int:
     for name, mutant in MUTANTS.items():
         with patch.object(iv2, "ratio_bound", mutant):
             try:
-                old_groups_pass(built)
+                assert_hex_vectors_pass(built)
             except (iv2.SelfCheckError, iv2.V2Error) as e:
-                results.append(f"{name}: a 1.0.0 vector already catches it, so the gap premise is wrong: {e}")
+                results.append(f"{name}: a hex-pinned vector already catches it, so the gap premise is wrong: {e}")
             if failure := self_check_fails(built, f"constructed vector {VECTOR} rejected"):
                 results.append(f"{name}: {failure}")
 
@@ -91,6 +94,20 @@ def main() -> int:
         sys.exit(f"FAIL coverage test names no vector: {VECTOR}")  # a rename must not pass vacuously
     if failure := self_check_fails(dropped, "no constructed vector fails a reader"):
         results.append(f"drop {VECTOR}: {failure}")
+
+    # A vector whose declared payload_len says "past the threshold" over a small real
+    # payload must not satisfy the coverage guard: it is measured from the bytes.
+    small = next(c for c in built["container_vectors"] if c["name"] == "lz4_roundtrip_compressible")
+    liar = copy.deepcopy(built)
+    liar["constructed_container_vectors"] = [{
+        **built["constructed_container_vectors"][0],
+        "original_size": small["original_size"],
+        "container_len": len(small["container_hex"]) // 2,
+        "container_construction": [{"hex": small["container_hex"], "count": 1}],
+        "value_construction": [{"hex": small["value_msgpack_hex"], "count": 1}],
+    }]
+    if failure := self_check_fails(liar, "disagree with its bytes"):
+        results.append(f"declared payload_len over a small payload: {failure}")
 
     failures = [f for f in results if f]
     if failures:
