@@ -302,8 +302,10 @@ product overflows unsigned 32 bits (a signed 32-bit product overflows earlier, f
 2,147,484 B). Its `original_size` (4,278,189 B) is inside the 1000:1 bound but
 above the 704 B that a 32-bit product yields, signed or unsigned. A reader that
 multiplies in 32 bits rejects it, and so does one that rejects on 32-bit overflow.
-A conforming reader accepts it. The note above gives the unsigned threshold. A
-signed product also fails closed, because its bound goes negative. An
+A conforming reader accepts it. The note above gives the unsigned threshold. At
+this length a signed product also wraps to 704 B, so a signed reader rejects the
+vector for the same reason: 704 B is below `original_size`. At other lengths a
+signed product can go negative, which fails closed too. An
 implementation that supports any 32-bit target (such as `wasm32`) MUST pass this
 vector on that target ([SDK Implementation Requirements](#sdk-implementation-requirements), item 7). A
 pointer-width product is exact on a 64-bit host, so a pass there does not show the
