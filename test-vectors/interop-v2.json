@@ -1,5 +1,5 @@
 {
-  "version": "1.0.0",
+  "version": "1.1.0",
   "spec": "spec/interop-v2.md",
   "generator": "tools/interop-v2-reference.py (CPython stdlib, incl. pure-Python LZ4 block codec)",
   "cross_checked_by": "tools/interop-v2-crosscheck.mjs (independent container parser + LZ4 block decoder + WebCrypto HKDF/AES-GCM; zero dependencies)",
@@ -169,6 +169,12 @@
       "name": "reject_declared_size_bomb",
       "description": "original_size declares 1 TiB \u2014 exceeds the 512 MiB cap (checked BEFORE decompression)",
       "container_hex": "c1029301cf0000010000000000c40410410000",
+      "error": "original_size exceeds max uncompressed size"
+    },
+    {
+      "name": "reject_declared_size_wraps_32_bits",
+      "description": "method 0 container whose original_size is 2^32 + the payload length (uint64 marker). The low 32 bits alone are a legal size that matches the payload, so a reader that decodes original_size into 32 bits accepts this entry; original_size MUST reach the 512 MiB cap comparison at its full wire value",
+      "container_hex": "c1029300cf0000000100000011c41182a36167651ea46e616d65a5616c696365",
       "error": "original_size exceeds max uncompressed size"
     },
     {

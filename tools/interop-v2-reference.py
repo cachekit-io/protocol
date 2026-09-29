@@ -301,8 +301,21 @@ class _Reader:
             raise V2Error(f"{len(self.buf) - self.pos} trailing byte(s) after container body")
 
 
-def decode_container(data: bytes) -> bytes:
-    """Normative reader algorithm steps 2-5: container bytes -> plain value bytes."""
+U32 = 1 << 32
+
+
+class _U32Reader(_Reader):
+    """NON-conforming: keeps only the low 32 bits of each int (a uint32 destination)."""
+
+    def read_uint(self) -> int:
+        return super().read_uint() % U32
+
+
+def decode_container(data: bytes, reader: type[_Reader] = _Reader) -> bytes:
+    """Normative reader algorithm steps 2-5: container bytes -> plain value bytes.
+
+    `reader` exists only so _self_check can run a non-conforming one.
+    """
     if len(data) < 2:
         msg = "truncated container (magic + version bytes required)"
         raise V2Error(msg)
@@ -310,7 +323,7 @@ def decode_container(data: bytes) -> bytes:
         raise V2Error("bad container magic (0xC1 expected) — possible interop/v1 value or mode misconfiguration")
     if data[1] != CONTAINER_VERSION:
         raise V2Error(f"unsupported container version 0x{data[1]:02x}")
-    r = _Reader(data[2:])
+    r = reader(data[2:])
     if r.read_array_header() != 3:
         raise V2Error("container body must be a 3-element array")
     method = r.read_uint()
@@ -494,6 +507,17 @@ def _build_reject_vectors(containers: dict[str, dict]) -> list[dict]:
             "error": "original_size exceeds max uncompressed size",
         },
         {
+            "name": "reject_declared_size_wraps_32_bits",
+            "description": (
+                "method 0 container whose original_size is 2^32 + the payload length (uint64 marker). "
+                "The low 32 bits alone are a legal size that matches the payload, so a reader that "
+                "decodes original_size into 32 bits accepts this entry; original_size MUST reach the "
+                "512 MiB cap comparison at its full wire value"
+            ),
+            "container_hex": _hex_container(METHOD_NONE, U32 + len(value_bytes), value_bytes),
+            "error": "original_size exceeds max uncompressed size",
+        },
+        {
             "name": "reject_ratio_bomb",
             "description": "10-byte payload declaring 10001 output bytes — exceeds the 1000:1 ratio (checked BEFORE decompression)",
             "container_hex": _hex_container(METHOD_LZ4_BLOCK, 10_001, bytes(10)),
@@ -587,7 +611,7 @@ def _build() -> dict:
     enc_container_hex = by_name["lz4_roundtrip_compressible"]["container_hex"]
 
     return {
-        "version": "1.0.0",
+        "version": "1.1.0",
         "spec": "spec/interop-v2.md",
         "generator": "tools/interop-v2-reference.py (CPython stdlib, incl. pure-Python LZ4 block codec)",
         "cross_checked_by": "tools/interop-v2-crosscheck.mjs (independent container parser + LZ4 block decoder + WebCrypto HKDF/AES-GCM; zero dependencies)",
@@ -750,6 +774,18 @@ def _self_check(built: dict) -> None:
     # Every structural reject vector must raise.
     for rv in built["reject_vectors"]:
         _expect_structural_reject(rv)
+
+    # Some reject vector must be ACCEPTED by a reader that decodes original_size into
+    # 32 bits. A truncated original_size fails open, and the 1 TiB declared-size bomb
+    # cannot show it: its low 32 bits are 0, so a truncating reader still rejects it.
+    truncation_caught = []
+    for rv in built["reject_vectors"]:
+        try:
+            decode_container(bytes.fromhex(rv["container_hex"]), _U32Reader)
+        except V2Error:
+            continue
+        truncation_caught.append(rv["name"])
+    _require(truncation_caught, "no reject vector is accepted by a reader that truncates original_size to 32 bits")
 
     # AAD pair: v2 differs from v1 exactly in the final component.
     aad = built["aad_vectors"][0]
