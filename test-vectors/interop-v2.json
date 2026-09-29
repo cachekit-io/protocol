@@ -173,8 +173,14 @@
     },
     {
       "name": "reject_declared_size_wraps_32_bits",
-      "description": "method 0 container whose original_size is 2^32 + the payload length (uint64 marker). The low 32 bits alone are a legal size that matches the payload, so a reader that decodes original_size into 32 bits accepts this entry; original_size MUST reach the 512 MiB cap comparison at its full wire value",
+      "description": "method 0 container whose original_size is 2^32 + the payload length (uint64 marker). The low 32 bits alone are a legal size that matches the payload, so a reader that truncates original_size to 32 bits accepts this entry; original_size MUST reach the 512 MiB cap comparison at its full wire value",
       "container_hex": "c1029300cf0000000100000011c41182a36167651ea46e616d65a5616c696365",
+      "error": "original_size exceeds max uncompressed size"
+    },
+    {
+      "name": "reject_declared_size_joins_32_bits",
+      "description": "method 0 container whose original_size is 2^32 + the payload length - 1 (uint64 marker). A reader that joins the two 32-bit halves in 32-bit arithmetic ((hi << 32) | lo or (hi << 32) + lo, where the shift is by 0) reads 1 + (length - 1) = the payload length and accepts this entry",
+      "container_hex": "c1029300cf0000000100000010c41182a36167651ea46e616d65a5616c696365",
       "error": "original_size exceeds max uncompressed size"
     },
     {

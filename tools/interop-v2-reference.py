@@ -37,6 +37,7 @@ import json
 import logging
 import sys
 from pathlib import Path
+from collections.abc import Callable
 from types import ModuleType
 
 _HERE = Path(__file__).resolve().parent
@@ -305,19 +306,32 @@ U32 = 1 << 32
 
 
 SIZE_TRUNCATION_VECTOR = "reject_declared_size_wraps_32_bits"
+SIZE_JOIN_VECTOR = "reject_declared_size_joins_32_bits"
 
 
-class _SizeU32Reader(_Reader):
-    """NON-conforming: keeps only the low 32 bits of original_size (the body's second int)."""
+def _size_mutant(decode_size: Callable[[int], int]) -> type[_Reader]:
+    """A NON-conforming reader that passes only original_size (the body's second int) through decode_size."""
 
-    def __init__(self, buf: bytes) -> None:
-        super().__init__(buf)
-        self._uints_read = 0
+    class _SizeMutant(_Reader):
+        def __init__(self, buf: bytes) -> None:
+            super().__init__(buf)
+            self._uints_read = 0
 
-    def read_uint(self) -> int:
-        self._uints_read += 1
-        value = super().read_uint()
-        return value % U32 if self._uints_read == 2 else value
+        def read_uint(self) -> int:
+            self._uints_read += 1
+            value = super().read_uint()
+            return decode_size(value) if self._uints_read == 2 else value
+
+    return _SizeMutant
+
+
+# name -> (non-conforming original_size decode, the reject vectors it MUST accept, exactly).
+# The joins model a JS reader doing 32-bit arithmetic, where `hi << 32` shifts by 0.
+SIZE_MUTANTS: dict[str, tuple[type[_Reader], list[str]]] = {
+    "truncate to u32": (_size_mutant(lambda v: v % U32), [SIZE_TRUNCATION_VECTOR]),
+    "hi | lo join": (_size_mutant(lambda v: (v >> 32) | (v % U32)), [SIZE_TRUNCATION_VECTOR, SIZE_JOIN_VECTOR]),
+    "hi + lo join": (_size_mutant(lambda v: ((v >> 32) + v) % U32), [SIZE_JOIN_VECTOR]),
+}
 
 
 def decode_container(data: bytes, reader: type[_Reader] = _Reader) -> bytes:
@@ -516,17 +530,25 @@ def _build_reject_vectors(containers: dict[str, dict]) -> list[dict]:
             "error": "original_size exceeds max uncompressed size",
         },
         {
-            # The payload length (17) being odd is load-bearing: a reader that joins the two
-            # 32-bit halves in 32-bit arithmetic (JS `(hi << 32) | lo` shifts by 0) reads
-            # 1 | 17 = 17, so this vector catches that reader too.
             "name": SIZE_TRUNCATION_VECTOR,
             "description": (
                 "method 0 container whose original_size is 2^32 + the payload length (uint64 marker). "
                 "The low 32 bits alone are a legal size that matches the payload, so a reader that "
-                "decodes original_size into 32 bits accepts this entry; original_size MUST reach the "
+                "truncates original_size to 32 bits accepts this entry; original_size MUST reach the "
                 "512 MiB cap comparison at its full wire value"
             ),
             "container_hex": _hex_container(METHOD_NONE, U32 + len(value_bytes), value_bytes),
+            "error": "original_size exceeds max uncompressed size",
+        },
+        {
+            "name": SIZE_JOIN_VECTOR,
+            "description": (
+                "method 0 container whose original_size is 2^32 + the payload length - 1 (uint64 marker). "
+                "A reader that joins the two 32-bit halves in 32-bit arithmetic ((hi << 32) | lo or "
+                "(hi << 32) + lo, where the shift is by 0) reads 1 + (length - 1) = the payload length "
+                "and accepts this entry"
+            ),
+            "container_hex": _hex_container(METHOD_NONE, U32 + len(value_bytes) - 1, value_bytes),
             "error": "original_size exceeds max uncompressed size",
         },
         {
@@ -787,27 +809,18 @@ def _self_check(built: dict) -> None:
     for rv in built["reject_vectors"]:
         _expect_structural_reject(rv)
 
-    # A truncated original_size fails open, and the 1 TiB declared-size bomb cannot show
-    # it: its low 32 bits are 0, so a truncating reader still rejects it. So exactly the
-    # named vector must be ACCEPTED by a reader that truncates only original_size.
-    accepted = []
-    for rv in built["reject_vectors"]:
-        try:
-            decode_container(bytes.fromhex(rv["container_hex"]), _SizeU32Reader)
-        except V2Error:
-            continue
-        accepted.append(rv["name"])
-    _require(
-        accepted == [SIZE_TRUNCATION_VECTOR],
-        f"a reader that truncates original_size to 32 bits must accept exactly {SIZE_TRUNCATION_VECTOR}; it accepted {accepted}",
-    )
-    # ...and a reader that joins the halves as `hi | lo` must read the same low value.
-    size_hex = next(rv["container_hex"] for rv in built["reject_vectors"] if rv["name"] == SIZE_TRUNCATION_VECTOR)
-    size_body = _Reader(bytes.fromhex(size_hex)[2:])
-    size_body.read_array_header()
-    size_body.read_uint()
-    declared = size_body.read_uint()
-    _require((declared >> 32) | (declared % U32) == declared % U32, f"{SIZE_TRUNCATION_VECTOR} no longer catches a hi | lo join")
+    # A 32-bit original_size decode fails open, and the 1 TiB declared-size bomb cannot
+    # show it: its low 32 bits are 0, so such a reader still rejects it. So each reader in
+    # SIZE_MUTANTS must ACCEPT exactly its named reject vectors, proven by execution.
+    for mutant_name, (mutant, expected) in SIZE_MUTANTS.items():
+        accepted = []
+        for rv in built["reject_vectors"]:
+            try:
+                decode_container(bytes.fromhex(rv["container_hex"]), mutant)
+            except V2Error:
+                continue
+            accepted.append(rv["name"])
+        _require(accepted == expected, f"original_size reader '{mutant_name}' must accept exactly {expected}; it accepted {accepted}")
 
     # AAD pair: v2 differs from v1 exactly in the final component.
     aad = built["aad_vectors"][0]

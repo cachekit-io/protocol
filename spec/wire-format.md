@@ -419,14 +419,16 @@ The `MAX_UNCOMPRESSED` comparison MUST be decided on the **full wire value** of
 or into an IEEE-754 binary64 (which rounds only integers above 2⁵³, far past the cap,
 so the comparison is unchanged), or reject it when it does not fit a narrower
 destination type that still holds every value up to the cap (every value that does
-not fit already exceeds it), such as a 32-bit unsigned integer. Any decode that does
-not yield the exact wire value is forbidden: **truncation** to the low-order bits (a
-narrowing cast such as `as u32`, `>>> 0` or `& 0xFFFFFFFF`), **sign
-reinterpretation** (reading a `uint64` as `i64`), or joining the two 32-bit halves
-in 32-bit arithmetic. Unlike the ratio product below, a truncated `original_size`
-fails *open*: a declared `2³² + N` truncates to `N`, which clears the
-`MAX_UNCOMPRESSED` cap and the ratio bound and can match the payload exactly, so the
-entry is accepted where a conforming reader rejects it. Every target language has a
+not fit already exceeds it), such as a 32-bit unsigned integer. Any other decode —
+one that yields neither the exact wire value nor its binary64 rounding — is
+forbidden: **truncation** to the low-order bits (a narrowing cast such as `as u32`,
+`>>> 0` or `& 0xFFFFFFFF`), **sign reinterpretation** (bit-casting a `uint64` into an
+`i64`, so a value ≥ 2⁶³ reads as negative; a checked `i64` decode that rejects such
+values conforms), or joining the two 32-bit halves in 32-bit arithmetic. Unlike the
+ratio product below, truncation, and a 32-bit join that reduces to it, fail *open*:
+a declared `2³² + N` truncates to `N`, which clears the `MAX_UNCOMPRESSED` cap and
+the ratio bound and can match the payload exactly, so the entry is accepted where a
+conforming reader rejects it. Every target language has a
 conforming path: Rust `u64`, or `u32` behind a range-checked decode (`rmp-serde`
 rejects an out-of-range value, whatever its marker width, instead of truncating it);
 Python's `int`; JavaScript `BigInt`, or `Number`.
