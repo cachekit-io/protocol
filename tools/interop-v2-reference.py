@@ -7,6 +7,8 @@ compressed-values profile spec:
   - a pure-Python LZ4 *block* codec (compressor + strict decompressor), so
     vector generation has no third-party dependency
   - the normative reader algorithm, including every Security-Limits bound
+  - a 4.3 MB constructed container that fails a reader computing the ratio
+    product in 32 bits, signed or unsigned (mutation-tested by tools/test_interop_v2_reference.py)
   - v2 AAD construction (compressed = "True", the frozen token)
   - test-vector generator + self-verifier for ../test-vectors/interop-v2.json
 
@@ -60,6 +62,17 @@ v1 = _load_v1()
 MAX_UNCOMPRESSED = 512 * 1024 * 1024
 MAX_COMPRESSED = 512 * 1024 * 1024
 MAX_RATIO = 1000
+# Smallest payload length whose ratio product overflows UNSIGNED 32 bits:
+# ceil(2**32 / 1000) = 4,294,968. Below it a u32 product is exact, so only a
+# vector at least this large catches a u32 reader. A signed 32-bit product
+# already overflows from ceil(2**31 / 1000) = 2,147,484 B; at this length both
+# wrap to the same 704, so one vector catches both.
+RATIO_WRAP_THRESHOLD = -(-(1 << 32) // MAX_RATIO)
+
+
+def ratio_bound_u32_wrapped(payload_len: int) -> int:
+    """The bound an unsigned 32-bit product yields (signed agrees while this is < 2**31, as at the threshold)."""
+    return (MAX_RATIO * payload_len) % (1 << 32)
 
 MAGIC = 0xC1
 CONTAINER_VERSION = 0x02
@@ -335,11 +348,17 @@ SIZE_MUTANTS: dict[str, tuple[type[_Reader], list[str]]] = {
 }
 
 
-def decode_container(data: bytes, reader: type[_Reader] = _Reader) -> bytes:
-    """Normative reader algorithm steps 2-5: container bytes -> plain value bytes.
+def ratio_bound(payload_len: int) -> int:
+    """The method-1 ratio product. Python ints never wrap, so this conforms by construction.
 
-    `reader` exists only so _self_check can run a non-conforming one.
+    A function rather than an inline product so tools/test_interop_v2_reference.py
+    can substitute a 32-bit decoder and show the published vectors catch it.
     """
+    return MAX_RATIO * payload_len
+
+
+def parse_container(data: bytes, reader: type[_Reader] = _Reader) -> tuple[int, int, bytes]:
+    """Container bytes -> (method, original_size, payload), structure only; no bounds applied."""
     if len(data) < 2:
         msg = "truncated container (magic + version bytes required)"
         raise V2Error(msg)
@@ -354,7 +373,15 @@ def decode_container(data: bytes, reader: type[_Reader] = _Reader) -> bytes:
     original_size = r.read_uint()
     payload = r.read_bin()
     r.expect_exhausted()
+    return method, original_size, payload
 
+
+def decode_container(data: bytes, reader: type[_Reader] = _Reader) -> bytes:
+    """Normative reader algorithm steps 2-5: container bytes -> plain value bytes.
+
+    `reader` exists only so _self_check can run a non-conforming one.
+    """
+    method, original_size, payload = parse_container(data, reader)
     if method not in (METHOD_NONE, METHOD_LZ4_BLOCK):
         raise V2Error(f"unknown compression method {method}")
     # Security Limits — all BEFORE any decompression, integer arithmetic only.
@@ -365,12 +392,17 @@ def decode_container(data: bytes, reader: type[_Reader] = _Reader) -> bytes:
     if method == METHOD_LZ4_BLOCK:
         if len(payload) == 0:
             raise V2Error("zero-length compressed payload")
-        if original_size > MAX_RATIO * len(payload):
+        if original_size > ratio_bound(len(payload)):
             raise V2Error("compression ratio exceeds 1000:1 — decompression bomb")
         return lz4_block_decompress(payload, original_size)
     if original_size != len(payload):
         raise V2Error(f"method 0 original_size {original_size} != payload length {len(payload)}")
     return payload
+
+
+def construct(segments: list[dict]) -> bytes:
+    """Bytes of a `*_construction` field: each segment's hex repeated `count` times, in order."""
+    return b"".join(bytes.fromhex(seg["hex"]) * seg["count"] for seg in segments)
 
 
 # ---------------------------------------------------------------------------
@@ -437,6 +469,60 @@ CONTAINER_VECTOR_DEFS: list[dict] = [
         "method": METHOD_LZ4_BLOCK,
     },
 ]
+
+
+def _build_wrap_threshold_vector() -> dict:
+    """method-1 container whose payload is exactly RATIO_WRAP_THRESHOLD bytes long.
+
+    A real LZ4 block of that length cannot decompress to a few hundred bytes, so the
+    vector is a literals-only block carrying a bin32 of zeros. Its original_size is
+    ~0.996 x payload_len: far inside the 1000:1 bound, and far above the 704 B a
+    32-bit product yields. 8.6 MB of hex is not shippable, hence the `*_construction` segment lists.
+    """
+    payload_len = RATIO_WRAP_THRESHOLD
+    # Literals-only block: token 0xF0, then the literal length as 255-runs plus a
+    # final byte < 255, then the literals: 1 + (ext + 1) + (15 + 255*ext + last).
+    ext, last = divmod(payload_len - 17, 256)
+    _require(last < 255, "literals-only block cannot hit this payload length exactly")
+    original_size = 15 + 255 * ext + last
+    value_header = b"\xc6" + (original_size - 5).to_bytes(4, "big")  # bin32 of zeros
+    value_construction = [
+        {"hex": value_header.hex(), "count": 1},
+        {"hex": "00", "count": original_size - len(value_header)},
+    ]
+    value = construct(value_construction)
+    _require(value == v1.encode_canonical(bytes(original_size - 5)), "value is not a canonical bin32")
+
+    head = encode_container(METHOD_LZ4_BLOCK, original_size, b"")[:-2]  # drop the empty bin8 (c4 00)
+    container_construction = [
+        # canonical container head: uint32 original_size, bin32 payload length, then LZ4 token
+        {"hex": (head + b"\xc6" + payload_len.to_bytes(4, "big") + b"\xf0").hex(), "count": 1},
+        {"hex": "ff", "count": ext},
+        {"hex": (bytes([last]) + value_header).hex(), "count": 1},
+        value_construction[1],
+    ]
+    container = construct(container_construction)
+    payload = container[-payload_len:]
+    _require(container == encode_container(METHOD_LZ4_BLOCK, original_size, payload), "construction is not canonical")
+    _require(lz4_block_decompress(payload, original_size) == value, "payload does not decompress to the value")
+    return {
+        "name": "lz4_ratio_product_wraps_32_bits",
+        "description": (
+            f"method 1 container whose payload is {payload_len} B = ceil(2^32/1000), the first length at "
+            "which 1000 * payload_len overflows unsigned 32 bits. original_size is well inside the 1000:1 "
+            "bound, so readers MUST accept it and decode it to the constructed value. A reader that computes "
+            f"the product in 32-bit width gets {ratio_bound_u32_wrapped(payload_len)} instead (signed or "
+            "unsigned wrap alike) and rejects it as a ratio bomb; so does one that rejects on 32-bit overflow. "
+            "An implementation that supports a 32-bit target MUST pass this vector on that target: a "
+            "pointer-width product passes it on a 64-bit host. Run it at the spec's limits, never a deployment's stricter value-size ceiling."
+        ),
+        "method": METHOD_LZ4_BLOCK,
+        "original_size": original_size,
+        "payload_len": payload_len,
+        "container_len": len(container),
+        "container_construction": container_construction,
+        "value_construction": value_construction,
+    }
 
 
 def _hex_container(method: int, original_size: int, payload: bytes) -> str:
@@ -646,7 +732,7 @@ def _build() -> dict:
     enc_container_hex = by_name["lz4_roundtrip_compressible"]["container_hex"]
 
     return {
-        "version": "1.1.0",
+        "version": "1.2.0",
         "spec": "spec/interop-v2.md",
         "generator": "tools/interop-v2-reference.py (CPython stdlib, incl. pure-Python LZ4 block codec)",
         "cross_checked_by": "tools/interop-v2-crosscheck.mjs (independent container parser + LZ4 block decoder + WebCrypto HKDF/AES-GCM; zero dependencies)",
@@ -667,6 +753,12 @@ def _build() -> dict:
             "note, not a normative message."
         ),
         "container_vectors": container_vectors,
+        "construction_note": (
+            "constructed_* vectors are too large to pin as hex. Build the bytes of each "
+            "*_construction field by concatenating bytes.fromhex(segment.hex) repeated "
+            "segment.count times, in order."
+        ),
+        "constructed_container_vectors": [_build_wrap_threshold_vector()],
         "aad_vectors": [
             {
                 "name": "interop_v2_aad",
@@ -775,6 +867,34 @@ def _self_check(built: dict) -> None:
         got = decode_container(bytes.fromhex(cv["container_hex"]))
         _require(got.hex() == cv["value_msgpack_hex"], f"container {cv['name']} does not decode to its value bytes")
 
+    # Constructed containers: readers MUST accept them. At least one has to be
+    # beyond the 32-bit wrap threshold with an original_size above the wrapped bound,
+    # or the suite passes a reader that multiplies in 32 bits (it did, before 1.1.0).
+    # Measured from the parsed bytes, never the declared fields, which could lie.
+    discriminating = []
+    for cv in built["constructed_container_vectors"]:
+        container = construct(cv["container_construction"])
+        _require(len(container) == cv["container_len"], f"constructed {cv['name']}: container_len mismatch")
+        method, original_size, payload = parse_container(container)
+        _require(
+            (method, original_size, len(payload)) == (cv["method"], cv["original_size"], cv["payload_len"]),
+            f"constructed {cv['name']}: declared method/original_size/payload_len disagree with its bytes",
+        )
+        try:
+            got = decode_container(container)
+        except V2Error as e:
+            msg = f"constructed vector {cv['name']} rejected: {e}"
+            raise SelfCheckError(msg) from e
+        _require(got == construct(cv["value_construction"]), f"constructed {cv['name']} does not decode to its value")
+        # method 1 only: method 0 never evaluates the ratio bound, so a method-0 container
+        # of any size passes a 32-bit reader and proves nothing.
+        discriminating.append(
+            method == METHOD_LZ4_BLOCK
+            and len(payload) >= RATIO_WRAP_THRESHOLD
+            and original_size > ratio_bound_u32_wrapped(len(payload))
+        )
+    _require(any(discriminating), "no constructed vector fails a reader that computes the ratio product in 32 bits")
+
     by_name = {c["name"]: c for c in built["container_vectors"]}
     # The inherited-value-profile claim: identical inner bytes across the two wraps,
     # AND byte-identical to the PUBLISHED v1 value vector in interop-mode.json —
@@ -849,6 +969,12 @@ def _self_check(built: dict) -> None:
             lz4.block.decompress(pinned, uncompressed_size=lz4_cv["original_size"]).hex() == lz4_cv["value_msgpack_hex"],
             "lz4.block does not decompress the pinned payload to the pinned value bytes",
         )
+        for cv in (c for c in built["constructed_container_vectors"] if c["method"] == METHOD_LZ4_BLOCK):
+            payload = construct(cv["container_construction"])[-cv["payload_len"] :]
+            _require(
+                lz4.block.decompress(payload, uncompressed_size=cv["original_size"]) == construct(cv["value_construction"]),
+                f"lz4.block does not decompress constructed {cv['name']} to its value",
+            )
 
     # Optional: AES-GCM seal + both cross-mode AAD rejections.
     try:
@@ -894,7 +1020,8 @@ def main() -> int:
     _self_check(built)
 
     counts = (
-        f"{len(built['container_vectors'])} container, {len(built['aad_vectors'])} AAD, "
+        f"{len(built['container_vectors'])} container, "
+        f"{len(built['constructed_container_vectors'])} constructed container, {len(built['aad_vectors'])} AAD, "
         f"{len(built['encryption_vectors'])} encryption, {len(built['reject_vectors'])} reject, "
         f"{len(built['crypto_reject_vectors'])} crypto-reject vectors"
     )
