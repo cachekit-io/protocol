@@ -17,6 +17,7 @@
 - [Overview](#overview)
 - [Authentication](#authentication)
 - [Content Type](#content-type)
+- [Cache-Key Path Encoding](#cache-key-path-encoding)
 - [Cache Endpoints](#cache-endpoints)
 - [Stale-While-Revalidate](#stale-while-revalidate)
 - [Lock Endpoints](#lock-endpoints)
@@ -78,6 +79,33 @@ Content-Type: application/octet-stream
 
 > [!WARNING]
 > **Discrepancy with RFC** — The RFC (Section 6.1) describes a JSON-based API with base64-encoded values and `Content-Type: application/json`. The actual implementation uses **raw binary** `application/octet-stream` for cache values. The RFC also uses `POST` for writes; the implementation uses `PUT`. **The implementation is authoritative.**
+
+---
+
+## Cache-Key Path Encoding
+
+Every endpoint below carries the cache key as a path segment — `/v1/cache/{key}`, `/v1/cache/{key}/ttl`, `/v1/cache/{key}/lock`. The key is caller-controlled (each SDK's `key=` escape hatch accepts an arbitrary string), so how it is placed in the path is a security boundary, not a formatting detail: an unencoded key can escape `/v1/cache/` and deliver the bearer token to a different route (CWE-22 — cachekit-py shipped exactly that until [cachekit-py#279](https://github.com/cachekit-io/cachekit-py/pull/279)). MUST, MUST NOT, SHOULD and MAY are used as in RFC 2119.
+
+### Encoding rules
+
+**1. One segment, percent-encoded.** `{key}` MUST be exactly one path segment. Clients MUST percent-encode the key's UTF-8 bytes (RFC 3986 §2.1) so that only unreserved characters — `ALPHA / DIGIT / "-" / "." / "_" / "~"` — appear raw, and MUST NOT percent-encode an unreserved character (RFC 3986 §2.3): `.` is sent as `.`, never `%2E`. Every other byte MUST be sent as `%HH` — the delimiters `/ ? # %`, `:` (a canonical key carries six), space (`%20`, never `+`), every byte ≥ `0x80` — with one tolerance: the sub-delims `! * ' ( )` MAY be left raw as a set, all five raw (the `encodeURIComponent` form) or all five encoded, never a mix (rule 4). Hex digits SHOULD be uppercase (RFC 3986 §2.1); the server decodes either case. Reference encoders: Python `urllib.parse.quote(key, safe="")`, Rust `urlencoding::encode`, JavaScript `encodeURIComponent`.
+
+**2. Reserved segments MUST be rejected client-side.** A key of exactly `.` or `..` survives rule 1 unchanged (`.` is unreserved) and is a *dot segment*: URL parsers remove it before routing — `/v1/cache/..` becomes `/v1/`, `/v1/cache/../ttl` becomes `/v1/ttl` — so the request lands on a different route, still carrying `Authorization`, and never reaches the key validator. Percent-encoding the dots does not help. The server parses the request URL under the WHATWG URL Standard, which treats an ASCII-case-insensitive `%2e` as a single-dot segment and `%2e%2e`, `.%2e`, `%2e.` as double-dot segments (URL Standard §4.1), so `%2E%2E` is collapsed *server-side* even when the client's own parser (RFC 3986 §5.2.4, e.g. `httpx`) sent it intact; WHATWG clients (`fetch`/undici, browsers, the Workers runtime, rust-url and therefore `reqwest`) collapse it before sending. **No wire form of a `.` or `..` key reaches the validator from any client.** The literal segments `health`, `ttl` and `lock` are route tokens at this level — `/v1/cache/health` is the health endpoint, and a final `ttl` or `lock` segment selects the sub-resource — so a key equal to one of those words is routed elsewhere or read as an empty key.
+
+Therefore clients MUST reject a key that is exactly `.`, `..`, `health`, `ttl` or `lock` before building the URL, surfacing a client-side error; servers MUST NOT be relied on to compensate. Under rule 1 each of these keys encodes to itself, so checking the key and checking its encoding are the same test. Only an *entirely*-dot segment is a dot segment: `a:..`, `..a`, `x..y` are inert and MUST be sent per rule 1 with their dots raw. Canonical and interop keys always contain `:` and never meet this rule. Because every conformant client hard-codes this reserved set, servers MUST NOT add a route under `/v1/cache/` beyond `{key}`, `{key}/ttl`, `{key}/lock` and `health` without a protocol version bump.
+
+Conformance tests MUST assert that every `reject: true` vector raises before a URL is built. They MUST assert every transmittable vector on the *parsed* request path (`new URL(u).pathname`, `Url::parse(u)?.path()`, `httpx.Request.url.raw_path`), not on the un-parsed template string — a template-string test passes while the traversal ships.
+
+**3. The server decodes exactly once.** After the WHATWG parse of rule 2, the server splits the path on raw `/`, then percent-decodes the key segment once (`decodeURIComponent`-equivalent; a malformed escape is `400 Bad Request`) and validates the *decoded* key against the key format's [Server-Side Requirements](cache-key-format.md#server-side-requirements): a key failing the Length, Charset, Traversal or Namespace check is `400 Bad Request`; a write-space or namespace-grant violation is `403 Forbidden` ([Authentication](#authentication)). Consequences clients MUST honour:
+
+- Clients MUST NOT double-encode. A literal `%` in a key is sent as `%25` once; `%2525` decodes to `%25`, a different key.
+- An encoded `%2F` never becomes a segment boundary: the split on raw `/` happens *before* decoding, so `a%2Fb` reaches the validator as `a/b` and is rejected by the charset rule. A conformant client can neither traverse nor store a key containing `/`.
+
+**4. Interop is defined on the decoded key.** `encodeURIComponent` leaves the sub-delims `! * ' ( )` raw (legal `pchar` in a path segment; they decode to themselves); `quote(safe="")` and `urlencoding::encode` emit `%21 %2A %27 %28 %29`. Both forms are conformant because the server-side key is identical after the single decode. Cross-SDK key equality is therefore a property of the **decoded** key, not of the wire bytes in general — but every key the server accepts is drawn from `[A-Za-z0-9_.:-]`, on which all three reference encoders agree (`:` → `%3A`, the rest raw). Every canonical auto-mode key and every [interop-mode](interop-mode.md) key is thus byte-identical on the wire across SDKs; the variance set only ever appears in keys the server rejects.
+
+### Test vectors
+
+[`test-vectors/path-encoding.json`](../test-vectors/path-encoding.json) pins these rules as `key → encoded → decoded` rows; its `contract` field defines the row semantics and travels with every vendored copy.
 
 ---
 
