@@ -248,7 +248,9 @@ reject if original_size > MAX_UNCOMPRESSED          // 512 MiB
 reject if payload.length > MAX_COMPRESSED           // 512 MiB
 if method == 1:
     reject if payload.length == 0                   // zero-length compressed = bomb
-    max_allowed = 1000 * uint64(payload.length)     // widen BEFORE multiplying; see below
+    // BEGIN shared-block: ratio-product-pseudocode
+    max_allowed = MAX_COMPRESSION_RATIO * uint64(payload.length)  // 1000; widen BEFORE multiplying
+    // END shared-block: ratio-product-pseudocode
     reject if original_size > max_allowed
 if method == 0:
     reject if original_size != payload.length
@@ -256,18 +258,19 @@ if method == 0:
 
 <!-- BEGIN shared-block: ratio-product-rule (guarded by tools/check-spec-duplication.py) -->
 The ratio product MUST be computed in **at least 64-bit unsigned integers**:
-promote `payload.length` to a ≥ 64-bit unsigned (or arbitrary-precision) integer *before*
-the multiply. Multiplying in pointer width and widening the result afterwards
-does not satisfy this, and is invisible on a 64-bit host and in 64-bit CI — it
-is the wasm32 defect described below. Every target language has a conforming
-path: Rust `u64` (on every target, `wasm32` included), Python's
-arbitrary-precision `int`, and JavaScript `Number` — an IEEE-754 double
-represents every integer below 2⁵³ exactly and this product is < 2³⁹, so no
-`BigInt` is required. Because `payload.length` ≤ 2²⁹ once the two 512 MiB caps have
-passed, the product is < 2³⁹ and cannot overflow 64 bits; that is why the
+promote `payload.length` to a ≥ 64-bit unsigned or arbitrary-precision integer, or to an
+IEEE-754 binary64 in which the operand and the product are exact integers
+(< 2⁵³), *before* the multiply. Multiplying in pointer width and widening the
+result afterwards does not satisfy this, and is invisible on a 64-bit host and in
+64-bit CI — it is the failure a 32-bit target such as `wasm32` would exhibit.
+Every target language has a conforming path: Rust `u64` (on every target,
+`wasm32` included), Python's arbitrary-precision `int`, and JavaScript `Number` —
+an IEEE-754 double represents every integer below 2⁵³ exactly and this product is
+< 2³⁹, so no `BigInt` is required. Because `payload.length` ≤ 2²⁹ once the two 512 MiB caps
+have passed, the product is < 2³⁹ and cannot overflow 64 bits; that is why the
 pseudocode above carries no overflow branch, and why rejecting on overflow is
-**not** a substitute for widening — at 32-bit width it would refuse 99.2 % of
-the legal `payload.length` range (see the note below).
+**not** a substitute for widening — at 32-bit width it would refuse the 99.2 % of
+the legal `payload.length` range that lies above the wrap threshold given in the note below.
 
 The bound MUST be computed by **multiplication**. Deriving it by division, or
 as a *ratio*, is forbidden in any arithmetic — integer or floating-point.
@@ -278,33 +281,20 @@ floating-point ratio is the precision bypass the integer rule exists to prevent.
 > [!NOTE]
 > **Non-normative rationale — the *ratio product's* failure direction under
 > pointer-width arithmetic is fail-closed, never a bypass.** (This covers the
-> product only. The width of `original_size` itself is a separate obligation
-> not bound by this rule.) 32-bit pointer width is a live
-> target: cachekit-ts ships a `wasm32` build. (That build is *not* affected — it
-> computes this bound through `cachekit-core`'s `u64`.) Wrapping begins at
-> `payload.length ≥ ⌈2³²/1000⌉ = 4,294,968` B (~4.29 MB), and it can only ever *tighten*
-> the bound: for any product `p ≥ 2³²`, `wrapped(p) = p mod 2³² < 2³² ≤ p`,
+> product only, and assumes `original_size` was decoded without truncation, so
+> the `MAX_UNCOMPRESSED` check above applied to its full wire value.) 32-bit
+> pointer width is a live target: cachekit-ts ships a `wasm32` build. Wrapping
+> begins at `payload.length ≥ ⌈2³²/1000⌉ = 4,294,968` B (~4.29 MB), and it can only ever
+> *tighten* the bound: for any product `p ≥ 2³²`, `wrapped(p) = p mod 2³² < 2³² ≤ p`,
 > while `original_size` (≤ 512 MiB < 2³²) cannot itself wrap, so the direction
 > of the comparison is preserved. The failure mode is therefore **spurious
 > rejection**, not a bomb bypass — but a hard error rather than a cache miss,
-> and a permanent one: the wrapped bound is a pure function of
-> `payload.length`, so an affected entry fails identically on every read. It
-> does not bite everywhere — only where the wrapped bound falls below the
-> 512 MiB cap, a density of `2²⁹/2³² = 1/8` over the legal range — but where it
-> does, the collapse is near-total: 704 B at that first threshold, 8 B at
-> `payload.length = 115,964,117` (the wrapped bound only ever lands on
-> multiples of `gcd(1000, 2³²) = 8`), and 0 at the 512 MiB cap. Those payloads
-> are legal under this specification; an implementation that refuses them is
-> non-conforming. So is one that rejects on overflow instead of widening: that
-> refuses the entire 99.2 % of the legal range above the same threshold, and it
-> is unnecessary besides — once the two size caps have passed, the product is
-> < 2³⁹ and cannot overflow 64 bits at all.
+> and a permanent one: the wrapped bound is a pure function of `payload.length`, so an
+> affected entry fails identically on every read. It bites only where the
+> wrapped bound falls below the 512 MiB cap, and there it can collapse to almost
+> nothing: 704 B at the first wrap threshold, 0 at the 512 MiB cap. Those payloads are legal under
+> this specification; an implementation that refuses them is non-conforming.
 <!-- END shared-block: ratio-product-rule -->
-
-*An earlier revision of this section claimed 32-bit wrapping would corrupt the
-bound "in both directions". It cannot: wrapping is fail-closed, as derived above.
-Recorded because the mis-stated failure direction, not the bound, was the part an
-implementer would have acted on — a believed bypass mis-prioritises the fix.*
 
 After `method 1` decompression, the output length MUST equal `original_size`
 exactly — shorter or longer output is a hard error (the

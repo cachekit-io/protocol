@@ -39,37 +39,71 @@ def edit(rel: str, old: str, new: str, *, once: bool = True) -> Callable[[Path],
     return mutate
 
 
-# (name, mutate(root) -> None, expected_exit)
-CASES: list[tuple[str, Callable[[Path], None], int]] = [
-    ("unmodified tree", lambda _: None, 0),
+def empty_block(rel: str, block_id: str) -> Callable[[Path], None]:
+    """Delete every line strictly between the block's two sentinel lines."""
+
+    def mutate(root: Path) -> None:
+        path = root / rel
+        lines = path.read_text(encoding="utf-8").splitlines(keepends=True)
+        begin = next(i for i, ln in enumerate(lines) if f"BEGIN shared-block: {block_id}" in ln)
+        end = next(i for i, ln in enumerate(lines) if f"END shared-block: {block_id}" in ln)
+        path.write_text("".join(lines[: begin + 1] + lines[end:]), encoding="utf-8")
+
+    return mutate
+
+
+def swap_sentinels(rel: str, block_id: str) -> Callable[[Path], None]:
+    def mutate(root: Path) -> None:
+        path = root / rel
+        text = path.read_text(encoding="utf-8")
+        begin, end = f"BEGIN shared-block: {block_id}", f"END shared-block: {block_id}"
+        text = text.replace(begin, "\0").replace(end, begin).replace("\0", end)
+        path.write_text(text, encoding="utf-8")
+
+    return mutate
+
+
+RULE = "ratio-product-rule"
+PSEUDO = "ratio-product-pseudocode"
+DRIFT = "differs between"
+
+# (name, mutate(root) -> None, expected exit, substring the output MUST contain)
+# The substring pins WHICH branch fired: a case that exits 1 through the wrong
+# branch would otherwise pass while the branch it names is dead code.
+CASES: list[tuple[str, Callable[[Path], None], int, str]] = [
+    ("unmodified tree", lambda _: None, 0, "OK — 2 shared block(s)"),
     # --- must be CAUGHT (exit 1) ---
     (
         "one copy weakened to 32-bit (the LAB-2594 bug, re-armed)",
         edit(INTEROP, "at least 64-bit unsigned integers", "at least 32-bit unsigned integers"),
         1,
+        DRIFT,
     ),
-    (
-        "MUST downgraded to SHOULD in one copy",
-        edit(WIRE, MUST, MUST.replace("MUST", "SHOULD")),
-        1,
-    ),
+    ("MUST downgraded to SHOULD in one copy", edit(WIRE, MUST, MUST.replace("MUST", "SHOULD")), 1, DRIFT),
     (
         "sentence deleted from one copy",
-        edit(
-            INTEROP,
-            "The bound MUST be computed by **multiplication**.",
-            "",
-        ),
+        edit(INTEROP, "The bound MUST be computed by **multiplication**.", ""),
         1,
+        DRIFT,
     ),
-    ("BEGIN sentinel removed", edit(WIRE, "<!-- BEGIN shared-block:", "<!-- x "), 1),
-    ("END sentinel removed", edit(INTEROP, "<!-- END shared-block:", "<!-- x "), 1),
+    (
+        "pseudocode widening reverted in one copy",
+        edit(WIRE, "uint64(compressed_size)", "compressed_size"),
+        1,
+        f"shared-block '{PSEUDO}' differs",
+    ),
+    ("BEGIN sentinel removed", edit(WIRE, f"BEGIN shared-block: {RULE}", "x"), 1, "exactly 1 BEGIN sentinel"),
+    ("END sentinel removed", edit(INTEROP, f"END shared-block: {RULE}", "x"), 1, "exactly 1 END sentinel"),
+    ("END sentinel moved before BEGIN", swap_sentinels(WIRE, RULE), 1, "END sentinel precedes BEGIN"),
+    ("whole block emptied in one copy", empty_block(WIRE, RULE), 1, "block is empty"),
+    ("pseudocode block emptied in one copy", empty_block(INTEROP, PSEUDO), 1, "block is empty"),
     (
         # A global rename empties the operand out of the block, so the
         # normalisation has nothing to key on and MUST NOT be trusted.
         "operand renamed away so normalisation would key on nothing",
         edit(WIRE, "compressed_size", "csize", once=False),
         1,
+        "never mentions its operand",
     ),
     (
         # A single in-block rename leaves the operand present but the prose
@@ -77,12 +111,12 @@ CASES: list[tuple[str, Callable[[Path], None], int]] = [
         "operand renamed at one site inside the block",
         edit(WIRE, "promote `compressed_size` to", "promote `csize` to"),
         1,
+        DRIFT,
     ),
-    ("whole block emptied in one copy", edit(WIRE, MUST, ""), 1),
 ]
 
 
-def run_case(name: str, mutate: Callable[[Path], None], expected: int) -> bool:
+def run_case(name: str, mutate: Callable[[Path], None], expected: int, needle: str) -> bool:
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp) / "repo"
         (root / "spec").mkdir(parents=True)
@@ -94,11 +128,12 @@ def run_case(name: str, mutate: Callable[[Path], None], expected: int) -> bool:
             capture_output=True,
             text=True,
         )
-    if proc.returncode == expected:
+    output = proc.stdout + proc.stderr
+    if proc.returncode == expected and needle in output:
         print(f"  ok   {name} (exit {proc.returncode})")
         return True
     print(
-        f"  FAIL {name}: expected exit {expected}, got {proc.returncode}\n"
+        f"  FAIL {name}: expected exit {expected} with {needle!r}, got {proc.returncode}\n"
         f"       stdout: {proc.stdout.strip()}\n"
         f"       stderr: {proc.stderr.strip()[:300]}"
     )

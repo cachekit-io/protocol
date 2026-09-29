@@ -390,9 +390,10 @@ let checksum: [u8; 8] = xxh3_64(&original_data).to_be_bytes();
 
 ### Decompression Bomb Detection
 
-All three limits above are enforced here, and the step order is normative —
-the ratio check relies on both size caps having already passed. The check uses
-**integer-valued arithmetic** and never a floating-point *ratio*:
+All three limits above are enforced here. Both size caps MUST be checked before
+the ratio product, which relies on them; their relative order is not
+significant. The check uses **integer-valued arithmetic** and never a
+floating-point *ratio*:
 
 ```text
 if original_size > MAX_UNCOMPRESSED:
@@ -404,9 +405,9 @@ if compressed_size > MAX_COMPRESSED:
 if compressed_size == 0:
     REJECT  // Zero-length compressed with non-zero original = bomb
 
-// MAX_COMPRESSION_RATIO = 1000. Widen compressed_size to >= 64-bit unsigned
-// BEFORE multiplying (see below); the two caps above bound the product < 2^39.
-max_allowed = MAX_COMPRESSION_RATIO * uint64(compressed_size)
+// BEGIN shared-block: ratio-product-pseudocode
+max_allowed = MAX_COMPRESSION_RATIO * uint64(compressed_size)  // 1000; widen BEFORE multiplying
+// END shared-block: ratio-product-pseudocode
 
 if original_size > max_allowed:
     REJECT  // Ratio exceeded
@@ -414,18 +415,19 @@ if original_size > max_allowed:
 
 <!-- BEGIN shared-block: ratio-product-rule (guarded by tools/check-spec-duplication.py) -->
 The ratio product MUST be computed in **at least 64-bit unsigned integers**:
-promote `compressed_size` to a ≥ 64-bit unsigned (or arbitrary-precision) integer *before*
-the multiply. Multiplying in pointer width and widening the result afterwards
-does not satisfy this, and is invisible on a 64-bit host and in 64-bit CI — it
-is the wasm32 defect described below. Every target language has a conforming
-path: Rust `u64` (on every target, `wasm32` included), Python's
-arbitrary-precision `int`, and JavaScript `Number` — an IEEE-754 double
-represents every integer below 2⁵³ exactly and this product is < 2³⁹, so no
-`BigInt` is required. Because `compressed_size` ≤ 2²⁹ once the two 512 MiB caps have
-passed, the product is < 2³⁹ and cannot overflow 64 bits; that is why the
+promote `compressed_size` to a ≥ 64-bit unsigned or arbitrary-precision integer, or to an
+IEEE-754 binary64 in which the operand and the product are exact integers
+(< 2⁵³), *before* the multiply. Multiplying in pointer width and widening the
+result afterwards does not satisfy this, and is invisible on a 64-bit host and in
+64-bit CI — it is the failure a 32-bit target such as `wasm32` would exhibit.
+Every target language has a conforming path: Rust `u64` (on every target,
+`wasm32` included), Python's arbitrary-precision `int`, and JavaScript `Number` —
+an IEEE-754 double represents every integer below 2⁵³ exactly and this product is
+< 2³⁹, so no `BigInt` is required. Because `compressed_size` ≤ 2²⁹ once the two 512 MiB caps
+have passed, the product is < 2³⁹ and cannot overflow 64 bits; that is why the
 pseudocode above carries no overflow branch, and why rejecting on overflow is
-**not** a substitute for widening — at 32-bit width it would refuse 99.2 % of
-the legal `compressed_size` range (see the note below).
+**not** a substitute for widening — at 32-bit width it would refuse the 99.2 % of
+the legal `compressed_size` range that lies above the wrap threshold given in the note below.
 
 The bound MUST be computed by **multiplication**. Deriving it by division, or
 as a *ratio*, is forbidden in any arithmetic — integer or floating-point.
@@ -436,27 +438,19 @@ floating-point ratio is the precision bypass the integer rule exists to prevent.
 > [!NOTE]
 > **Non-normative rationale — the *ratio product's* failure direction under
 > pointer-width arithmetic is fail-closed, never a bypass.** (This covers the
-> product only. The width of `original_size` itself is a separate obligation
-> not bound by this rule.) 32-bit pointer width is a live
-> target: cachekit-ts ships a `wasm32` build. (That build is *not* affected — it
-> computes this bound through `cachekit-core`'s `u64`.) Wrapping begins at
-> `compressed_size ≥ ⌈2³²/1000⌉ = 4,294,968` B (~4.29 MB), and it can only ever *tighten*
-> the bound: for any product `p ≥ 2³²`, `wrapped(p) = p mod 2³² < 2³² ≤ p`,
+> product only, and assumes `original_size` was decoded without truncation, so
+> the `MAX_UNCOMPRESSED` check above applied to its full wire value.) 32-bit
+> pointer width is a live target: cachekit-ts ships a `wasm32` build. Wrapping
+> begins at `compressed_size ≥ ⌈2³²/1000⌉ = 4,294,968` B (~4.29 MB), and it can only ever
+> *tighten* the bound: for any product `p ≥ 2³²`, `wrapped(p) = p mod 2³² < 2³² ≤ p`,
 > while `original_size` (≤ 512 MiB < 2³²) cannot itself wrap, so the direction
 > of the comparison is preserved. The failure mode is therefore **spurious
 > rejection**, not a bomb bypass — but a hard error rather than a cache miss,
-> and a permanent one: the wrapped bound is a pure function of
-> `compressed_size`, so an affected entry fails identically on every read. It
-> does not bite everywhere — only where the wrapped bound falls below the
-> 512 MiB cap, a density of `2²⁹/2³² = 1/8` over the legal range — but where it
-> does, the collapse is near-total: 704 B at that first threshold, 8 B at
-> `compressed_size = 115,964,117` (the wrapped bound only ever lands on
-> multiples of `gcd(1000, 2³²) = 8`), and 0 at the 512 MiB cap. Those payloads
-> are legal under this specification; an implementation that refuses them is
-> non-conforming. So is one that rejects on overflow instead of widening: that
-> refuses the entire 99.2 % of the legal range above the same threshold, and it
-> is unnecessary besides — once the two size caps have passed, the product is
-> < 2³⁹ and cannot overflow 64 bits at all.
+> and a permanent one: the wrapped bound is a pure function of `compressed_size`, so an
+> affected entry fails identically on every read. It bites only where the
+> wrapped bound falls below the 512 MiB cap, and there it can collapse to almost
+> nothing: 704 B at the first wrap threshold, 0 at the 512 MiB cap. Those payloads are legal under
+> this specification; an implementation that refuses them is non-conforming.
 <!-- END shared-block: ratio-product-rule -->
 
 ---
