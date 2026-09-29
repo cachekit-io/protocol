@@ -30,11 +30,13 @@ jobs:
           # Mutation suite first, same doctrine as the version-floor guard below:
           # prove the fail-closed guards still fail before trusting the verify.
           python3 tools/test_wire_format_reference.py
+          python3 tools/test_decode_bounds_reference.py
           python3 tools/interop-reference.py verify
           python3 tools/interop-v2-reference.py verify
           python3 tools/test_encryption_verify.py
           python3 tools/encryption-verify.py
           python3 tools/wire-format-reference.py verify
+          python3 tools/decode-bounds-reference.py verify
 
       - name: Python reference verify (optional deps — AES-GCM seal + msgpack third-encoder + lz4 C-implementation conformance)
         run: |
@@ -44,6 +46,7 @@ jobs:
           python3 tools/test_encryption_verify.py
           python3 tools/encryption-verify.py --require-seal
           python3 tools/wire-format-reference.py verify --require-extras
+          python3 tools/decode-bounds-reference.py verify --require-extras
 
       - name: JS cross-check (independent encoder + @noble/hashes + WebCrypto)
         run: |
@@ -55,13 +58,20 @@ jobs:
         run: node tools/interop-v2-crosscheck.mjs
 
       - name: Python-frame verify (stdlib only)
-        run: python3 tools/python-frame-reference.py verify
+        run: |
+          python3 tools/test_python_frame_reference.py
+          python3 tools/python-frame-reference.py verify
 
       - name: File-backend format verify (stdlib only)
         run: python3 tools/file-backend-reference.py
 
+      # LAB-1202: the mutation suite runs first so the lz4 allocation guard
+      # cannot silently degrade to reporting OK (same rule as the version-floors
+      # suite below).
       - name: Python-frame JS cross-check (zero-dep independent reader, full round-trip)
-        run: node tools/frame-crosscheck.mjs
+        run: |
+          node tools/test-frame-crosscheck-guard.mjs
+          node tools/frame-crosscheck.mjs
 
       # Narrow on purpose: catches one facet of ONE of the six matrix incidents
       # listed in decisions/matrix-version-verification.md — a version in the SDK
@@ -72,3 +82,29 @@ jobs:
         run: |
           python3 tools/test_check_version_floors.py
           python3 tools/check-version-floors.py
+
+      # Includes a dry run of the next release against the real CHANGELOG.md and
+      # changelog.d/, so a fragment or marker that would break it fails here first.
+      - name: Changelog collect (stdlib only)
+        run: python3 tools/test_changelog_collect.py
+
+  # Every PR that added its entry under the shared `## [Unreleased]` heading
+  # conflicted with every other open PR that did the same. Entries go in
+  # changelog.d/ (one file each); only a release/* branch rewrites CHANGELOG.md.
+  changelog-fragments:
+    name: CHANGELOG.md is edited only by releases
+    if: github.event_name == 'pull_request' && !startsWith(github.head_ref, 'release/')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          fetch-depth: 2
+          persist-credentials: false
+
+      - name: Changelog entries are fragments in changelog.d/
+        run: |
+          # HEAD is GitHub's test merge of the PR into its base, so HEAD^1 is the base tip.
+          if ! git diff --quiet HEAD^1 HEAD -- CHANGELOG.md; then
+            echo "::error file=CHANGELOG.md::Put the entry in a new file under changelog.d/ instead (see changelog.d/README.md). CHANGELOG.md changes only on a release/* branch."
+            exit 1
+          fi
