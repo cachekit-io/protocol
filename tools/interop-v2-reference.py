@@ -304,11 +304,20 @@ class _Reader:
 U32 = 1 << 32
 
 
-class _U32Reader(_Reader):
-    """NON-conforming: keeps only the low 32 bits of each int (a uint32 destination)."""
+SIZE_TRUNCATION_VECTOR = "reject_declared_size_wraps_32_bits"
+
+
+class _SizeU32Reader(_Reader):
+    """NON-conforming: keeps only the low 32 bits of original_size (the body's second int)."""
+
+    def __init__(self, buf: bytes) -> None:
+        super().__init__(buf)
+        self._uints_read = 0
 
     def read_uint(self) -> int:
-        return super().read_uint() % U32
+        self._uints_read += 1
+        value = super().read_uint()
+        return value % U32 if self._uints_read == 2 else value
 
 
 def decode_container(data: bytes, reader: type[_Reader] = _Reader) -> bytes:
@@ -507,7 +516,10 @@ def _build_reject_vectors(containers: dict[str, dict]) -> list[dict]:
             "error": "original_size exceeds max uncompressed size",
         },
         {
-            "name": "reject_declared_size_wraps_32_bits",
+            # The payload length (17) being odd is load-bearing: a reader that joins the two
+            # 32-bit halves in 32-bit arithmetic (JS `(hi << 32) | lo` shifts by 0) reads
+            # 1 | 17 = 17, so this vector catches that reader too.
+            "name": SIZE_TRUNCATION_VECTOR,
             "description": (
                 "method 0 container whose original_size is 2^32 + the payload length (uint64 marker). "
                 "The low 32 bits alone are a legal size that matches the payload, so a reader that "
@@ -775,17 +787,27 @@ def _self_check(built: dict) -> None:
     for rv in built["reject_vectors"]:
         _expect_structural_reject(rv)
 
-    # Some reject vector must be ACCEPTED by a reader that decodes original_size into
-    # 32 bits. A truncated original_size fails open, and the 1 TiB declared-size bomb
-    # cannot show it: its low 32 bits are 0, so a truncating reader still rejects it.
-    truncation_caught = []
+    # A truncated original_size fails open, and the 1 TiB declared-size bomb cannot show
+    # it: its low 32 bits are 0, so a truncating reader still rejects it. So exactly the
+    # named vector must be ACCEPTED by a reader that truncates only original_size.
+    accepted = []
     for rv in built["reject_vectors"]:
         try:
-            decode_container(bytes.fromhex(rv["container_hex"]), _U32Reader)
+            decode_container(bytes.fromhex(rv["container_hex"]), _SizeU32Reader)
         except V2Error:
             continue
-        truncation_caught.append(rv["name"])
-    _require(truncation_caught, "no reject vector is accepted by a reader that truncates original_size to 32 bits")
+        accepted.append(rv["name"])
+    _require(
+        accepted == [SIZE_TRUNCATION_VECTOR],
+        f"a reader that truncates original_size to 32 bits must accept exactly {SIZE_TRUNCATION_VECTOR}; it accepted {accepted}",
+    )
+    # ...and a reader that joins the halves as `hi | lo` must read the same low value.
+    size_hex = next(rv["container_hex"] for rv in built["reject_vectors"] if rv["name"] == SIZE_TRUNCATION_VECTOR)
+    size_body = _Reader(bytes.fromhex(size_hex)[2:])
+    size_body.read_array_header()
+    size_body.read_uint()
+    declared = size_body.read_uint()
+    _require((declared >> 32) | (declared % U32) == declared % U32, f"{SIZE_TRUNCATION_VECTOR} no longer catches a hi | lo join")
 
     # AAD pair: v2 differs from v1 exactly in the final component.
     aad = built["aad_vectors"][0]

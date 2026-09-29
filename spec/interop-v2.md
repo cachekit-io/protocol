@@ -262,16 +262,18 @@ The `MAX_UNCOMPRESSED` comparison MUST be decided on the **full wire value** of
 `original_size`. Decode it into a ≥ 64-bit unsigned or arbitrary-precision integer,
 or into an IEEE-754 binary64 (which rounds only integers above 2⁵³, far past the cap,
 so the comparison is unchanged), or reject it when it does not fit a narrower
-destination type that still holds every value up to the cap, such as a 32-bit
-unsigned integer. **Truncation** — keeping only the low-order bits of a wider wire
-integer, as a narrowing cast (`as u32`, `>>> 0`, `& 0xFFFFFFFF`) does — is forbidden.
-Unlike the ratio product below, a truncated `original_size` fails *open*: a declared
-`2³² + N` truncates to `N`, which clears both size caps and the ratio bound and can
-match the payload exactly, so the entry is accepted where a conforming reader rejects
-it. Rejecting a value that does not fit such a type conforms, because every such
-value already exceeds the cap. Every target language has a conforming path: Rust
-`u64`, or `u32` behind a range-checked decode (`rmp-serde` rejects a wider integer
-instead of truncating it); Python's `int`; JavaScript `BigInt`, or `Number`.
+destination type that still holds every value up to the cap (every value that does
+not fit already exceeds it), such as a 32-bit unsigned integer. Any decode that does
+not yield the exact wire value is forbidden: **truncation** to the low-order bits (a
+narrowing cast such as `as u32`, `>>> 0` or `& 0xFFFFFFFF`), **sign
+reinterpretation** (reading a `uint64` as `i64`), or joining the two 32-bit halves
+in 32-bit arithmetic. Unlike the ratio product below, a truncated `original_size`
+fails *open*: a declared `2³² + N` truncates to `N`, which clears the
+`MAX_UNCOMPRESSED` cap and the ratio bound and can match the payload exactly, so the
+entry is accepted where a conforming reader rejects it. Every target language has a
+conforming path: Rust `u64`, or `u32` behind a range-checked decode (`rmp-serde`
+rejects an out-of-range value, whatever its marker width, instead of truncating it);
+Python's `int`; JavaScript `BigInt`, or `Number`.
 
 The ratio product MUST be computed in **at least 64-bit unsigned integers**:
 promote `payload.length` to a ≥ 64-bit unsigned or arbitrary-precision integer, or to an
@@ -343,7 +345,8 @@ Given stored bytes for an interop/v2-configured cache:
    (mode-mismatch diagnostics per Mode Discrimination).
 3. Decode exactly one MessagePack document from container[2..]; reject
    trailing bytes; enforce element types (int, int, bin) and the
-   header-vs-remaining-input rule.
+   header-vs-remaining-input rule; decode original_size at its full wire
+   value (see Security Limits).
 4. Enforce every Security Limit above — before any decompression.
 5. method 1: LZ4-block-decompress the payload with original_size as the
    exact output size; reject on any LZ4 error or output-length mismatch.
@@ -520,7 +523,7 @@ An SDK implementation of interop/v2 MUST:
 | `container_vectors` | Byte-exact containers: `method 0` wrap of the v1 `issue_example_object` value; `method 1` compressed round-trip of a compressible value (reference LZ4 bytes pinned; readers must decompress them to the pinned value bytes); a `method 1` container whose inner value is byte-identical to the published v1 `issue_example_object` value vector (asserted against `interop-mode.json` at generation time — the content profile is inherited unchanged); and a hand-built non-canonical-widths container (uint8/uint32 ints, `bin16` payload, `array16` header) that readers MUST accept. |
 | `aad_vectors` | The v2 AAD (`compressed = "True"`) over the same tenant and cache key as v1's `interop_key_aad` — the two AAD hex strings differ only in the final component (`"True"` vs `"False"`), pinned side-by-side. |
 | `encryption_vectors` | Full compressed+encrypted round-trip: HKDF-SHA256 (same master key and tenant as v1 / `encryption.json`, so the derived-key fingerprint `96179a9b…` is the published one), AES-256-GCM over the v2 container with the v2 AAD and a fixed nonce; decrypt-verified on every cross-check run. |
-| `reject_vectors` | Structural must-rejects, including: bad magic (a bare v1 value fed to a v2 reader), bad container version, unknown method, signed-family integer markers (incl. a negative `original_size`), non-`bin` payloads (the array-of-ints leniency decision, pinned, and a `str` payload), forged `bin32` length header (4 GiB declared, input ends), `method 0` size mismatch, trailing bytes, declared-size bomb (1 TiB), a declared size of `2³²` plus the payload length (`reject_declared_size_wraps_32_bits`, the vector a reader that truncates `original_size` to 32 bits accepts, since the low 32 bits alone match the payload), ratio bomb (1000:1), zero-length compressed payload, malformed LZ4 (zero offset), truncated LZ4, and decompressed-length mismatch. All MUST error before or during step 5 of the reader algorithm; the `error` text is a maintainer note, not normative. |
+| `reject_vectors` | Structural must-rejects, including: bad magic (a bare v1 value fed to a v2 reader), bad container version, unknown method, signed-family integer markers (incl. a negative `original_size`), non-`bin` payloads (the array-of-ints leniency decision, pinned, and a `str` payload), forged `bin32` length header (4 GiB declared, input ends), `method 0` size mismatch, trailing bytes, declared-size bomb (1 TiB), `reject_declared_size_wraps_32_bits` (a reader that truncates `original_size` to 32 bits accepts it), ratio bomb (1000:1), zero-length compressed payload, malformed LZ4 (zero offset), truncated LZ4, and decompressed-length mismatch. All MUST error before or during step 5 of the reader algorithm; the `error` text is a maintainer note, not normative. |
 | `crypto_reject_vectors` | `reject_v2_ciphertext_with_v1_aad` and `reject_v1_ciphertext_with_v2_aad` — both cross-mode AAD combinations MUST fail AES-GCM authentication (mode separation), pinned against real ciphertexts from this file and the v1 file. |
 
 Regenerate / verify:

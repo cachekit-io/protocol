@@ -71,7 +71,7 @@ The envelope has 4 logical fields:
 StorageEnvelope {
     compressed_data: bytes    // LZ4 block-compressed payload
     checksum:        bytes    // xxHash3-64 of ORIGINAL (uncompressed) data, 8 bytes, big-endian
-    original_size:   uint32   // Size of data before compression; a wider wire value is rejected, never truncated
+    original_size:   uint32   // Size of data before compression; a value ≥ 2³² exceeds the cap and is rejected, never truncated
     format:          string   // Serialization format identifier (e.g., "msgpack")
 }
 ```
@@ -418,16 +418,18 @@ The `MAX_UNCOMPRESSED` comparison MUST be decided on the **full wire value** of
 `original_size`. Decode it into a ≥ 64-bit unsigned or arbitrary-precision integer,
 or into an IEEE-754 binary64 (which rounds only integers above 2⁵³, far past the cap,
 so the comparison is unchanged), or reject it when it does not fit a narrower
-destination type that still holds every value up to the cap, such as a 32-bit
-unsigned integer. **Truncation** — keeping only the low-order bits of a wider wire
-integer, as a narrowing cast (`as u32`, `>>> 0`, `& 0xFFFFFFFF`) does — is forbidden.
-Unlike the ratio product below, a truncated `original_size` fails *open*: a declared
-`2³² + N` truncates to `N`, which clears both size caps and the ratio bound and can
-match the payload exactly, so the entry is accepted where a conforming reader rejects
-it. Rejecting a value that does not fit such a type conforms, because every such
-value already exceeds the cap. Every target language has a conforming path: Rust
-`u64`, or `u32` behind a range-checked decode (`rmp-serde` rejects a wider integer
-instead of truncating it); Python's `int`; JavaScript `BigInt`, or `Number`.
+destination type that still holds every value up to the cap (every value that does
+not fit already exceeds it), such as a 32-bit unsigned integer. Any decode that does
+not yield the exact wire value is forbidden: **truncation** to the low-order bits (a
+narrowing cast such as `as u32`, `>>> 0` or `& 0xFFFFFFFF`), **sign
+reinterpretation** (reading a `uint64` as `i64`), or joining the two 32-bit halves
+in 32-bit arithmetic. Unlike the ratio product below, a truncated `original_size`
+fails *open*: a declared `2³² + N` truncates to `N`, which clears the
+`MAX_UNCOMPRESSED` cap and the ratio bound and can match the payload exactly, so the
+entry is accepted where a conforming reader rejects it. Every target language has a
+conforming path: Rust `u64`, or `u32` behind a range-checked decode (`rmp-serde`
+rejects an out-of-range value, whatever its marker width, instead of truncating it);
+Python's `int`; JavaScript `BigInt`, or `Number`.
 
 The ratio product MUST be computed in **at least 64-bit unsigned integers**:
 promote `compressed_size` to a ≥ 64-bit unsigned or arbitrary-precision integer, or to an
