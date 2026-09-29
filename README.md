@@ -74,6 +74,7 @@ layer's own store/retrieve flows are specified in
 | [spec/intent-presets.md](spec/intent-presets.md) | Intent-preset contract — canonical `minimal` / `production` / `secure` / `io` defaults: TTL, L1 and integrity posture, reliability floor, encryption activation and key input, `io` credentials *(normative; per-SDK conformance and alignment tickets inside)* |
 | [sdk-feature-matrix.md](sdk-feature-matrix.md) | Feature parity tracking across Python, Rust, TypeScript, and PHP SDKs |
 | [decisions/key-rotation.md](decisions/key-rotation.md) | Decision records — master-key rotation via client-side keyring (rationale, rejected options, operator runbooks) |
+| [decisions/namespace-isolation.md](decisions/namespace-isolation.md) | Decision record — server-side namespace isolation is a Python-SDK + direct-API (`nsapi:`) feature; other SDKs' namespaces are client-side conventions (rationale, rejected options, residual risk) |
 
 ---
 
