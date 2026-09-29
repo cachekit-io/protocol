@@ -497,12 +497,15 @@ An SDK implementation of interop/v2 MUST:
    all `reject_*` vectors (which MUST error) and — when the SDK supports
    encryption — the encrypted round-trip decrypt and both AAD cross-mode
    rejections. An implementation supports a 32-bit target (such as `wasm32`)
-   when it compiles for, or publishes artifacts for, that target. Such an
-   implementation MUST also pass `lz4_ratio_product_wraps_32_bits` on each such
-   target, in its own CI: through the artifact it distributes, or, for
-   source-distributed code, through the build its consumers make for that
-   target. It runs the vector at this spec's limits, not at a stricter
-   deployment limit; a rejection for any reason is a failure.
+   when it publishes artifacts for that target, builds for it in its own CI or
+   release process, or names it as supported in its documentation or package
+   metadata. Such an implementation MUST, in its own CI, pass
+   `lz4_ratio_product_wraps_32_bits` on each such target, built as its
+   consumers get it: the artifact it distributes or, for source-distributed
+   code, a build of its published source for that target. It runs the vector at
+   this spec's limits, not at a stricter deployment limit; anything other than
+   decoding to the constructed value (a rejection for any reason, a skip, a
+   crash) is a failure.
 
 ---
 

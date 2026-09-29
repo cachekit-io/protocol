@@ -44,9 +44,10 @@ function fromHex(s, field) {
 // so a fixture declaring gigabytes fails by name instead of exhausting memory,
 // even when its counts agree with its declared length.
 function construct(segments, field, expectedLen, maxLen) {
-  if (!Number.isSafeInteger(expectedLen) || expectedLen < 0 || expectedLen > maxLen) {
-    throw new Error(`${field} declares ${expectedLen} B, above the ${maxLen} B limit`);
+  if (!Number.isSafeInteger(expectedLen) || expectedLen < 0) {
+    throw new Error(`${field} declared length ${expectedLen} is not a non-negative integer`);
   }
+  if (expectedLen > maxLen) throw new Error(`${field} declares ${expectedLen} B, above the ${maxLen} B limit`);
   if (!Array.isArray(segments) || segments.length === 0) throw new Error(`${field} is not a non-empty segment list`);
   const units = segments.map((seg, k) => {
     const unit = fromHex(seg.hex, `${field}[${k}].hex`);

@@ -478,8 +478,7 @@ def _build_wrap_threshold_vector() -> dict:
             "unsigned wrap alike) and rejects it as a ratio bomb; so does one that rejects on 32-bit overflow. "
             "A pointer-width product passes it on a 64-bit host, so a pass there proves nothing about a "
             "32-bit target. spec/interop-v2.md#sdk-implementation-requirements, item 7, says which "
-            "implementations must run it, on which targets, and at which limits (the spec's, never a "
-            "deployment's stricter value-size ceiling)."
+            "implementations must run it, on which targets, and at which limits."
         ),
         "method": METHOD_LZ4_BLOCK,
         "original_size": original_size,
