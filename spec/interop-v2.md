@@ -302,9 +302,12 @@ product overflows unsigned 32 bits (a signed 32-bit product overflows earlier, f
 2,147,484 B). Its `original_size` (4,278,189 B) is inside the 1000:1 bound but
 above the 704 B that a 32-bit product yields, signed or unsigned. A reader that
 multiplies in 32 bits rejects it, and so does one that rejects on 32-bit overflow.
-A conforming reader accepts it. An SDK that ships a 32-bit build (such as `wasm32`)
-MUST run this vector on that target. A pointer-width product is exact on a 64-bit
-host, so a pass there does not show the rule holds on the 32-bit build.
+A conforming reader accepts it. The note above gives the unsigned threshold. A
+signed product also fails closed, because its bound goes negative. An
+implementation that supports any 32-bit target (such as `wasm32`) MUST pass this
+vector on that target ([SDK Implementation Requirements](#sdk-implementation-requirements), item 7). A
+pointer-width product is exact on a 64-bit host, so a pass there does not show the
+rule holds on the 32-bit target.
 
 The vector is an accept vector because a 32-bit product only ever tightens the
 bound, so no reject vector can catch one. An accept vector has to decode, so it
@@ -493,7 +496,10 @@ An SDK implementation of interop/v2 MUST:
    [`test-vectors/interop-v2.json`](../test-vectors/interop-v2.json), including
    all `reject_*` vectors (which MUST error) and — when the SDK supports
    encryption — the encrypted round-trip decrypt and both AAD cross-mode
-   rejections.
+   rejections. An implementation that supports any 32-bit target (such as
+   `wasm32`) MUST also pass `lz4_ratio_product_wraps_32_bits` on that target:
+   through the artifact it distributes, or, for source-distributed code, through
+   the build its consumers make for that target.
 
 ---
 
@@ -520,7 +526,7 @@ An SDK implementation of interop/v2 MUST:
 | Group (JSON key) | Verifies |
 | :--- | :--- |
 | `container_vectors` | Byte-exact containers: `method 0` wrap of the v1 `issue_example_object` value; `method 1` compressed round-trip of a compressible value (reference LZ4 bytes pinned; readers must decompress them to the pinned value bytes); a `method 1` container whose inner value is byte-identical to the published v1 `issue_example_object` value vector (asserted against `interop-mode.json` at generation time — the content profile is inherited unchanged); and a hand-built non-canonical-widths container (uint8/uint32 ints, `bin16` payload, `array16` header) that readers MUST accept. |
-| `constructed_container_vectors` | Accept vectors too large to pin as hex. Each vector has `method`, `original_size`, `payload_len`, `container_len`, and two segment lists, `container_construction` and `value_construction`. To build the bytes, repeat each segment's `hex` `count` times and concatenate the segments in order (`construction_note`). This list form generalises `decode-bounds.json`'s `{repeat_hex, count, suffix_hex}`, which is the two-segment case. Readers MUST decode the constructed container to the constructed value. The group holds one vector, `lz4_ratio_product_wraps_32_bits`. It is a `method 1` container with a 4,294,968 B payload: a literals-only LZ4 block of a `bin32` of zeros, with an `original_size` of 4,278,189. It is the only vector that fails a reader computing the ratio product in 32 bits (see [Security Limits](#security-limits-decompression-bounds) for why it has this shape). Every other vector in this file is under 300 B. An SDK with a 32-bit build MUST run it on that target. Run it at this spec's limits: a deployment MAY reject it under a stricter value-size ceiling, but a conformance run MUST NOT apply one. `tools/test_interop_v2_reference.py` swaps the reference reader's product for three 32-bit ones. Each one passes every hex-pinned vector and fails this one. |
+| `constructed_container_vectors` | Accept vectors too large to pin as hex. Each vector has `method`, `original_size`, `payload_len`, `container_len`, and two segment lists, `container_construction` and `value_construction`. To build the bytes, repeat each segment's `hex` `count` times and concatenate the segments in order (`construction_note`). This list form generalises `decode-bounds.json`'s `{repeat_hex, count, suffix_hex}`, which is the two-segment case. Readers MUST decode the constructed container to the constructed value. The group holds one vector, `lz4_ratio_product_wraps_32_bits`. It is a `method 1` container with a 4,294,968 B payload: a literals-only LZ4 block of a `bin32` of zeros, with an `original_size` of 4,278,189. It is the only vector that fails a reader computing the ratio product in 32 bits (see [Security Limits](#security-limits-decompression-bounds) for why it has this shape). Every other vector in this file is under 300 B. An implementation that supports a 32-bit target MUST pass it on that target ([SDK Implementation Requirements](#sdk-implementation-requirements), item 7). Run it at this spec's limits: a deployment MAY reject it under a stricter value-size ceiling, but a conformance run MUST NOT apply one. `tools/test_interop_v2_reference.py` swaps the reference reader's product for three 32-bit ones. Each one passes every hex-pinned vector and fails this one. |
 | `aad_vectors` | The v2 AAD (`compressed = "True"`) over the same tenant and cache key as v1's `interop_key_aad` — the two AAD hex strings differ only in the final component (`"True"` vs `"False"`), pinned side-by-side. |
 | `encryption_vectors` | Full compressed+encrypted round-trip: HKDF-SHA256 (same master key and tenant as v1 / `encryption.json`, so the derived-key fingerprint `96179a9b…` is the published one), AES-256-GCM over the v2 container with the v2 AAD and a fixed nonce; decrypt-verified on every cross-check run. |
 | `reject_vectors` | Structural must-rejects, including: bad magic (a bare v1 value fed to a v2 reader), bad container version, unknown method, signed-family integer markers (incl. a negative `original_size`), non-`bin` payloads (the array-of-ints leniency decision, pinned, and a `str` payload), forged `bin32` length header (4 GiB declared, input ends), `method 0` size mismatch, trailing bytes, declared-size bomb, ratio bomb (1000:1), zero-length compressed payload, malformed LZ4 (zero offset), truncated LZ4, and decompressed-length mismatch. All MUST error before or during step 5 of the reader algorithm; the `error` text is a maintainer note, not normative. |

@@ -70,7 +70,7 @@ RATIO_WRAP_THRESHOLD = -(-(1 << 32) // MAX_RATIO)
 
 
 def ratio_bound_u32_wrapped(payload_len: int) -> int:
-    """The bound a reader that multiplies in 32-bit width computes (signed and unsigned agree at >= the threshold)."""
+    """The bound an unsigned 32-bit product yields (signed agrees while this is < 2**31, as at the threshold)."""
     return (MAX_RATIO * payload_len) % (1 << 32)
 
 MAGIC = 0xC1
@@ -476,8 +476,8 @@ def _build_wrap_threshold_vector() -> dict:
             "bound, so readers MUST accept it and decode it to the constructed value. A reader that computes "
             f"the product in 32-bit width gets {ratio_bound_u32_wrapped(payload_len)} instead (signed or "
             "unsigned wrap alike) and rejects it as a ratio bomb; so does one that rejects on 32-bit overflow. "
-            "An SDK with a 32-bit build MUST run this vector on that target: a pointer-width product passes it "
-            "on a 64-bit host. Run it at the spec's limits, never a deployment's stricter value-size ceiling."
+            "An implementation that supports a 32-bit target MUST pass this vector on that target: a "
+            "pointer-width product passes it on a 64-bit host. Run it at the spec's limits, never a deployment's stricter value-size ceiling."
         ),
         "method": METHOD_LZ4_BLOCK,
         "original_size": original_size,
@@ -897,7 +897,7 @@ def _self_check(built: dict) -> None:
             lz4.block.decompress(pinned, uncompressed_size=lz4_cv["original_size"]).hex() == lz4_cv["value_msgpack_hex"],
             "lz4.block does not decompress the pinned payload to the pinned value bytes",
         )
-        for cv in built["constructed_container_vectors"]:
+        for cv in (c for c in built["constructed_container_vectors"] if c["method"] == METHOD_LZ4_BLOCK):
             payload = construct(cv["container_construction"])[-cv["payload_len"] :]
             _require(
                 lz4.block.decompress(payload, uncompressed_size=cv["original_size"]) == construct(cv["value_construction"]),

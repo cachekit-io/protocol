@@ -56,7 +56,9 @@ jobs:
           node tools/interop-crosscheck.mjs
 
       - name: Interop v2 JS cross-check (zero-dep independent container parser + LZ4 decoder + WebCrypto)
-        run: node tools/interop-v2-crosscheck.mjs
+        run: |
+          node tools/test-interop-v2-crosscheck-guard.mjs
+          node tools/interop-v2-crosscheck.mjs
 
       - name: Python-frame verify (stdlib only)
         run: |

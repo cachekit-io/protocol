@@ -409,7 +409,7 @@ if (failures > 0) {
   process.exit(1);
 }
 console.log(
-  `OK: ${doc.container_vectors.length} container, ${doc.constructed_container_vectors?.length} constructed container, ` +
+  `OK: ${doc.container_vectors.length} container, ${doc.constructed_container_vectors.length} constructed container, ` +
     `${doc.aad_vectors.length} AAD, ` +
     `${(doc.encryption_vectors ?? []).length} encryption, ${doc.reject_vectors.length} reject, ` +
     `${(doc.crypto_reject_vectors ?? []).length} crypto-reject vectors verified independently`,
