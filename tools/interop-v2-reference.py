@@ -513,8 +513,9 @@ def _build_wrap_threshold_vector() -> dict:
             "bound, so readers MUST accept it and decode it to the constructed value. A reader that computes "
             f"the product in 32-bit width gets {ratio_bound_u32_wrapped(payload_len)} instead (signed or "
             "unsigned wrap alike) and rejects it as a ratio bomb; so does one that rejects on 32-bit overflow. "
-            "An implementation that supports a 32-bit target MUST pass this vector on that target: a "
-            "pointer-width product passes it on a 64-bit host. Run it at the spec's limits, never a deployment's stricter value-size ceiling."
+            "A pointer-width product passes it on a 64-bit host, so a pass there proves nothing about a "
+            "32-bit target. spec/interop-v2.md#sdk-implementation-requirements, item 7, says which "
+            "implementations must run it, on which targets, and at which limits."
         ),
         "method": METHOD_LZ4_BLOCK,
         "original_size": original_size,
@@ -754,9 +755,12 @@ def _build() -> dict:
         ),
         "container_vectors": container_vectors,
         "construction_note": (
-            "constructed_* vectors are too large to pin as hex. Build the bytes of each "
-            "*_construction field by concatenating bytes.fromhex(segment.hex) repeated "
-            "segment.count times, in order."
+            "constructed_* vectors are too large to pin as hex. Each *_construction field "
+            "is a list of segments. For each segment in order, decode its hex (non-empty, "
+            "even length) to bytes and repeat those bytes count times (count is an integer, "
+            "0 or more); the concatenation is the field's bytes. The total MUST equal the "
+            "declared length (container_len for container_construction, original_size for "
+            "value_construction); a vector that breaks any of these rules is malformed."
         ),
         "constructed_container_vectors": [_build_wrap_threshold_vector()],
         "aad_vectors": [

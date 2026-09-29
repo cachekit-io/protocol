@@ -21,6 +21,10 @@ import { webcrypto } from "node:crypto";
 const MAX_UNCOMPRESSED = 512n * 1024n * 1024n;
 const MAX_COMPRESSED = 512 * 1024 * 1024;
 const MAX_RATIO = 1000n;
+// Widest container header parseContainer accepts: magic + version (2), array32
+// header (5), uint64 method (9), uint64 original_size (9), bin32 header (5).
+// The cap therefore never refuses a container the reader would accept.
+const MAX_CONTAINER = MAX_COMPRESSED + 2 + 5 + 9 + 9 + 5;
 
 // Strict hex decoder for every JSON-provided hex field. Buffer.from(s, "hex")
 // silently truncates at the first invalid character and drops a trailing odd
@@ -35,9 +39,15 @@ function fromHex(s, field) {
 
 // A `*_construction` field: each segment's hex repeated `count` times, in order.
 // Buffer.alloc(n, fill) tiles `fill`, so a 4 MB run of one byte costs one call.
-// The total is checked against the declared length BEFORE allocating, so a
-// corrupted count fails by name instead of exhausting memory.
-function construct(segments, field, expectedLen) {
+// Nothing is allocated until the declared length is at most `maxLen` (the
+// spec's limit for the field) and the segments add up to exactly that length,
+// so a fixture declaring gigabytes fails by name instead of exhausting memory,
+// even when its counts agree with its declared length.
+function construct(segments, field, expectedLen, maxLen) {
+  if (!Number.isSafeInteger(expectedLen) || expectedLen < 0) {
+    throw new Error(`${field} declared length ${expectedLen} is not a non-negative integer`);
+  }
+  if (expectedLen > maxLen) throw new Error(`${field} declares ${expectedLen} B, above the ${maxLen} B limit`);
   if (!Array.isArray(segments) || segments.length === 0) throw new Error(`${field} is not a non-empty segment list`);
   const units = segments.map((seg, k) => {
     const unit = fromHex(seg.hex, `${field}[${k}].hex`);
@@ -295,9 +305,9 @@ const U32_WRAP_THRESHOLD = Math.ceil(2 ** 32 / 1000);
 let discriminating = 0;
 for (const v of doc.constructed_container_vectors ?? []) {
   try {
-    const container = construct(v.container_construction, `${v.name}.container_construction`, v.container_len);
+    const container = construct(v.container_construction, `${v.name}.container_construction`, v.container_len, MAX_CONTAINER);
+    const expected = construct(v.value_construction, `${v.name}.value_construction`, v.original_size, Number(MAX_UNCOMPRESSED));
     const value = decodeContainer(container);
-    const expected = construct(v.value_construction, `${v.name}.value_construction`, v.original_size);
     check(v.name, "decoded value bytes", true, value.equals(expected));
     const parsed = parseContainer(container);
     check(v.name, "method", BigInt(v.method), parsed.method);

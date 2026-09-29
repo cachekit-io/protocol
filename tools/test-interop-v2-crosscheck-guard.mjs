@@ -8,6 +8,10 @@
 // test-frame-crosscheck-guard.mjs: a baseline pins exit 0, each poisoned copy
 // must exit non-zero with the guard's own message, and every mutation is
 // checked for no-op-ness.
+//
+// It must also refuse, before allocating, a construction whose declared length
+// is above the spec's limit for its field, even when the segment counts agree
+// with that length.
 
 import { readFileSync, writeFileSync, mkdtempSync, rmSync } from "node:fs";
 import { spawnSync } from "node:child_process";
@@ -43,6 +47,31 @@ const stored = {
   ],
 };
 
+// The cross-check's field limits: MAX_COMPRESSED plus the widest container
+// header its parser accepts, and MAX_UNCOMPRESSED.
+const LIMITS = { container_construction: 512 * 1024 * 1024 + 30, value_construction: 512 * 1024 * 1024 };
+// One byte over each limit pins the boundary and the constant: a cap that is
+// raised, off by one, or applied to the wrong field lets these through. At 2^50
+// B, above the user address space of common 64-bit hosts, a cross-check that
+// lost its cap fails in the allocator at once instead of filling gigabytes.
+const HUGE = 2 ** 50;
+const oversize = (field, len) => (v) => {
+  if (field === "container_construction") v.container_len = len;
+  else v.original_size = len;
+  v[field] = [{ hex: "00", count: len }];
+};
+// A declared length AT the limit must get past the cap. Its segments come up
+// one byte short, so the length check refuses it before anything is allocated;
+// a cap that also refuses the limit itself (>= for >) fails here instead.
+const AT_LIMIT_CASES = Object.keys(LIMITS);
+
+const OVERSIZE_CASES = [
+  ["container one byte over its limit", "container_construction", LIMITS.container_construction + 1],
+  ["value one byte over its limit", "value_construction", LIMITS.value_construction + 1],
+  ["container declared at 1 PiB", "container_construction", HUGE],
+  ["value declared at 1 PiB", "value_construction", HUGE],
+];
+
 const CASES = [
   ["group dropped", (d) => { delete d.constructed_container_vectors; }],
   ["group empty", (d) => { d.constructed_container_vectors = []; }],
@@ -73,6 +102,26 @@ try {
     check(`${name}: guard fires`, r.code !== 0 && r.out.includes(GUARD_MSG), `exit ${r.code}: ${r.out}`);
     // The poisoned copy must fail ONLY on coverage, or the guard is not what caught it.
     check(`${name}: nothing else fails`, (r.out.match(/^FAIL /gm) ?? []).length === 1, r.out);
+  }
+  for (const [name, field, len] of OVERSIZE_CASES) {
+    const d = structuredClone(doc);
+    oversize(field, len)(d.constructed_container_vectors[0]);
+    const path = join(dir, "fixture.json");
+    writeFileSync(path, JSON.stringify(d));
+    const r = run(path);
+    const msg = `${vector.name}.${field} declares ${len} B, above the ${LIMITS[field]} B limit`;
+    check(`${name}: refused before allocating`, r.code !== 0 && r.out.includes(msg), `exit ${r.code}: ${r.out}`);
+  }
+  for (const field of AT_LIMIT_CASES) {
+    const d = structuredClone(doc);
+    const v = d.constructed_container_vectors[0];
+    oversize(field, LIMITS[field])(v);
+    v[field][0].count -= 1;
+    const path = join(dir, "fixture.json");
+    writeFileSync(path, JSON.stringify(d));
+    const r = run(path);
+    const msg = `${vector.name}.${field} builds ${LIMITS[field] - 1} B, expected ${LIMITS[field]} B`;
+    check(`${field} declared at its limit: passes the cap`, r.code !== 0 && r.out.includes(msg), `exit ${r.code}: ${r.out}`);
   }
 } finally {
   rmSync(dir, { recursive: true, force: true });
