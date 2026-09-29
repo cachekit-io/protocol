@@ -185,11 +185,11 @@ enforces is security-relevant (per `saas` issue #91 / SRP refactor):
 
 | Check | Rule |
 | :--- | :--- |
-| Transport | Key is percent-encoded into the URL path; the server decodes it once. |
-| Length | Decoded key ≤ 400 characters. |
+| Transport | Key is percent-encoded into one URL path segment; the server decodes it once. See [saas-api.md → Cache-Key Path Encoding](saas-api.md#cache-key-path-encoding). |
+| Length | Decoded key is 1–400 characters. |
 | Charset | `[a-zA-Z0-9_.:-]` only — no `/` (sub-resource routing), no `%`, no control chars. |
-| Traversal | `..` is rejected anywhere in the key. |
-| Namespace | Keys starting `ns:{namespace}:` or `nsapi:{namespace}:` must have a namespace of 1–64 chars of `[a-zA-Z0-9_-]`. Keys without either prefix scope to the `default` namespace. |
+| Traversal | `..` is rejected anywhere in the key, and so is a key of exactly `.`. |
+| Namespace | A key starting `ns:` or `nsapi:` must be `{prefix}:{namespace}:{rest}`, with a namespace of 1–64 chars of `[a-zA-Z0-9_-]` and a non-empty `{rest}`; any other key with either prefix is rejected. Keys without either prefix scope to the `default` namespace. |
 | Write spaces | `ns:` keys are mutable only by SDK (`ck_sdk_`) API keys; `nsapi:` keys only by direct (`ck_api_`) API keys. Reads are open to both. Legacy `ck_live_` keys predate the split and are exempt from it — they may write either class. No server-side retirement date is set for `ck_live_`. |
 | Default namespace | Keys with neither prefix (TypeScript/Rust `{ns}:{hash}`, [Interop Mode](interop-mode.md) keys, bare hashes) are an **open** write space: any key class may write them, so the intra-tenant write-space isolation above does not protect them. Per-key namespace grants still apply — an API key restricted to named namespaces must include `default` to read or write unprefixed keys. |
 
