@@ -9,8 +9,9 @@ and checks two things for each:
   - every hex-pinned container, reject and encryption-plaintext vector still passes
     (the gap was real; the AAD and crypto-reject groups never reach the product), and
   - `lz4_ratio_product_wraps_32_bits` fails, by name.
-It also drops that vector, and substitutes one whose declared payload_len lies about a
-small payload, and checks the coverage guard in _self_check fires on both.
+It also drops that vector, substitutes one whose declared payload_len lies about a small
+payload, and substitutes a method-0 container of the same size (which never reaches the
+ratio bound), and checks the coverage guard in _self_check fires on all three.
 Same doctrine as test_check_spec_duplication.py: a guard not shown to fail is no guard.
 Nothing here touches test-vectors/interop-v2.json.
 
@@ -108,6 +109,23 @@ def main() -> int:
     }]
     if failure := self_check_fails(liar, "disagree with its bytes"):
         results.append(f"declared payload_len over a small payload: {failure}")
+
+    # A method-0 container of the same size never reaches the ratio bound, so a 32-bit
+    # reader passes it; it must not satisfy the coverage guard either.
+    n = built["constructed_container_vectors"][0]["payload_len"]
+    stored_value = [{"hex": "c6" + (n - 5).to_bytes(4, "big").hex(), "count": 1}, {"hex": "00", "count": n - 5}]
+    stored = iv2.encode_container(iv2.METHOD_NONE, n, iv2.construct(stored_value))
+    method0 = copy.deepcopy(built)
+    method0["constructed_container_vectors"] = [{
+        **built["constructed_container_vectors"][0],
+        "method": iv2.METHOD_NONE,
+        "original_size": n,
+        "container_len": len(stored),
+        "container_construction": [{"hex": stored[: len(stored) - n + 5].hex(), "count": 1}, stored_value[1]],
+        "value_construction": stored_value,
+    }]
+    if failure := self_check_fails(method0, "no constructed vector fails a reader"):
+        results.append(f"method-0 container at the threshold: {failure}")
 
     failures = [f for f in results if f]
     if failures:

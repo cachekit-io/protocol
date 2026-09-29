@@ -288,8 +288,9 @@ for (const v of doc.container_vectors) {
 
 // The only vectors that fail a reader computing the ratio product in 32 bits, so
 // the group is required, and at least one vector must actually do that, measured
-// from the parsed bytes (a payload at or above ceil(2^32/1000) whose
-// original_size exceeds the wrapped bound). A file without one must not pass.
+// from the parsed bytes (method 1 — method 0 never evaluates the bound — with a
+// payload at or above ceil(2^32/1000) whose original_size exceeds the wrapped
+// bound). A file without one must not pass.
 const U32_WRAP_THRESHOLD = Math.ceil(2 ** 32 / 1000);
 let discriminating = 0;
 for (const v of doc.constructed_container_vectors ?? []) {
@@ -303,7 +304,8 @@ for (const v of doc.constructed_container_vectors ?? []) {
     check(v.name, "original_size", BigInt(v.original_size), parsed.originalSize);
     check(v.name, "payload_len", v.payload_len, parsed.payload.length);
     const len = parsed.payload.length;
-    if (len >= U32_WRAP_THRESHOLD && parsed.originalSize > (MAX_RATIO * BigInt(len)) % 2n ** 32n) discriminating++;
+    const wrapped = (MAX_RATIO * BigInt(len)) % 2n ** 32n;
+    if (parsed.method === 1n && len >= U32_WRAP_THRESHOLD && parsed.originalSize > wrapped) discriminating++;
   } catch (err) {
     failures++;
     console.error(`FAIL ${v.name} (constructed container): ${err.message ?? err}`);

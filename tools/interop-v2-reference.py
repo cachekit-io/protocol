@@ -827,7 +827,13 @@ def _self_check(built: dict) -> None:
             msg = f"constructed vector {cv['name']} rejected: {e}"
             raise SelfCheckError(msg) from e
         _require(got == construct(cv["value_construction"]), f"constructed {cv['name']} does not decode to its value")
-        discriminating.append(len(payload) >= RATIO_WRAP_THRESHOLD and original_size > ratio_bound_u32_wrapped(len(payload)))
+        # method 1 only: method 0 never evaluates the ratio bound, so a method-0 container
+        # of any size passes a 32-bit reader and proves nothing.
+        discriminating.append(
+            method == METHOD_LZ4_BLOCK
+            and len(payload) >= RATIO_WRAP_THRESHOLD
+            and original_size > ratio_bound_u32_wrapped(len(payload))
+        )
     _require(any(discriminating), "no constructed vector fails a reader that computes the ratio product in 32 bits")
 
     by_name = {c["name"]: c for c in built["container_vectors"]}
