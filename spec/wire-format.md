@@ -453,6 +453,13 @@ floating-point ratio is the precision bypass the integer rule exists to prevent.
 > this specification; an implementation that refuses them is non-conforming.
 <!-- END shared-block: ratio-product-rule -->
 
+`test-vectors/wire-format.json` has no envelope large enough to test this rule: its
+largest input is 300 B, and 32-bit arithmetic goes wrong only from a 4,294,968 B
+`compressed_size`. The same product is tested for interop/v2 by
+`lz4_ratio_product_wraps_32_bits` in `test-vectors/interop-v2.json`
+([interop-v2.md → Test Vectors](interop-v2.md#test-vectors)), but no ByteStorage
+envelope vector tests it yet.
+
 ---
 
 ## Store Flow

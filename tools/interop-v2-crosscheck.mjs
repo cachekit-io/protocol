@@ -33,6 +33,21 @@ function fromHex(s, field) {
   return Buffer.from(s, "hex");
 }
 
+// A `*_construction` field: each segment's hex repeated `count` times, in order.
+// Buffer.alloc(n, fill) tiles `fill`, so a 4 MB run of one byte costs one call.
+function construct(segments, field) {
+  if (!Array.isArray(segments) || segments.length === 0) throw new Error(`${field} is not a non-empty segment list`);
+  return Buffer.concat(
+    segments.map((seg, k) => {
+      const unit = fromHex(seg.hex, `${field}[${k}].hex`);
+      if (!Number.isSafeInteger(seg.count) || seg.count < 0 || unit.length === 0) {
+        throw new Error(`${field}[${k}] needs non-empty hex and a non-negative integer count`);
+      }
+      return Buffer.alloc(unit.length * seg.count, unit);
+    }),
+  );
+}
+
 // --- LZ4 block decompressor (independent implementation) --------------------
 function lz4BlockDecompress(block, originalSize) {
   const out = Buffer.alloc(originalSize);
@@ -268,6 +283,29 @@ for (const v of doc.container_vectors) {
   }
 }
 
+// Required, not `?? []`: the wrap-threshold vector is the only one that fails a
+// reader computing the ratio product in 32 bits, so a file without it must not pass.
+if (!Array.isArray(doc.constructed_container_vectors) || doc.constructed_container_vectors.length === 0) {
+  failures++;
+  console.error("FAIL constructed_container_vectors: missing or empty");
+}
+for (const v of doc.constructed_container_vectors ?? []) {
+  try {
+    const container = construct(v.container_construction, `${v.name}.container_construction`);
+    check(v.name, "container_len", v.container_len, container.length);
+    const value = decodeContainer(container);
+    const expected = construct(v.value_construction, `${v.name}.value_construction`);
+    check(v.name, "decoded value bytes", true, value.equals(expected));
+    const parsed = parseContainer(container);
+    check(v.name, "method", BigInt(v.method), parsed.method);
+    check(v.name, "original_size", BigInt(v.original_size), parsed.originalSize);
+    check(v.name, "payload_len", v.payload_len, parsed.payload.length);
+  } catch (err) {
+    failures++;
+    console.error(`FAIL ${v.name} (constructed container): ${err.message ?? err}`);
+  }
+}
+
 for (const v of doc.aad_vectors) {
   const aad = aadV3(v.tenant_id, v.cache_key, v.format, v.compressed);
   check(v.name, "aad_hex", v.aad_hex, aad.toString("hex"));
@@ -361,7 +399,8 @@ if (failures > 0) {
   process.exit(1);
 }
 console.log(
-  `OK: ${doc.container_vectors.length} container, ${doc.aad_vectors.length} AAD, ` +
+  `OK: ${doc.container_vectors.length} container, ${doc.constructed_container_vectors.length} constructed container, ` +
+    `${doc.aad_vectors.length} AAD, ` +
     `${(doc.encryption_vectors ?? []).length} encryption, ${doc.reject_vectors.length} reject, ` +
     `${(doc.crypto_reject_vectors ?? []).length} crypto-reject vectors verified independently`,
 );
