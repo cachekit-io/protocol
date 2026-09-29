@@ -507,7 +507,7 @@ Datetime values are encoded as MessagePack maps with sentinel keys:
 ## SDK Storage Containers (auto mode)
 
 Remote backends (Redis, CachekitIO SaaS, Memcached, File) store opaque bytes. (L1
-behavior is SDK-specific: `cachekit-py`'s L1 holds the framed bytes; `cachekit-ts`'s
+behavior is SDK-specific: `cachekit-py`'s L1 in front of a backend holds the framed bytes; `cachekit-ts`'s
 L1 holds live decoded values, not bytes.) What the stored bytes *are* differs per
 SDK in auto mode:
 
@@ -530,9 +530,11 @@ implementations ([protocol#11](https://github.com/cachekit-io/protocol/issues/11
 
 ### Python: CK v3 frame
 
-Every **auto-mode** value `cachekit-py` stores — all backends, all serializers,
-encrypted or not — is framed (interop-mode values are plain MessagePack, never
-framed):
+Two in-process modes keep live objects and store no bytes at all: `@cache.local`
+reference caching (key code `l`) and a cache configured with `backend=None`, whose
+keys carry its configured serializer's code. Every other **auto-mode** value
+`cachekit-py` stores — all backends, all serializers, encrypted or not — is framed
+(interop-mode values are plain MessagePack, never framed):
 
 ```text
 MAGIC b"CK" (0x43 0x4B) | VERSION u8 (0x03) | HDR_LEN u32 big-endian | HEADER | PAYLOAD
@@ -548,6 +550,7 @@ MAGIC b"CK" (0x43 0x4B) | VERSION u8 (0x03) | HDR_LEN u32 big-endian | HEADER | 
 | `default`, `auto` | ByteStorage envelope (this document) over MessagePack |
 | `arrow` | **Arrow envelope**: `[8-byte xxHash3-64 checksum][Arrow IPC file]` (IPC magic `b"ARROW1"` at payload offset 8) |
 | `orjson` | `[8-byte xxHash3-64 checksum][JSON bytes]` |
+| A serializer instance's bare class name (`StandardSerializer`, `ArrowSerializer`, a custom class) | That serializer's own output; a built-in class writes the same payload as its string name above. Classes sharing a bare name, and differently configured instances of one class, record the same `s` (see the [`ns:` rule](cache-key-format.md#serializer-codes)) |
 | any, encrypted | Ciphertext per [encryption.md](encryption.md) |
 
 With integrity checking disabled, `default`/`auto` payloads are raw MessagePack (no
