@@ -31,6 +31,7 @@ jobs:
           # prove the fail-closed guards still fail before trusting the verify.
           python3 tools/test_wire_format_reference.py
           python3 tools/test_decode_bounds_reference.py
+          python3 tools/test_interop_v2_reference.py
           python3 tools/interop-reference.py verify
           python3 tools/interop-v2-reference.py verify
           python3 tools/test_encryption_verify.py
@@ -55,7 +56,9 @@ jobs:
           node tools/interop-crosscheck.mjs
 
       - name: Interop v2 JS cross-check (zero-dep independent container parser + LZ4 decoder + WebCrypto)
-        run: node tools/interop-v2-crosscheck.mjs
+        run: |
+          node tools/test-interop-v2-crosscheck-guard.mjs
+          node tools/interop-v2-crosscheck.mjs
 
       - name: Python-frame verify (stdlib only)
         run: |
