@@ -8,6 +8,10 @@
 // test-frame-crosscheck-guard.mjs: a baseline pins exit 0, each poisoned copy
 // must exit non-zero with the guard's own message, and every mutation is
 // checked for no-op-ness.
+//
+// It must also refuse, before allocating, a construction whose declared length
+// is above the spec's limit for its field, even when the segment counts agree
+// with that length.
 
 import { readFileSync, writeFileSync, mkdtempSync, rmSync } from "node:fs";
 import { spawnSync } from "node:child_process";
@@ -43,6 +47,21 @@ const stored = {
   ],
 };
 
+// 2^50 B: far above both field limits, and above the user address space of
+// common 64-bit hosts, so a cross-check that lost its cap fails in the
+// allocator at once instead of filling gigabytes before it reports.
+const HUGE = 2 ** 50;
+const OVERSIZE_CASES = [
+  ["container declared at 1 PiB", "container_construction", (v) => {
+    v.container_len = HUGE;
+    v.container_construction = [{ hex: "00", count: HUGE }];
+  }],
+  ["value declared at 1 PiB", "value_construction", (v) => {
+    v.original_size = HUGE;
+    v.value_construction = [{ hex: "00", count: HUGE }];
+  }],
+];
+
 const CASES = [
   ["group dropped", (d) => { delete d.constructed_container_vectors; }],
   ["group empty", (d) => { d.constructed_container_vectors = []; }],
@@ -73,6 +92,16 @@ try {
     check(`${name}: guard fires`, r.code !== 0 && r.out.includes(GUARD_MSG), `exit ${r.code}: ${r.out}`);
     // The poisoned copy must fail ONLY on coverage, or the guard is not what caught it.
     check(`${name}: nothing else fails`, (r.out.match(/^FAIL /gm) ?? []).length === 1, r.out);
+  }
+  for (const [name, field, mutate] of OVERSIZE_CASES) {
+    const d = structuredClone(doc);
+    mutate(d.constructed_container_vectors[0]);
+    check(`${name}: mutation is not a no-op`, JSON.stringify(d) !== JSON.stringify(doc), "fixture unchanged");
+    const path = join(dir, "fixture.json");
+    writeFileSync(path, JSON.stringify(d));
+    const r = run(path);
+    const msg = `${vector.name}.${field} declares ${HUGE} B, above the`;
+    check(`${name}: refused before allocating`, r.code !== 0 && r.out.includes(msg), `exit ${r.code}: ${r.out}`);
   }
 } finally {
   rmSync(dir, { recursive: true, force: true });

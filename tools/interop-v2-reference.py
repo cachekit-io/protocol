@@ -695,9 +695,12 @@ def _build() -> dict:
         ),
         "container_vectors": container_vectors,
         "construction_note": (
-            "constructed_* vectors are too large to pin as hex. Build the bytes of each "
-            "*_construction field by concatenating bytes.fromhex(segment.hex) repeated "
-            "segment.count times, in order."
+            "constructed_* vectors are too large to pin as hex. Each *_construction field "
+            "is a list of segments. For each segment in order, decode its hex (non-empty, "
+            "even length) to bytes and repeat those bytes count times (count is an integer, "
+            "0 or more); the concatenation is the field's bytes. The total MUST equal the "
+            "declared length (container_len for container_construction, original_size for "
+            "value_construction); a vector that breaks any of these rules is malformed."
         ),
         "constructed_container_vectors": [_build_wrap_threshold_vector()],
         "aad_vectors": [
