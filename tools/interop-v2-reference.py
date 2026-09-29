@@ -38,6 +38,7 @@ import importlib.util
 import json
 import logging
 import sys
+from collections.abc import Callable
 from pathlib import Path
 from types import ModuleType
 
@@ -314,6 +315,39 @@ class _Reader:
             raise V2Error(f"{len(self.buf) - self.pos} trailing byte(s) after container body")
 
 
+U32 = 1 << 32
+
+
+SIZE_TRUNCATION_VECTOR = "reject_declared_size_wraps_32_bits"
+SIZE_JOIN_VECTOR = "reject_declared_size_joins_32_bits"
+
+
+def _size_mutant(decode_size: Callable[[int], int]) -> type[_Reader]:
+    """A NON-conforming reader that passes only original_size (the body's second int) through decode_size."""
+
+    class _SizeMutant(_Reader):
+        def __init__(self, buf: bytes) -> None:
+            super().__init__(buf)
+            self._uints_read = 0
+
+        def read_uint(self) -> int:
+            self._uints_read += 1
+            value = super().read_uint()
+            return decode_size(value) if self._uints_read == 2 else value
+
+    return _SizeMutant
+
+
+# name -> (non-conforming original_size decode, the reject vectors it MUST accept, exactly).
+# The joins model a JS reader doing 32-bit arithmetic, where `hi << 32` shifts by 0.
+SIZE_MUTANTS: dict[str, tuple[type[_Reader], list[str]]] = {
+    "truncate to u32": (_size_mutant(lambda v: v % U32), [SIZE_TRUNCATION_VECTOR]),
+    # The payload length (17) is odd, so 1 | 17 == 1 | 16 == 17: this join accepts both vectors.
+    "hi | lo join": (_size_mutant(lambda v: (v >> 32) | (v % U32)), [SIZE_TRUNCATION_VECTOR, SIZE_JOIN_VECTOR]),
+    "hi + lo join": (_size_mutant(lambda v: ((v >> 32) + v) % U32), [SIZE_JOIN_VECTOR]),
+}
+
+
 def ratio_bound(payload_len: int) -> int:
     """The method-1 ratio product. Python ints never wrap, so this conforms by construction.
 
@@ -323,7 +357,7 @@ def ratio_bound(payload_len: int) -> int:
     return MAX_RATIO * payload_len
 
 
-def parse_container(data: bytes) -> tuple[int, int, bytes]:
+def parse_container(data: bytes, reader: type[_Reader] = _Reader) -> tuple[int, int, bytes]:
     """Container bytes -> (method, original_size, payload), structure only; no bounds applied."""
     if len(data) < 2:
         msg = "truncated container (magic + version bytes required)"
@@ -332,7 +366,7 @@ def parse_container(data: bytes) -> tuple[int, int, bytes]:
         raise V2Error("bad container magic (0xC1 expected) — possible interop/v1 value or mode misconfiguration")
     if data[1] != CONTAINER_VERSION:
         raise V2Error(f"unsupported container version 0x{data[1]:02x}")
-    r = _Reader(data[2:])
+    r = reader(data[2:])
     if r.read_array_header() != 3:
         raise V2Error("container body must be a 3-element array")
     method = r.read_uint()
@@ -342,9 +376,12 @@ def parse_container(data: bytes) -> tuple[int, int, bytes]:
     return method, original_size, payload
 
 
-def decode_container(data: bytes) -> bytes:
-    """Normative reader algorithm steps 2-5: container bytes -> plain value bytes."""
-    method, original_size, payload = parse_container(data)
+def decode_container(data: bytes, reader: type[_Reader] = _Reader) -> bytes:
+    """Normative reader algorithm steps 2-5: container bytes -> plain value bytes.
+
+    `reader` exists only so _self_check can run a non-conforming one.
+    """
+    method, original_size, payload = parse_container(data, reader)
     if method not in (METHOD_NONE, METHOD_LZ4_BLOCK):
         raise V2Error(f"unknown compression method {method}")
     # Security Limits — all BEFORE any decompression, integer arithmetic only.
@@ -580,6 +617,28 @@ def _build_reject_vectors(containers: dict[str, dict]) -> list[dict]:
             "error": "original_size exceeds max uncompressed size",
         },
         {
+            "name": SIZE_TRUNCATION_VECTOR,
+            "description": (
+                "method 0 container whose original_size is 2^32 + the payload length (uint64 marker). "
+                "The low 32 bits alone are a legal size that matches the payload, so a reader that "
+                "truncates original_size to 32 bits accepts this entry; original_size MUST reach the "
+                "512 MiB cap comparison at its full wire value"
+            ),
+            "container_hex": _hex_container(METHOD_NONE, U32 + len(value_bytes), value_bytes),
+            "error": "original_size exceeds max uncompressed size",
+        },
+        {
+            "name": SIZE_JOIN_VECTOR,
+            "description": (
+                "method 0 container whose original_size is 2^32 + the payload length - 1 (uint64 marker). "
+                "A reader that joins the two 32-bit halves in 32-bit arithmetic ((hi << 32) | lo or "
+                "(hi << 32) + lo, where the shift is by 0) reads 1 + (length - 1) = the payload length "
+                "and accepts this entry"
+            ),
+            "container_hex": _hex_container(METHOD_NONE, U32 + len(value_bytes) - 1, value_bytes),
+            "error": "original_size exceeds max uncompressed size",
+        },
+        {
             "name": "reject_ratio_bomb",
             "description": "10-byte payload declaring 10001 output bytes — exceeds the 1000:1 ratio (checked BEFORE decompression)",
             "container_hex": _hex_container(METHOD_LZ4_BLOCK, 10_001, bytes(10)),
@@ -673,7 +732,7 @@ def _build() -> dict:
     enc_container_hex = by_name["lz4_roundtrip_compressible"]["container_hex"]
 
     return {
-        "version": "1.1.0",
+        "version": "1.2.0",
         "spec": "spec/interop-v2.md",
         "generator": "tools/interop-v2-reference.py (CPython stdlib, incl. pure-Python LZ4 block codec)",
         "cross_checked_by": "tools/interop-v2-crosscheck.mjs (independent container parser + LZ4 block decoder + WebCrypto HKDF/AES-GCM; zero dependencies)",
@@ -870,6 +929,19 @@ def _self_check(built: dict) -> None:
     # Every structural reject vector must raise.
     for rv in built["reject_vectors"]:
         _expect_structural_reject(rv)
+
+    # A 32-bit original_size decode fails open, and the 1 TiB declared-size bomb cannot
+    # show it: its low 32 bits are 0, so such a reader still rejects it. So each reader in
+    # SIZE_MUTANTS must ACCEPT exactly its named reject vectors, proven by execution.
+    for mutant_name, (mutant, expected) in SIZE_MUTANTS.items():
+        accepted = []
+        for rv in built["reject_vectors"]:
+            try:
+                decode_container(bytes.fromhex(rv["container_hex"]), mutant)
+            except V2Error:
+                continue
+            accepted.append(rv["name"])
+        _require(accepted == expected, f"original_size reader '{mutant_name}' must accept exactly {expected}; it accepted {accepted}")
 
     # AAD pair: v2 differs from v1 exactly in the final component.
     aad = built["aad_vectors"][0]
