@@ -177,12 +177,14 @@ spec-pinned to carry **no `ns:` prefix**
 ([SaaS Considerations](../spec/interop-mode.md#saas-considerations)): the
 `{namespace}` segment is a cross-SDK key-organisation convention, and tenant
 isolation for interop comes from **authentication**, not key parsing. This
-decision does **not** change that pin. One edge: the interop
-[segment grammar](../spec/interop-mode.md#segment-grammar) rejects `:` but does
-not reserve `ns` or `nsapi`, so an interop namespace named either one yields a
-key the server parses as prefixed, not `default`: it is scoped to a namespace
-named after the operation, or rejected with `400` when the operation contains
-`.`. Neither name is safe as an interop namespace.
+decision does **not** change that pin. The interop
+[segment grammar](../spec/interop-mode.md#segment-grammar) reserves the
+namespaces `ns` and `nsapi` for exactly this reason: an interop key starting
+`ns:` or `nsapi:` would be parsed as prefixed, scoped to a namespace named after
+the operation (or rejected with `400` when the operation contains `.`), rather
+than `default`. Which SDK releases enforce the reservation is tracked in the
+feature matrix's [Compliance Status](../sdk-feature-matrix.md#compliance-status)
+"Test vectors in CI" row.
 
 Interop is therefore a *within-tenant-shared* space: within a tenant, interop
 entries are mutually accessible regardless of their `{namespace}` segment.
