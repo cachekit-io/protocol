@@ -4,11 +4,11 @@
 
 | | |
 | :--- | :--- |
-| **Status** | Proposed (accepted on merge) |
+| **Status** | Accepted (protocol [#34](https://github.com/cachekit-io/protocol/pull/34), 2026-07-23); implemented in all three SDKs by 2026-08-15 |
 | **Date** | 2026-07-23 |
 | **Ticket** | LAB-516 (filed by the LAB-275 cross-SDK feature-gap audit) |
 | **Normative spec** | [`spec/encryption.md` → Key Rotation (Keyring)](../spec/encryption.md#key-rotation-keyring) — the spec section owns the rules; this record owns the rationale and runbooks. |
-| **Implementation** | Not yet shipped in any SDK — tracked as LAB-516 sub-issues. `ZeroKnowledgeEncryptor::rotate_key()` returns `NotImplemented` (`cachekit-core/src/encryption/core.rs:492`). The [feature matrix](../sdk-feature-matrix.md#encryption) rotation row reads ❌ fleet-wide as of the LAB-1400 consolidation and flips per SDK only as each implementation ships. |
+| **Implementation** | Implemented in all three SDKs; released in Python (`cachekit` 0.18.0+, PyPI), with Rust and TypeScript on `main` pending their next release (artifacts inspected 2026-09-22). Shared decrypt helper `Keyring` in cachekit-core 0.5.0 ([cachekit-core#67](https://github.com/cachekit-io/cachekit-core/pull/67), LAB-683 — also deleted the `rotate_key()` stub, `KeyRotationState` and `RotationAwareHeader`); SDK surfaces in [cachekit-py#261](https://github.com/cachekit-io/cachekit-py/pull/261) (LAB-684), [cachekit-rs#63](https://github.com/cachekit-io/cachekit-rs/pull/63) (LAB-686) and [cachekit-ts#103](https://github.com/cachekit-io/cachekit-ts/pull/103) (LAB-685). The [feature matrix](../sdk-feature-matrix.md#encryption) rotation row reads ✅ for Python and 🚧 unreleased for Rust and TypeScript until a release carries the code; conformance is enforced by [`tools/encryption-verify.py`](../tools/encryption-verify.py) against the keyring vectors in [`test-vectors/encryption.json`](../test-vectors/encryption.json) (LAB-687). |
 
 ---
 
@@ -148,10 +148,14 @@ A single-deploy swap (new current + old into decrypt-only in one step) is
 k₁ cannot decrypt entries already written under k₂.
 
 **Compromise**: deploy a fresh current key with an **empty** decrypt-only list
-immediately, and flush encrypted namespaces. Old entries that survive the
-flush become authentication failures (misses under fail-open, errors under
-fail-closed) — a deliberate cold start, because availability ranks below
-confidentiality here.
+immediately, and flush encrypted namespaces. Flush at cut-over — do not wait
+for the rollout — and flush **again** once the last writer has stopped
+encrypting under the compromised key: instances still on the old configuration
+repopulate the namespace during the rollout, and the second flush removes what
+they wrote. "Empty" must be explicit — an omitted list falls back to
+`CACHEKIT_PREVIOUS_MASTER_KEYS`. Old entries that survive the flushes become
+authentication failures (misses under fail-open, errors under fail-closed) — a
+deliberate cold start, because availability ranks below confidentiality here.
 
 **Honest limit** (state it in every doc surface): rotation cannot
 retroactively protect ciphertext already captured by an attacker who holds
@@ -174,7 +178,8 @@ configuration as exposure of every key in it.
   `RotationAwareHeader`/`EncryptionHeader`; add the minimal multi-key decrypt
   helper the SDK bindings share, so decrypt-only keys stay in native memory.
   Removing public API is a breaking change: next 0.x minor.
-- **cachekit-py**: `encryption.previous_master_keys` (list of `SecretStr`,
+- **cachekit-py**: `previous_master_keys` — shipped as a flat `CachekitConfig`
+  field, not nested under `encryption` (list of `SecretStr`,
   env `CACHEKIT_PREVIOUS_MASTER_KEYS`, comma-separated hex); fingerprint-based
   keyring selection in `EncryptionWrapper`; delete the dead PyO3 bindings.
 - **cachekit-ts**: `previousMasterKeys: string[]`; keyring loop behind the

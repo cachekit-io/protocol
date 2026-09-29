@@ -269,6 +269,14 @@ const here = dirname(fileURLToPath(import.meta.url));
 const vectorsPath = process.argv[2] ?? join(here, "..", "test-vectors", "interop-mode.json");
 const doc = JSON.parse(readFileSync(vectorsPath, "utf8"));
 
+// Segment grammar: the fixture's pattern governs both segments; the reserved
+// namespaces are hard-coded from the spec, not read from the fixture, so the
+// reservation is checked by a second implementation rather than echoed back.
+const segmentRe = new RegExp(doc.segment_pattern, "u");
+const RESERVED_NAMESPACES = new Set(["ns", "nsapi"]);
+const segmentsValid = (namespace, operation) =>
+  segmentRe.test(namespace) && segmentRe.test(operation) && !RESERVED_NAMESPACES.has(namespace);
+
 let failures = 0;
 const check = (name, kind, expected, actual) => {
   if (expected !== actual) {
@@ -278,6 +286,7 @@ const check = (name, kind, expected, actual) => {
 };
 
 for (const v of doc.key_vectors) {
+  check(v.name, "segments valid", true, segmentsValid(v.namespace, v.operation));
   const args = fromTagged(v.args);
   const bytes = encodeToBuffer(args, { collapseFloats: true });
   check(v.name, "canonical_args_hex", v.canonical_args_hex, bytes.toString("hex"));
@@ -357,9 +366,8 @@ for (const v of doc.encryption_vectors ?? []) {
 
 for (const v of doc.error_vectors) {
   try {
-    if (v.namespace !== undefined) {
-      const re = new RegExp(doc.segment_pattern, "u");
-      if (!re.test(v.namespace) || !re.test(v.operation)) throw new Error("segment rejected");
+    if (v.namespace !== undefined && !segmentsValid(v.namespace, v.operation)) {
+      throw new Error("segment rejected");
     }
     encodeToBuffer(fromTagged(v.args), { collapseFloats: true });
     failures++;
