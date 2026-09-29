@@ -221,14 +221,14 @@ The contract a storage backend must satisfy per SDK (bytes in / bytes out; seria
 
 ## Observability
 
-"Wired" means the live cache path feeds it with zero user plumbing. Audited against code 2026-08-04 (LAB-1400).
+"Wired" means the live cache path feeds it with zero user plumbing. Audited against code 2026-08-04 (LAB-1400). Rust column re-verified against cachekit-rs merge commit `afe77add` ([cachekit-rs#81](https://github.com/cachekit-io/cachekit-rs/pull/81)) on 2026-09-29 (LAB-521). A 🚧 Rust cell flips to ✅ `X+` once a published `.crate` is verified to contain it, per [`decisions/matrix-version-verification.md`](decisions/matrix-version-verification.md).
 
 | Feature | Python | Rust | TypeScript | PHP |
 | :--- | :--- | :--- | :--- | :--- |
-| Metrics | ✅ Live `prometheus_client` counters / gauges / histograms on the default registry; no HTTP exposition helper | ⚠️ Not wired — `MetricsProvider` is a user-supplied `Arc<dyn Fn() -> Option<L1Stats>>` closure (`metrics.rs:16`); nothing populates it by default (LAB-521) | ✅ Node — live Prometheus metrics via the optional `prom-client` peer dep, custom registry supported, warns once and no-ops if absent (LAB-517) · ❌ Workers — `prom-client` is CI-excluded from the edge bundle¹ | ❌ |
-| Structured logging | ✅ JSON ring-buffer logger with sensitive-data masking (`logging.py`) | ❌ No `log` / `tracing` integration — neither crate is a dependency (LAB-521) | ⚠️ Pluggable error-logger hook (`setLogger`, default `console.error`) — a logging seam, not a structured logger (LAB-517) | ❌ |
+| Metrics | ✅ Live `prometheus_client` counters / gauges / histograms on the default registry; no HTTP exposition helper | 🚧 unreleased — live counters on `main` ([cachekit-rs#81](https://github.com/cachekit-io/cachekit-rs/pull/81)); absent from crates.io 0.7.0. `CacheKit::stats()` returns `L1Stats`, plus `l1_entry_count()` and `circuit_state()`; no Prometheus exposition (LAB-521) | ✅ Node — live Prometheus metrics via the optional `prom-client` peer dep, custom registry supported, warns once and no-ops if absent (LAB-517) · ❌ Workers — `prom-client` is CI-excluded from the edge bundle¹ | ❌ |
+| Structured logging | ✅ JSON ring-buffer logger with sensitive-data masking (`logging.py`) | 🚧 unreleased — `tracing` events on `main` ([cachekit-rs#81](https://github.com/cachekit-io/cachekit-rs/pull/81)); absent from crates.io 0.7.0. Opt-in `tracing` cargo feature: one `debug` event per get/set/delete, carrying `key_hash` (unkeyed Blake2b-128 of the storage key: a correlator, not a redaction), plus breaker transitions, to the host's subscriber (LAB-521) | ⚠️ Pluggable error-logger hook (`setLogger`, default `console.error`) — a logging seam, not a structured logger (LAB-517) | ❌ |
 | Distributed tracing (OTel) | ❌ The span-shaped API accepts spans and discards them (`NoOpSpan`, `decorators/orchestrator.py:260-267`) — instrumentation built against it silently produces nothing | ❌ | ❌ | ❌ |
-| SaaS telemetry headers (`X-CacheKit-L1-*`) | ✅ Auto | ⚠️ Reports `disabled` unless the user wires a `MetricsProvider` (LAB-521) | ✅ Auto-wired from the live L1/L2 hit/miss counters; an explicit user `metricsProvider` still wins | ❌ |
+| SaaS telemetry headers (`X-CacheKit-L1-*`) | ✅ Auto | 🚧 unreleased — auto-wiring on `main` ([cachekit-rs#81](https://github.com/cachekit-io/cachekit-rs/pull/81)); absent from crates.io 0.7.0. Auto-wired from live counters; an explicit `.metrics_provider()` still wins (LAB-521) | ✅ Auto-wired from the live L1/L2 hit/miss counters; an explicit user `metricsProvider` still wins | ❌ |
 
 ---
 
