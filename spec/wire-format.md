@@ -425,11 +425,11 @@ forbidden: **truncation** to the low-order bits (a narrowing cast such as `as u3
 `>>> 0` or `& 0xFFFFFFFF`), **sign reinterpretation** (bit-casting a `uint64` into an
 `i64`, so a value ≥ 2⁶³ reads as negative; a checked `i64` decode that rejects such
 values conforms), or joining the two 32-bit halves in 32-bit arithmetic. Unlike the
-ratio product below, truncation, and a 32-bit join that reduces to it, fail *open*:
-a declared `2³² + N` truncates to `N`, which clears the `MAX_UNCOMPRESSED` cap and
-the ratio bound and can match the payload exactly, so the entry is accepted where a
-conforming reader rejects it. Every target language has a
-conforming path: Rust `u64`, or `u32` behind a range-checked decode (`rmp-serde`
+ratio product below, truncation and the 32-bit joins fail *open*: a declared
+`2³² + N` reads as `N` when truncated, or as `N + 1` or `N | 1` when its halves are
+joined in 32-bit arithmetic. Each clears the `MAX_UNCOMPRESSED` cap and the ratio
+bound and can match the payload exactly, so the entry is accepted where a conforming
+reader rejects it. Every target language has a conforming path: Rust `u64`, or `u32` behind a range-checked decode (`rmp-serde`
 rejects an out-of-range value, whatever its marker width, instead of truncating it);
 Python's `int`; JavaScript `BigInt`, or `Number`.
 

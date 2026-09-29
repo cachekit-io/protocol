@@ -36,8 +36,8 @@ import importlib.util
 import json
 import logging
 import sys
-from pathlib import Path
 from collections.abc import Callable
+from pathlib import Path
 from types import ModuleType
 
 _HERE = Path(__file__).resolve().parent
@@ -329,6 +329,7 @@ def _size_mutant(decode_size: Callable[[int], int]) -> type[_Reader]:
 # The joins model a JS reader doing 32-bit arithmetic, where `hi << 32` shifts by 0.
 SIZE_MUTANTS: dict[str, tuple[type[_Reader], list[str]]] = {
     "truncate to u32": (_size_mutant(lambda v: v % U32), [SIZE_TRUNCATION_VECTOR]),
+    # The payload length (17) is odd, so 1 | 17 == 1 | 16 == 17: this join accepts both vectors.
     "hi | lo join": (_size_mutant(lambda v: (v >> 32) | (v % U32)), [SIZE_TRUNCATION_VECTOR, SIZE_JOIN_VECTOR]),
     "hi + lo join": (_size_mutant(lambda v: ((v >> 32) + v) % U32), [SIZE_JOIN_VECTOR]),
 }
