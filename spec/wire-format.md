@@ -41,8 +41,7 @@ This document specifies two layers:
    decode byte-identity for every vector and re-encode byte-identity for the
    canonical `*_bin` vectors only — legacy array-of-integers vectors are
    decode-only, retained as legacy-read proof. That re-encode assertion covers
-   only the vectors the pinned file contains (core currently vendors 1.1.0, with
-   the resulting gap detailed below). Byte-canonicity scopes to the
+   only the vectors the pinned file contains. Byte-canonicity scopes to the
    envelope's MessagePack encoding and to the **canonical writer's** output:
    the LZ4 bytes inside `compressed_data` are not reproducible across
    conforming compressors — see
@@ -264,12 +263,14 @@ bytes are therefore
 
 - A conforming reader MUST decompress every pinned vector's `compressed_data`
   to its pinned input, **and MUST enforce [Retrieve Flow](#retrieve-flow) steps
-  4, 5 and 9 while doing so.** Read-side conformance is not "the vectors pass":
+  2, 4, 5 and 9 while doing so.** Read-side conformance is not "the vectors pass":
   every pinned vector is well-formed and declares a truthful `original_size`, so
-  they evidence **none** of those bounds, and a reader that omits all three
+  they evidence **none** of those bounds, and a reader that omits all four
   decompresses all of them successfully. The vectors prove decode
   interoperability; the bounds in [Security Limits](#security-limits) are a
-  separate, non-negotiable obligation that no fixture can demonstrate.
+  separate, non-negotiable obligation that no `wire-format.json` vector
+  demonstrates. Step 2's decode bounds have their own fixture,
+  [`test-vectors/decode-bounds.json`](../test-vectors/decode-bounds.json).
 - A writer **other than the canonical `lz4_flex` writer** is NOT required to
   reproduce the pinned compressed bytes, and MUST NOT be judged non-conforming
   because its compressor output differs from the fixture — validate such a
@@ -287,31 +288,23 @@ bytes are therefore
   valid LZ4 block satisfies, so it accepts a re-pin to unrelated bytes. Neither
   half runs `lz4_flex`, so neither can detect an `lz4_flex` **behaviour** change;
   that remains the job of the re-encode assertions in `cachekit-core` described
-  below, subject to the vendored-version gap noted there.
+  below.
 
 This is the same doctrine [interop v2](interop-v2.md) records for its
 compressed-values profile. The pinned bytes are the **canonical implementation's**
 output (`lz4_flex` via `cachekit-core`), enforced by the re-encode byte-identity
-assertions in `cachekit-core/tests/wire_format_vectors.rs` — **but only for the
-vectors present in the fixture that repo vendors**. That matters today:
-cachekit-core vendors 1.1.0 and pins `version == "1.1.0"`, so
-`width_boundary_bin16` (added at 1.1.1) has **no canonical-writer (`lz4_flex`)
-compressed-byte check anywhere in the fleet**, and its pinned xxh3-64 checksum
-is recomputed nowhere. Its MessagePack encoding *is* covered: this repo's
-`tools/wire-format-reference.py verify` asserts legacy and bin re-encode
-byte-identity for it on every run, and liblz4 reproduces its compressed bytes
-on the optional `lz4` leg — so do not read this gap as "the vector is
-unverified". Closing it means re-vendoring 1.1.1 into cachekit-core, which
-requires three changes together, not one: bump `FIXTURE_SHA256`, bump the
-`version == "1.1.0"` pin to `1.1.1`, and relax
-`assert_eq!(twin_bytes[1], 0xc4)` to accept `0xc5` — that assertion currently
-requires *every* twin to be bin8, and `width_boundary_bin16_bin` is bin16
-(marker `0xc5`, 303-byte `compressed_data`), which is the whole point of the
-vector. A drop-in re-vendor fails that test. The reference liblz4 mapping
-above (`lz4.block`) is **decode-verified against every vector** in this repo's
-CI (`tools/wire-format-reference.py verify`, optional `lz4` leg); on encode it
-reproduces every pair except `large_compressible` byte-for-byte, which is an
-observation, not a guarantee — but one this repo's CI pins (see
+assertions in `cachekit-core/tests/wire_format_vectors.rs` — **for the vectors
+present in the fixture that repo vendors**, which recompute each twin's
+`lz4_flex` bytes and xxh3-64 checksum. Anyone vendoring the fixture should
+derive each `*_bin` twin's expected marker from its decoded `compressed_data`
+length (`≤255 → 0xc4`, `≤65535 → 0xc5`, else `0xc6`), as cachekit-core does. An
+assertion that every twin is bin8 fails on `width_boundary_bin16_bin` (`0xc5`,
+303-byte `compressed_data`), and one that accepts all three widths cannot
+detect a non-shortest header. The reference liblz4 mapping above (`lz4.block`) is **decode-verified against
+every vector** in this repo's CI (`tools/wire-format-reference.py verify`,
+optional `lz4` leg); on encode it reproduces every pair except
+`large_compressible` byte-for-byte, which is an observation, not a guarantee —
+but one this repo's CI pins (see
 `LZ4_ENCODE_DIVERGENT`), so a toolchain change that alters the divergent set
 fails CI rather than quietly making this paragraph wrong.
 
@@ -358,13 +351,14 @@ let checksum: [u8; 8] = xxh3_64(&original_data).to_be_bytes();
 ### Verification Flow
 
 ```
-1. Deserialize envelope from MessagePack
-2. Validate security limits (see below)
-3. Decompress compressed_data using original_size as size hint
-4. Compute xxh3_64(decompressed_data) as big-endian 8 bytes
-5. Compare with checksum field
-6. If mismatch → reject (integrity failure)
-7. Verify decompressed_data.length == original_size
+1. Pre-scan the envelope bytes (decode bounds, see Security Limits below)
+2. Deserialize envelope from MessagePack
+3. Validate the size and ratio limits (see below)
+4. Decompress compressed_data using original_size as size hint
+5. Compute xxh3_64(decompressed_data) as big-endian 8 bytes
+6. Compare with checksum field
+7. If mismatch → reject (integrity failure)
+8. Verify decompressed_data.length == original_size
 ```
 
 ---
@@ -372,12 +366,21 @@ let checksum: [u8; 8] = xxh3_64(&original_data).to_be_bytes();
 ## Security Limits
 
 > [!IMPORTANT]
-> All three limits below MUST be enforced by every implementation of the ByteStorage envelope. The decompression bomb check uses integer arithmetic — do not substitute floating-point.
-> Additionally, a decoder MUST validate any declared MessagePack `bin`/array
-> length header against the remaining input bytes **before** allocating for it —
-> a 5-byte `bin32` header can otherwise declare a 4 GiB allocation from a
-> ~30-byte envelope. (Slice-based decoders such as `rmp-serde` satisfy this
-> inherently; readers that pre-allocate from length fields must check.)
+> All three limits below MUST be enforced by every implementation of the ByteStorage envelope. The decompression bomb check uses integer arithmetic — do not substitute a floating-point *ratio*, and see [Decompression Bomb Detection](#decompression-bomb-detection) for the normative integer-width requirement.
+> Additionally, a decoder MUST NOT allocate for declared MessagePack lengths
+> (collection, `str`, `bin`, `ext`) more than the input can back: the declared slots,
+> summed over the **whole document**, MUST NOT exceed the input length minus one,
+> checked **before** anything is materialised. A 5-byte `bin32` header can
+> otherwise declare a 4 GiB allocation from a ~30-byte envelope. Checking each
+> header against the remaining input bytes does not satisfy this: nested headers
+> can each fit what follows them while together declaring far more than the input
+> holds. No decoder satisfies it inherently for collections — `rmp-serde` reads
+> str/bin lazily, but serde's `Vec<T>` visitor pre-allocates from declared
+> lengths. The envelope bytes *and* the payload inside them are both untrusted
+> MessagePack — decode each under the depth and allocation rules in
+> [interop-mode.md → Decode bounds](interop-mode.md#decode-bounds) (which defines
+> the slot count), pinned by `test-vectors/decode-bounds.json`, running the
+> structural pre-scan before materialising `StorageEnvelope`.
 
 | Limit | Value | Purpose |
 | :--- | ---: | :--- |
@@ -387,19 +390,68 @@ let checksum: [u8; 8] = xxh3_64(&original_data).to_be_bytes();
 
 ### Decompression Bomb Detection
 
-The ratio check uses **integer arithmetic** to prevent floating-point precision bypass:
+All three limits above are enforced here. Both size caps MUST be checked before
+the ratio product, which relies on them; their relative order is not
+significant. The check uses **integer-valued arithmetic** and never a
+floating-point *ratio*:
 
-```
+```text
+if original_size > MAX_UNCOMPRESSED:
+    REJECT  // 512 MiB cap
+
+if compressed_size > MAX_COMPRESSED:
+    REJECT  // 512 MiB cap
+
 if compressed_size == 0:
     REJECT  // Zero-length compressed with non-zero original = bomb
 
-max_allowed = MAX_COMPRESSION_RATIO * compressed_size
-if max_allowed overflows:
-    REJECT  // Overflow = bomb
+// BEGIN shared-block: ratio-product-pseudocode
+max_allowed = MAX_COMPRESSION_RATIO * uint64(compressed_size)  // 1000; widen BEFORE multiplying
+// END shared-block: ratio-product-pseudocode
 
 if original_size > max_allowed:
     REJECT  // Ratio exceeded
 ```
+
+<!-- BEGIN shared-block: ratio-product-rule (guarded by tools/check-spec-duplication.py) -->
+The ratio product MUST be computed in **at least 64-bit unsigned integers**:
+promote `compressed_size` to a ≥ 64-bit unsigned or arbitrary-precision integer, or to an
+IEEE-754 binary64 in which the operand and the product are exact integers
+(< 2⁵³), *before* the multiply. Multiplying in pointer width and widening the
+result afterwards does not satisfy this, and is invisible on a 64-bit host and in
+64-bit CI — it is the failure a 32-bit target such as `wasm32` would exhibit.
+Every target language has a conforming path: Rust `u64` (on every target,
+`wasm32` included), Python's arbitrary-precision `int`, and JavaScript `Number` —
+an IEEE-754 double represents every integer below 2⁵³ exactly and this product is
+< 2³⁹, so no `BigInt` is required. Because `compressed_size` ≤ 2²⁹ once the two 512 MiB caps
+have passed, the product is < 2³⁹ and cannot overflow 64 bits; that is why the
+pseudocode above carries no overflow branch, and why rejecting on overflow is
+**not** a substitute for widening — at 32-bit width it would refuse the 99.2 % of
+the legal `compressed_size` range that lies above the wrap threshold given in the note below.
+
+The bound MUST be computed by **multiplication**. Deriving it by division, or
+as a *ratio*, is forbidden in any arithmetic — integer or floating-point.
+Truncating integer division (`original_size / compressed_size > 1000`) accepts up to
+`1000·compressed_size + (compressed_size − 1)`, which is looser than this specification permits, and a
+floating-point ratio is the precision bypass the integer rule exists to prevent.
+
+> [!NOTE]
+> **Non-normative rationale — the *ratio product's* failure direction under
+> pointer-width arithmetic is fail-closed, never a bypass.** (This covers the
+> product only, and assumes `original_size` was decoded without truncation, so
+> the `MAX_UNCOMPRESSED` check above applied to its full wire value.) 32-bit
+> pointer width is a live target: cachekit-ts ships a `wasm32` build. Wrapping
+> begins at `compressed_size ≥ ⌈2³²/1000⌉ = 4,294,968` B (~4.29 MB), and it can only ever
+> *tighten* the bound: for any product `p ≥ 2³²`, `wrapped(p) = p mod 2³² < 2³² ≤ p`,
+> while `original_size` (≤ 512 MiB < 2³²) cannot itself wrap, so the direction
+> of the comparison is preserved. The failure mode is therefore **spurious
+> rejection**, not a bomb bypass — but a hard error rather than a cache miss,
+> and a permanent one: the wrapped bound is a pure function of `compressed_size`, so an
+> affected entry fails identically on every read. It bites only where the
+> wrapped bound falls below the 512 MiB cap, and there it can collapse to almost
+> nothing: 704 B at the first wrap threshold, 0 at the 512 MiB cap. Those payloads are legal under
+> this specification; an implementation that refuses them is non-conforming.
+<!-- END shared-block: ratio-product-rule -->
 
 ---
 
@@ -439,7 +491,9 @@ Input: raw_data (bytes), format (string, default "msgpack")
 Input: envelope_bytes
 
 1.  Validate:    envelope_bytes.length <= 512 MiB
-2.  Deserialize: envelope = msgpack_decode(envelope_bytes) as StorageEnvelope
+2.  Deserialize: pre-scan envelope_bytes (decode bounds, see Security Limits), then
+                 envelope: StorageEnvelope = msgpack_decode(envelope_bytes)
+                 // typed decode, not a cast: wrong arity or element type -> Reject
                  // accept BOTH element[0] encodings: bin AND array-of-ints
 3.  Validate:    envelope.compressed_data.length <= 512 MiB
 4.  Validate:    envelope.original_size <= 512 MiB
@@ -502,7 +556,7 @@ Datetime values are encoded as MessagePack maps with sentinel keys:
 ## SDK Storage Containers (auto mode)
 
 Remote backends (Redis, CachekitIO SaaS, Memcached, File) store opaque bytes. (L1
-behavior is SDK-specific: `cachekit-py`'s L1 holds the framed bytes; `cachekit-ts`'s
+behavior is SDK-specific: `cachekit-py`'s L1 in front of a backend holds the framed bytes; `cachekit-ts`'s
 L1 holds live decoded values, not bytes.) What the stored bytes *are* differs per
 SDK in auto mode:
 
@@ -525,9 +579,11 @@ implementations ([protocol#11](https://github.com/cachekit-io/protocol/issues/11
 
 ### Python: CK v3 frame
 
-Every **auto-mode** value `cachekit-py` stores — all backends, all serializers,
-encrypted or not — is framed (interop-mode values are plain MessagePack, never
-framed):
+Two in-process modes keep live objects and store no bytes at all: `@cache.local`
+reference caching (key code `l`) and a cache configured with `backend=None`, whose
+keys carry its configured serializer's code. Every other **auto-mode** value
+`cachekit-py` stores — all backends, all serializers, encrypted or not — is framed
+(interop-mode values are plain MessagePack, never framed):
 
 ```text
 MAGIC b"CK" (0x43 0x4B) | VERSION u8 (0x03) | HDR_LEN u32 big-endian | HEADER | PAYLOAD
@@ -543,6 +599,7 @@ MAGIC b"CK" (0x43 0x4B) | VERSION u8 (0x03) | HDR_LEN u32 big-endian | HEADER | 
 | `default`, `auto` | ByteStorage envelope (this document) over MessagePack |
 | `arrow` | **Arrow envelope**: `[8-byte xxHash3-64 checksum][Arrow IPC file]` (IPC magic `b"ARROW1"` at payload offset 8) |
 | `orjson` | `[8-byte xxHash3-64 checksum][JSON bytes]` |
+| A serializer instance's bare class name (`StandardSerializer`, `ArrowSerializer`, a custom class) | That serializer's own output; a built-in class writes the same payload as its string name above. Classes sharing a bare name, and differently configured instances of one class, record the same `s` (see the [`ns:` rule](cache-key-format.md#serializer-codes)) |
 | any, encrypted | Ciphertext per [encryption.md](encryption.md) |
 
 With integrity checking disabled, `default`/`auto` payloads are raw MessagePack (no
@@ -597,6 +654,16 @@ round-trip) in both envelope encodings — the legacy array-of-ints original
 (cachekit 0.11.1) and its protocol 1.1 `bin` twin (cachekit 0.17.0, the first
 release emitting `bin`) — an Arrow-envelope frame (structural checks), and
 must-reject error vectors — including a CK frame fed to a strict interop reader.
+
+The `bin` twin carries `"twin_of": "default_saas_write_msgpack_bytestorage"`: an
+operator-owned declaration that it differs from the legacy vector **only** in
+envelope encoding (same value, frame-prefix bytes, compressed bytes, checksum,
+size, format and inner MessagePack). `verify` enforces the declaration as a hard
+failure; `generate` never adds or removes it and only warns on divergence. When
+the default write path legitimately moves, the exit is to drop `twin_of` from
+the regenerated vector in the same commit — a reviewable fixture diff — not to
+loosen a byte comparison. The legacy vector stays frozen (no installable wheel
+emits the array-of-integers envelope any more) as legacy-read proof.
 
 Verify:
 
