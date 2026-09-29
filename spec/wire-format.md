@@ -71,7 +71,7 @@ The envelope has 4 logical fields:
 StorageEnvelope {
     compressed_data: bytes    // LZ4 block-compressed payload
     checksum:        bytes    // xxHash3-64 of ORIGINAL (uncompressed) data, 8 bytes, big-endian
-    original_size:   uint32   // Size of data before compression
+    original_size:   uint32   // Size of data before compression; a value ≥ 2³² exceeds the cap and is rejected, never truncated
     format:          string   // Serialization format identifier (e.g., "msgpack")
 }
 ```
@@ -366,7 +366,7 @@ let checksum: [u8; 8] = xxh3_64(&original_data).to_be_bytes();
 ## Security Limits
 
 > [!IMPORTANT]
-> All three limits below MUST be enforced by every implementation of the ByteStorage envelope. The decompression bomb check uses integer arithmetic — do not substitute a floating-point *ratio*, and see [Decompression Bomb Detection](#decompression-bomb-detection) for the normative integer-width requirement.
+> All three limits below MUST be enforced by every implementation of the ByteStorage envelope. The decompression bomb check uses integer arithmetic — do not substitute a floating-point *ratio*, and see [Decompression Bomb Detection](#decompression-bomb-detection) for the normative integer-width requirements: the ratio product, and `original_size` compared at its full wire value.
 > Additionally, a decoder MUST NOT allocate for declared MessagePack lengths
 > (collection, `str`, `bin`, `ext`) more than the input can back: the declared slots,
 > summed over the **whole document**, MUST NOT exceed the input length minus one,
@@ -414,6 +414,25 @@ if original_size > max_allowed:
 ```
 
 <!-- BEGIN shared-block: ratio-product-rule (guarded by tools/check-spec-duplication.py) -->
+The `MAX_UNCOMPRESSED` comparison MUST be decided on the **full wire value** of
+`original_size`. Decode it into a ≥ 64-bit unsigned or arbitrary-precision integer,
+or into an IEEE-754 binary64 (which rounds only integers above 2⁵³, far past the cap,
+so the comparison is unchanged), or reject it when it does not fit a narrower
+destination type that still holds every value up to the cap (every value that does
+not fit already exceeds it), such as a 32-bit unsigned integer. Any other decode —
+one that yields neither the exact wire value nor its binary64 rounding — is
+forbidden: **truncation** to the low-order bits (a narrowing cast such as `as u32`,
+`>>> 0` or `& 0xFFFFFFFF`), **sign reinterpretation** (bit-casting a `uint64` into an
+`i64`, so a value ≥ 2⁶³ reads as negative; a checked `i64` decode that rejects such
+values conforms), or joining the two 32-bit halves in 32-bit arithmetic. Unlike the
+ratio product below, truncation and the 32-bit joins fail *open*: a declared
+`2³² + N` reads as `N` when truncated, or as `N + 1` or `N | 1` when its halves are
+joined in 32-bit arithmetic. Each clears the `MAX_UNCOMPRESSED` cap and the ratio
+bound and can match the payload exactly, so the entry is accepted where a conforming
+reader rejects it. Every target language has a conforming path: Rust `u64`, or `u32` behind a range-checked decode (`rmp-serde`
+rejects an out-of-range value, whatever its marker width, instead of truncating it);
+Python's `int`; JavaScript `BigInt`, or `Number`.
+
 The ratio product MUST be computed in **at least 64-bit unsigned integers**:
 promote `compressed_size` to a ≥ 64-bit unsigned or arbitrary-precision integer, or to an
 IEEE-754 binary64 in which the operand and the product are exact integers
@@ -438,9 +457,9 @@ floating-point ratio is the precision bypass the integer rule exists to prevent.
 > [!NOTE]
 > **Non-normative rationale — the *ratio product's* failure direction under
 > pointer-width arithmetic is fail-closed, never a bypass.** (This covers the
-> product only, and assumes `original_size` was decoded without truncation, so
-> the `MAX_UNCOMPRESSED` check above applied to its full wire value.) 32-bit
-> pointer width is a live target: cachekit-ts ships a `wasm32` build. Wrapping
+> product only. It relies on the full-wire-value rule for `original_size` above,
+> which makes the `MAX_UNCOMPRESSED` check apply to `original_size` as declared.)
+> 32-bit pointer width is a live target: cachekit-ts ships a `wasm32` build. Wrapping
 > begins at `compressed_size ≥ ⌈2³²/1000⌉ = 4,294,968` B (~4.29 MB), and it can only ever
 > *tighten* the bound: for any product `p ≥ 2³²`, `wrapped(p) = p mod 2³² < 2³² ≤ p`,
 > while `original_size` (≤ 512 MiB < 2³²) cannot itself wrap, so the direction
