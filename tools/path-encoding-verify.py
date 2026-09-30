@@ -24,8 +24,9 @@ ROOT = Path(__file__).resolve().parents[1]
 VECTORS = ROOT / "test-vectors" / "path-encoding.json"
 
 # spec rule 2: `.`/`..` are dot segments; `health`/`ttl`/`lock` are route tokens at the
-# `/v1/cache/` level. Each encodes to itself under rule 1.
-RESERVED_SEGMENTS = {".", "..", "health", "ttl", "lock"}
+# `/v1/cache/` level; the empty key is an empty segment, so `/v1/cache/{key}` becomes the
+# `/v1/cache/` collection path. Each encodes to itself under rule 1.
+RESERVED_SEGMENTS = {"", ".", "..", "health", "ttl", "lock"}
 # The sub-delims encodeURIComponent leaves raw (spec rule 4); quote() with these as safe
 # is byte-for-byte encodeURIComponent.
 ENCODE_URI_COMPONENT_SAFE = "!*'()"
@@ -85,6 +86,8 @@ def self_test(document: dict) -> None:
         "non-bool reject flag": (set_field("a:..", "reject", 1), "absent or a bool"),
         "reserved key not flagged": (set_field("..", "reject", False), "!= reserved set"),
         "reject row with wire form": (set_field("..", "encoded", "%2E%2E"), "carries a wire form"),
+        # `""` is the empty key's own encoding and falsy, so a truthiness test would let it pass.
+        "empty-key row with empty wire form": (set_field("", "encoded", ""), "carries a wire form"),
         "reject row with alternates": (set_field("lock", "encoded_alternates", ["lock"]), "carries encoded_alternates"),
         "alternate over-encoded": (set_field("f(x)!*'", "encoded_alternates", ["%66(x)!*'"]), "!= encodeURIComponent form"),
         "alternate missing": (set_field("f(x)!*'", "encoded_alternates", []), "!= encodeURIComponent form"),
