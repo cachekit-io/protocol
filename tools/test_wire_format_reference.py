@@ -37,8 +37,12 @@ Every class below is proven reachable by execution rather than argued from readi
 
   5. The reader's own reject branches, called directly: a flipped checksum byte
      (xxhash leg), an envelope over the envelope cap, an original_size over the size
-     cap, and an empty compressed_data. Each must fail with its own message, so
-     deleting one branch fails this suite even where a later check would also reject.
+     cap, an empty compressed_data, and the ratio bound at 1000:1 + 1 B (rejected) and
+     exactly 1000:1 (passes the bound, then fails in the LZ4 decoder). Each must fail
+     with its own message, so deleting or loosening one branch fails this suite even
+     where a later check would also reject. Step 3's compressed_data cap is not
+     covered: compressed_data is a strict slice of the envelope step 1 already bounded,
+     so no input reaches it.
 
 A guard with no mutation test is one refactor away from being deleted by someone
 who cannot see what it holds up.
@@ -291,9 +295,7 @@ def check_32_bit_ratio_readers() -> list[str]:
     wrap_input = mod.iv2.construct(wrap["input_construction"])
     xxh3_64 = mod._load_xxh3()
 
-    def u32(n: int) -> int:
-        return (mod.MAX_RATIO * n) % (1 << 32)
-
+    u32 = mod.iv2.ratio_bound_u32_wrapped
     def overflow_rejects(original: int, n: int) -> bool:
         """Rejects on 32-bit overflow instead of widening (`checked_mul` on u32 + REJECT)."""
         if mod.MAX_RATIO * n >= 1 << 32:
@@ -304,7 +306,7 @@ def check_32_bit_ratio_readers() -> list[str]:
         "u32 wrap": lambda original, n: original <= u32(n),
         "i32 wrap": lambda original, n: original <= (mod.MAX_RATIO * n + (1 << 31)) % (1 << 32) - (1 << 31),
         "u32 reject-on-overflow": overflow_rejects,
-        # A literals-only block never expands, so only an expanding block catches this one.
+        # Only a vector whose original is larger than its compressed data catches this one.
         "u32 wrap after an original <= compressed fast path": lambda original, n: original <= n or original <= u32(n),
     }
 
@@ -350,16 +352,21 @@ def check_32_bit_ratio_readers() -> list[str]:
 
 
 def check_reader_rejects() -> list[str]:
-    """Each of read_envelope's reject branches fires, by its own message.
+    """Each reachable reject branch of read_envelope fires, by its own message.
 
     Every published vector is an accept vector, so without these a deleted branch
     stays green: a later check (the ratio bound, the LZ4 decoder) often rejects the
-    same envelope under a different message, or nothing does.
+    same envelope under a different message, or nothing does. The ratio pair pins
+    the bound's own logic, which the 32-bit mutants replace wholesale and so cannot:
+    `return True`, a strict `<` or a looser division form each fails one of the two.
+    Step 3 is not covered; see the module docstring.
     """
     failures = []
     mod = _load_tool()
     fixture = json.loads(FIXTURE.read_text())
-    base = next(v for v in fixture["vectors"] if v["name"] == "simple_string_bin")
+    base = next((v for v in fixture["vectors"] if v["name"] == "simple_string_bin"), None)
+    if base is None:
+        return ["fixture has no simple_string_bin: the reject cases would not run"]
     env = bytes.fromhex(base["envelope_hex"])
     data, checksum, size, fmt, _encoding = mod.decode_envelope(env)
     xxh3_64 = mod._load_xxh3()
@@ -400,6 +407,18 @@ def check_reader_rejects() -> list[str]:
         mod.encode_envelope(b"", checksum, 0, fmt, encoding="bin"),
         "zero-length compressed_data",
     )
+    expect(
+        "original_size one byte over 1000:1 rejected by the ratio bound",
+        mod.encode_envelope(data, checksum, mod.MAX_RATIO * len(data) + 1, fmt, encoding="bin"),
+        "compression ratio exceeds",
+    )
+    # Exactly 1000:1 is inside the bound, so the reader must get past it and fail later,
+    # on the decoder's output-length check, never with the ratio message.
+    expect(
+        "original_size at exactly 1000:1 passes the ratio bound",
+        mod.encode_envelope(data, checksum, mod.MAX_RATIO * len(data), fmt, encoding="bin"),
+        "LZ4 output length",
+    )
     return failures
 
 
@@ -417,10 +436,14 @@ def check_constructed_group() -> list[str]:
     def no_group(fixture: dict) -> None:
         del fixture["constructed_vectors"]
 
+    def note_drift(fixture: dict) -> None:
+        fixture["construction_note"] = "x"
+
     cases = [
         ("dropped constructed vector is set drift", drop_constructed, "constructed-vector set drifted"),
         ("missing constructed group is set drift", no_group, "constructed-vector set drifted"),
         ("altered construction differs from the builder", shrink, "differs from what the builder derives"),
+        ("construction_note drift fails", note_drift, "construction_note drifted"),
     ]
     with tempfile.TemporaryDirectory() as td:
         for label, mutate, marker in cases:

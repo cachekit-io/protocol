@@ -42,7 +42,7 @@ This document specifies two layers:
    canonical `*_bin` vectors only — legacy array-of-integers vectors are
    decode-only, retained as legacy-read proof. That re-encode assertion covers
    only the vectors the pinned file contains. The `constructed_vectors` group is
-   verified here: the reference tool rebuilds each entry from its segment lists and
+   verified only in this repo's `verify.yml`: the reference tool rebuilds each entry from its segment lists and
    reads it, and only its optional-dependency (`xxhash`) leg checks the entry's
    checksum; the stdlib leg takes it on trust. Byte-canonicity scopes to the
    envelope's MessagePack encoding and to the **canonical writer's** output:
@@ -500,8 +500,8 @@ not prove a 32-bit product: check the rejection reason. It is an accept vector,
 because a 32-bit product only ever tightens the bound, so no reject vector can catch
 one; it does not show that a reader enforces the size caps, the zero-length check or
 the ratio bound. A pointer-width product is exact on a 64-bit host, so a pass there
-does not show the rule holds on a 32-bit target. interop/v2 tests the same product
-for its container with `lz4_ratio_product_wraps_32_bits`
+does not show the rule holds on a 32-bit target. interop/v2 has its own vector for
+its container's product, `lz4_ratio_product_wraps_32_bits`
 ([interop-v2.md → Test Vectors](interop-v2.md#test-vectors)).
 
 An implementation of the ByteStorage envelope that supports a 32-bit target, as
@@ -512,7 +512,9 @@ get it: the artifact it distributes or, for source-distributed code, a build of 
 published source for that target. It runs the vector at this spec's limits, not at a
 stricter deployment limit. Anything other than returning the constructed input (a
 rejection for any reason, a checksum mismatch included, a skip, a crash) is a
-failure.
+failure. A package that distributes a build of an envelope implementation for a
+32-bit target is itself such an implementation, whichever repository the envelope
+code comes from.
 
 ---
 

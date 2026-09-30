@@ -387,8 +387,8 @@ def read_envelope(env: bytes, xxh3_64: Callable[[bytes], bytes] | None = None) -
 def build_wrap_threshold_vector(checksum_of: Callable[[bytes], bytes]) -> dict:
     """Canonical bin envelope whose compressed_data is exactly RATIO_WRAP_THRESHOLD bytes.
 
-    The block is one sequence (a literal run, then an offset-1 match of zeros) and the
-    5-literal final run LZ4's end-of-block rules require, so original_size is ~1.98 x
+    The block is two sequences: a literal run followed by an offset-1 match of zeros,
+    then the 5-literal final run LZ4's end-of-block rules require. So original_size is ~1.98 x
     compressed_size: far inside the 1000:1 bound, far above the 704 B a 32-bit product
     yields, and larger than compressed_size, so a reader that skips the product when
     original_size <= compressed_size still has to compute it. The input is a canonical
@@ -429,7 +429,7 @@ def build_wrap_threshold_vector(checksum_of: Callable[[bytes], bytes]) -> dict:
         "construction is not the canonical bin envelope"
     )
     assert iv2.lz4_block_decompress(block, original_size) == original, "block does not decompress to the input"
-    wrapped = (MAX_RATIO * compressed_size) % (1 << 32)
+    wrapped = iv2.ratio_bound_u32_wrapped(compressed_size)
     return {
         "name": WRAP_VECTOR,
         "description": (
