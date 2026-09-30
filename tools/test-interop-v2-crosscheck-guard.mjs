@@ -47,6 +47,29 @@ const stored = {
   ],
 };
 
+// method 1, same size, literals-only: it decodes to slightly less than its
+// payload, so a reader that accepts original_size <= payload_len before the
+// 32-bit product passes it.
+const [ext, last] = [Math.floor((n - 17) / 256), (n - 17) % 256];
+const litOriginal = 15 + 255 * ext + last;
+const hex32 = (x) => x.toString(16).padStart(8, "0");
+const litHead = `c6${hex32(litOriginal - 5)}`;
+const literalsOnly = {
+  ...vector,
+  original_size: litOriginal,
+  container_len: n + 14,
+  container_construction: [
+    { hex: `c1029301ce${hex32(litOriginal)}c6${hex32(n)}f0`, count: 1 },
+    { hex: "ff", count: ext },
+    { hex: `${last.toString(16).padStart(2, "0")}${litHead}`, count: 1 },
+    { hex: "00", count: litOriginal - 5 },
+  ],
+  value_construction: [
+    { hex: litHead, count: 1 },
+    { hex: "00", count: litOriginal - 5 },
+  ],
+};
+
 // The cross-check's field limits: MAX_COMPRESSED plus the widest container
 // header its parser accepts, and MAX_UNCOMPRESSED.
 const LIMITS = { container_construction: 512 * 1024 * 1024 + 30, value_construction: 512 * 1024 * 1024 };
@@ -76,6 +99,7 @@ const CASES = [
   ["group dropped", (d) => { delete d.constructed_container_vectors; }],
   ["group empty", (d) => { d.constructed_container_vectors = []; }],
   ["method-0 container at the threshold", (d) => { d.constructed_container_vectors = [stored]; }],
+  ["literals-only block at the threshold", (d) => { d.constructed_container_vectors = [literalsOnly]; }],
 ];
 
 const dir = mkdtempSync(join(tmpdir(), "iv2-guard-"));
