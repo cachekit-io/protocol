@@ -41,10 +41,13 @@ This document specifies two layers:
    decode byte-identity for every entry in `vectors` and re-encode byte-identity for the
    canonical `*_bin` vectors only — legacy array-of-integers vectors are
    decode-only, retained as legacy-read proof. That re-encode assertion covers
-   only the vectors the pinned file contains. The `constructed_vectors` group is
-   verified only in this repo's `verify.yml`: the reference tool rebuilds each entry from its segment lists and
+   only the vectors the pinned file contains. cachekit-core's vendored test reads
+   only `vectors`. The `constructed_vectors` group is verified in this repo's
+   `verify.yml`: the reference tool rebuilds each entry from its segment lists and
    reads it, and only its optional-dependency (`xxhash`) leg checks the entry's
-   checksum; the stdlib leg takes it on trust. Byte-canonicity scopes to the
+   checksum; the stdlib leg takes it on trust. An implementation that supports a
+   32-bit target also runs it in its own CI, per
+   [Decompression Bomb Detection](#decompression-bomb-detection). Byte-canonicity scopes to the
    envelope's MessagePack encoding and to the **canonical writer's** output:
    the LZ4 bytes inside `compressed_data` are not reproducible across
    conforming compressors — see

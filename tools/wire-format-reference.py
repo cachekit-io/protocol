@@ -133,6 +133,8 @@ SPEC_LIMITS = {
 MAX_UNCOMPRESSED_SIZE = SPEC_LIMITS["max_uncompressed_size"]
 MAX_COMPRESSED_SIZE = SPEC_LIMITS["max_compressed_size"]
 MAX_RATIO = SPEC_LIMITS["max_compression_ratio"]
+# The wrap helper reused from interop-v2 multiplies by its own constant.
+assert MAX_RATIO == iv2.MAX_RATIO, "ratio limit differs from interop-v2-reference.py's"
 # Smallest compressed_size whose ratio product overflows UNSIGNED 32 bits:
 # ceil(2**32 / 1000) = 4,294,968. A signed 32-bit product overflows from 2,147,484 B;
 # at this size both wrap to 704, so one vector catches both.

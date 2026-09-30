@@ -35,12 +35,13 @@ Every class below is proven reachable by execution rather than argued from readi
      or altered constructed vector must fail `verify` by name, and a wrong checksum
      must fail wherever `xxhash` is importable (the stdlib leg cannot see it).
 
-  5. The reader's own reject branches, called directly: a flipped checksum byte
-     (xxhash leg), an envelope over the envelope cap, an original_size over the size
-     cap, an empty compressed_data, and the ratio bound at 1000:1 + 1 B (rejected) and
-     exactly 1000:1 (passes the bound, then fails in the LZ4 decoder). Each must fail
-     with its own message, so deleting or loosening one branch fails this suite even
-     where a later check would also reject. Step 3's compressed_data cap is not
+  5. The reader's own reject branches, called directly: each of the 8 checksum bytes
+     flipped in turn (xxhash leg), an envelope over the envelope cap, an original_size
+     over the size cap, an empty compressed_data, and the ratio bound at 1000:1 + 1 B
+     (rejected) and exactly 1000:1 (inside the bound, so the reader must get past it).
+     Each reject must fail with its own message, and the exact-bound case with
+     anything but the ratio message, so deleting or loosening one branch fails this
+     suite even where a later check would also reject. Step 3's compressed_data cap is not
      covered: compressed_data is a strict slice of the envelope step 1 already bounded,
      so no input reaches it.
 
@@ -242,7 +243,10 @@ def check_whole_file_properties() -> list[str]:
         del fixture["limits"]["max_compression_ratio"]
 
     def unclassifiable(fixture: dict) -> None:
-        next(v for v in fixture["vectors"] if v["name"] == "simple_string_bin")["envelope_encoding"] = "bin16"
+        vec = next((v for v in fixture["vectors"] if v["name"] == "simple_string_bin"), None)
+        if vec is None:
+            raise KeyError("fixture has no simple_string_bin to mutate")
+        vec["envelope_encoding"] = "bin16"
 
     cases = [
         (
@@ -296,6 +300,7 @@ def check_32_bit_ratio_readers() -> list[str]:
     xxh3_64 = mod._load_xxh3()
 
     u32 = mod.iv2.ratio_bound_u32_wrapped
+
     def overflow_rejects(original: int, n: int) -> bool:
         """Rejects on 32-bit overflow instead of widening (`checked_mul` on u32 + REJECT)."""
         if mod.MAX_RATIO * n >= 1 << 32:
@@ -352,7 +357,8 @@ def check_32_bit_ratio_readers() -> list[str]:
 
 
 def check_reader_rejects() -> list[str]:
-    """Each reachable reject branch of read_envelope fires, by its own message.
+    """Each reachable reject branch of read_envelope fires, by its own message; an
+    envelope exactly at the ratio bound gets past it.
 
     Every published vector is an accept vector, so without these a deleted branch
     stays green: a later check (the ratio bound, the LZ4 decoder) often rejects the
@@ -371,7 +377,8 @@ def check_reader_rejects() -> list[str]:
     data, checksum, size, fmt, _encoding = mod.decode_envelope(env)
     xxh3_64 = mod._load_xxh3()
 
-    def expect(label: str, envelope: bytes, marker: str, xxh3=None) -> None:
+    def expect(label: str, envelope: bytes, marker: str, xxh3=None, *, absent: bool = False) -> None:
+        """Pass when `marker` is in the rejection, or, with `absent`, when it rejects without it."""
         try:
             mod.read_envelope(envelope, xxh3)
             got = "accepted"
@@ -379,21 +386,23 @@ def check_reader_rejects() -> list[str]:
             got = str(e)
         except ValueError as e:
             got = f"{type(e).__name__}: {e}"
-        ok = marker in got
+        ok = (got != "accepted" and marker not in got) if absent else marker in got
         print(f"  [{'ok' if ok else 'FAIL'}] {label}: {got}")
         if not ok:
             failures.append(label)
 
     if xxh3_64 is None:
-        print("  [skip] flipped checksum byte: xxhash not importable (CI's optional-deps leg runs it)")
+        print("  [skip] flipped checksum bytes: xxhash not importable (CI's optional-deps leg runs it)")
     else:
-        flipped = bytes([checksum[0] ^ 0x01]) + checksum[1:]
-        expect(
-            "flipped checksum byte rejected",
-            mod.encode_envelope(data, flipped, size, fmt, encoding="bin"),
-            "checksum mismatch",
-            xxh3_64,
-        )
+        # Every byte, so a compare over only part of the checksum fails too.
+        for i in range(len(checksum)):
+            flipped = checksum[:i] + bytes([checksum[i] ^ 0x01]) + checksum[i + 1 :]
+            expect(
+                f"checksum byte {i} flipped rejected",
+                mod.encode_envelope(data, flipped, size, fmt, encoding="bin"),
+                "checksum mismatch",
+                xxh3_64,
+            )
     # The envelope cap is 512 MiB; lowering it for one call avoids a 512 MiB allocation.
     with patch.object(mod, "MAX_COMPRESSED_SIZE", len(env) - 1):
         expect("envelope over the envelope cap rejected", env, "envelope exceeds max compressed size")
@@ -412,12 +421,13 @@ def check_reader_rejects() -> list[str]:
         mod.encode_envelope(data, checksum, mod.MAX_RATIO * len(data) + 1, fmt, encoding="bin"),
         "compression ratio exceeds",
     )
-    # Exactly 1000:1 is inside the bound, so the reader must get past it and fail later,
-    # on the decoder's output-length check, never with the ratio message.
+    # Exactly 1000:1 is inside the bound, so the reader must get past it. The data does
+    # not decode to that length, so it still rejects, just never as a ratio bomb.
     expect(
         "original_size at exactly 1000:1 passes the ratio bound",
         mod.encode_envelope(data, checksum, mod.MAX_RATIO * len(data), fmt, encoding="bin"),
-        "LZ4 output length",
+        "compression ratio exceeds",
+        absent=True,
     )
     return failures
 
