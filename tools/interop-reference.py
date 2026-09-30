@@ -46,6 +46,12 @@ SEGMENT_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{0,63}$")
 # rejected. Namespace-only and exact-match — `ns` as an operation, or `nsapix` as
 # a namespace, cannot form either prefix.
 RESERVED_NAMESPACES = frozenset({"ns", "nsapi"})
+# The grammar admits `..` inside a segment, but the server rejects `..` anywhere
+# in a key (spec/cache-key-format.md#server-side-requirements, Traversal), so a
+# segment containing it would mint a key that fails on every request. A `..`
+# cannot span the `:` delimiter (a segment cannot start with `.`), so checking
+# each segment covers the whole key.
+FORBIDDEN_SUBSTRING = ".."
 
 UINT64_MAX = 2**64 - 1
 INT64_MIN = -(2**63)
@@ -250,6 +256,10 @@ def interop_key(namespace: str, operation: str, args: list | tuple) -> str:
         if not SEGMENT_RE.fullmatch(seg):
             raise InteropError(
                 f"invalid interop {name} {seg!r}: must full-string match ^[a-z0-9][a-z0-9._-]{{0,63}}$"
+            )
+        if FORBIDDEN_SUBSTRING in seg:
+            raise InteropError(
+                f"invalid interop {name} {seg!r}: must not contain '..' (the server rejects '..' anywhere in a key)"
             )
     if namespace in RESERVED_NAMESPACES:
         raise InteropError(
@@ -606,6 +616,16 @@ KEY_VECTORS: list[dict] = [
         "operation": "nsapi",
         "args": [1],
     },
+    {
+        "name": "lone_dots_stay_valid",
+        "description": (
+            "Only '..' is forbidden: a lone '.' (namespace 'app.v1') and non-adjacent dots "
+            "(operation 'users.fetch.by_id') stay valid"
+        ),
+        "namespace": "app.v1",
+        "operation": "users.fetch.by_id",
+        "args": [1],
+    },
 ]
 
 VALUE_VECTORS: list[dict] = [
@@ -699,6 +719,20 @@ ERROR_VECTORS: list[dict] = [
             "(rejected whatever the operation, including one the server would 400 on for its '.')"
         ),
     },
+    {
+        "name": "reject_double_dot_namespace",
+        "namespace": "a..b",
+        "operation": "get_user",
+        "args": [],
+        "error": "namespace must not contain '..': the pattern admits it, but the server rejects '..' anywhere in a key",
+    },
+    {
+        "name": "reject_double_dot_operation",
+        "namespace": "users",
+        "operation": "x..y",
+        "args": [],
+        "error": "operation must not contain '..': the pattern admits it, but the server rejects '..' anywhere in a key",
+    },
 ]
 
 
@@ -741,7 +775,7 @@ def _build() -> dict:
     aad = aad_v3(ENC_TENANT_ID, single_int["expected_key"])
 
     return {
-        "version": "1.1.0",
+        "version": "1.2.0",
         "spec": "spec/interop-mode.md",
         "generator": "tools/interop-reference.py (CPython stdlib)",
         "cross_checked_by": "tools/interop-crosscheck.mjs (independent encoder + @noble/hashes blake2b + WebCrypto HKDF/AES-GCM)",
@@ -751,7 +785,9 @@ def _build() -> dict:
         "segment_pattern_note": (
             "Full-string match REQUIRED (Python: re.fullmatch, not re.match — $ matches before a trailing newline). "
             "namespace additionally MUST NOT be exactly 'ns' or 'nsapi' (reserved: the server parses those key "
-            "prefixes). The reservation is namespace-only; operation has no reserved values."
+            "prefixes). The reservation is namespace-only; operation has no reserved values. Neither segment "
+            "may contain '..' (the pattern admits it; the server rejects '..' anywhere in a key). A lone '.' "
+            "stays valid."
         ),
         "width_coverage_note": (
             "All *16 header boundaries (uint/int widths, str8->str16, bin8->bin16, fixarray->array16, "
@@ -851,6 +887,14 @@ def _self_check(built: dict) -> None:
         pass
     else:
         raise AssertionError("lone surrogate must be rejected, not encoded")
+
+    # The '..' vectors must pass the pattern, or they would prove the grammar
+    # rather than the extra rule an implementation has to add beside it.
+    for name in ("reject_double_dot_namespace", "reject_double_dot_operation"):
+        ev = next(e for e in ERROR_VECTORS if e["name"] == name)
+        assert SEGMENT_RE.fullmatch(ev["namespace"]) and SEGMENT_RE.fullmatch(ev["operation"]), (
+            f"{name} must match segment_pattern so it exercises the '..' rule"
+        )
 
     for ev in ERROR_VECTORS:
         try:

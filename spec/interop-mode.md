@@ -13,8 +13,7 @@
 > each registry or the [SDK feature matrix](../sdk-feature-matrix.md#compliance-status) for current versions.
 > Server-side: the CachekitIO validator accepts interop-format keys
 > (`{namespace}:{operation}:{args_hash}` scopes to the `default` namespace;
-> see [cache-key-format.md → Server-Side Requirements](cache-key-format.md#server-side-requirements)),
-> except a key with `..` in a segment ([SaaS Considerations](#saas-considerations)).
+> see [cache-key-format.md → Server-Side Requirements](cache-key-format.md#server-side-requirements)).
 > Design discussion: [Issue #1](https://github.com/cachekit-io/protocol/issues/1) ·
 > Test vectors: [`test-vectors/interop-mode.json`](../test-vectors/interop-mode.json) ·
 > Reference implementation: [`tools/interop-reference.py`](../tools/interop-reference.py)
@@ -124,6 +123,16 @@ interop keys are portable, so a namespace valid on one backend is valid on all. 
 reservation is exact-match and namespace-only — `nsapix` is a valid namespace, and `ns`
 and `nsapi` are valid operations. The `reject_reserved_namespace_*` error vectors and the
 `reservation_scope` key vector pin it.
+
+A segment (`namespace` or `operation`) additionally MUST NOT contain `..`: the server
+rejects `..` anywhere in a key
+([cache-key-format.md → Server-Side Requirements](cache-key-format.md#server-side-requirements),
+the Traversal row), so such a key would fail on every CachekitIO request. The pattern
+admits `..`, so this is a separate check beside it; the pattern stays a plain regex
+without lookahead. SDKs reject a `..` segment like a reserved namespace: at decoration /
+registration time, on every backend. A lone `.` stays valid, and so do dots that are not
+adjacent (`app.v1`, `users.fetch.by_id`). The `reject_double_dot_*` error vectors and the
+`lone_dots_stay_valid` key vector pin it.
 
 > [!WARNING]
 > **Full-string means full-string.** In Python, `re.match` with a `$` anchor still
@@ -399,10 +408,8 @@ isolation comes from authentication, not key parsing).
 > accepts interop-format keys; see
 > [cache-key-format.md → Server-Side Requirements](cache-key-format.md#server-side-requirements).
 > The interop segment grammar (lowercase, no `:` beyond the two delimiters, no `/`,
-> max 194 chars, no reserved namespace) is deliberately a subset of what the
-> security-only validator accepts, with one known exception: the grammar admits `..`
-> inside a segment, and the validator rejects `..` anywhere in a key (the Traversal
-> row), so such a key fails with `400`.
+> no `..`, max 194 chars, no reserved namespace) is deliberately a subset of what the
+> security-only validator accepts.
 
 ---
 
@@ -439,7 +446,7 @@ const getUser = cache.wrap(fetchUser, {
 An SDK implementation of interop mode MUST:
 
 1. Require explicit `namespace` and `operation`, validated against the segment grammar
-   (including the reserved namespaces `ns` and `nsapi`).
+   (including the reserved namespaces `ns` and `nsapi`, and no `..` in either segment).
 2. Build the canonical argument array per the binding rules (named→positional,
    defaults applied where introspectable).
 3. Normalize and encode per this spec; reject out-of-model values with an error.
@@ -561,11 +568,11 @@ not re-litigated by accident.
 
 | Group | Count | Verifies |
 | :--- | :---: | :--- |
-| `key_vectors` | 34 | Canonical argument bytes (exact hex), args hash, full key — the `2.0`≡`2` collapse pair, supplementary-plane key sorting, heterogeneous and mixed-sign sets (byte order ≠ natural order), set dedupe (`{2, 2.0}` → `[2]`), datetime edge cases incl. pre-epoch, both collapse-range endpoints, every `*16`-tier width boundary (uint/int ladders, str/bin/array/map headers, root array16), and the reservation's exact-match, namespace-only scope (`nsapix` namespace, `nsapi` operation) |
+| `key_vectors` | 35 | Canonical argument bytes (exact hex), args hash, full key — the `2.0`≡`2` collapse pair, supplementary-plane key sorting, heterogeneous and mixed-sign sets (byte order ≠ natural order), set dedupe (`{2, 2.0}` → `[2]`), datetime edge cases incl. pre-epoch, both collapse-range endpoints, every `*16`-tier width boundary (uint/int ladders, str/bin/array/map headers, root array16), the reservation's exact-match, namespace-only scope (`nsapix` namespace, `nsapi` operation), and lone dots, which stay valid (`app.v1` namespace, `users.fetch.by_id` operation) |
 | `value_vectors` | 4 | Plain-MessagePack value bytes (exact hex), float64 preservation in the value profile, temporal sentinel maps |
 | `aad_vectors` | 1 | AAD v0x03 bytes over an interop key (`format=msgpack`, `compressed=False`) |
 | `encryption_vectors` | 1 | Full HKDF-SHA256 → AES-256-GCM round-trip over plain-msgpack plaintext with the interop AAD (fixed nonce; decrypt-verified) |
-| `error_vectors` | 11 | Inputs that MUST be rejected (NaN, +Inf and −Inf as independent vectors, int overflow/underflow, naive datetime, bad segments incl. trailing newline, the reserved namespaces `ns` and `nsapi`). The `error` text is a maintainer note, not a normative message |
+| `error_vectors` | 13 | Inputs that MUST be rejected (NaN, +Inf and −Inf as independent vectors, int overflow/underflow, naive datetime, bad segments incl. trailing newline, the reserved namespaces `ns` and `nsapi`, `..` in either segment). The `error` text is a maintainer note, not a normative message |
 
 [`test-vectors/decode-bounds.json`](../test-vectors/decode-bounds.json) pins the
 [Decode bounds](#decode-bounds); `tools/decode-bounds-reference.py verify` checks it,
