@@ -608,15 +608,15 @@
     },
     {
       "name": "lone_dots_stay_valid",
-      "description": "Only '..' is forbidden: a lone '.' (namespace 'app.v1') and non-adjacent dots (operation 'users.fetch.by_id') stay valid",
-      "namespace": "app.v1",
+      "description": "Only '..' is forbidden: a lone trailing '.' (namespace 'app.') and non-adjacent dots (operation 'users.fetch.by_id') stay valid",
+      "namespace": "app.",
       "operation": "users.fetch.by_id",
       "args": [
         1
       ],
       "canonical_args_hex": "9101",
       "args_hash": "405f09a3617bcc1425ea95b9840d9c2713e3ecebd5a3227abc599317b732e21a",
-      "expected_key": "app.v1:users.fetch.by_id:405f09a3617bcc1425ea95b9840d9c2713e3ecebd5a3227abc599317b732e21a"
+      "expected_key": "app.:users.fetch.by_id:405f09a3617bcc1425ea95b9840d9c2713e3ecebd5a3227abc599317b732e21a"
     }
   ],
   "value_vectors": [
@@ -761,9 +761,9 @@
     {
       "name": "reject_double_dot_operation",
       "namespace": "users",
-      "operation": "x..y",
+      "operation": "x..",
       "args": [],
-      "error": "operation must not contain '..': the pattern admits it, but the server rejects '..' anywhere in a key"
+      "error": "operation must not contain '..': the pattern admits it, but the server rejects '..' anywhere in a key (here at the end of the segment, which a check that skips the last pair misses)"
     }
   ],
   "aad_vectors": [

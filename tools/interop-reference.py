@@ -48,9 +48,9 @@ SEGMENT_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{0,63}$")
 RESERVED_NAMESPACES = frozenset({"ns", "nsapi"})
 # The grammar admits `..` inside a segment, but the server rejects `..` anywhere
 # in a key (spec/cache-key-format.md#server-side-requirements, Traversal), so a
-# segment containing it would mint a key that fails on every request. A `..`
-# cannot span the `:` delimiter (a segment cannot start with `.`), so checking
-# each segment covers the whole key.
+# segment containing it would mint a key that fails on every request. The `:`
+# delimiters separate the segments and the hash is hex, so any `..` in the key
+# lies inside one segment, and checking each segment covers the whole key.
 FORBIDDEN_SUBSTRING = ".."
 
 UINT64_MAX = 2**64 - 1
@@ -619,10 +619,10 @@ KEY_VECTORS: list[dict] = [
     {
         "name": "lone_dots_stay_valid",
         "description": (
-            "Only '..' is forbidden: a lone '.' (namespace 'app.v1') and non-adjacent dots "
+            "Only '..' is forbidden: a lone trailing '.' (namespace 'app.') and non-adjacent dots "
             "(operation 'users.fetch.by_id') stay valid"
         ),
-        "namespace": "app.v1",
+        "namespace": "app.",
         "operation": "users.fetch.by_id",
         "args": [1],
     },
@@ -729,9 +729,12 @@ ERROR_VECTORS: list[dict] = [
     {
         "name": "reject_double_dot_operation",
         "namespace": "users",
-        "operation": "x..y",
+        "operation": "x..",
         "args": [],
-        "error": "operation must not contain '..': the pattern admits it, but the server rejects '..' anywhere in a key",
+        "error": (
+            "operation must not contain '..': the pattern admits it, but the server rejects '..' anywhere in a key "
+            "(here at the end of the segment, which a check that skips the last pair misses)"
+        ),
     },
 ]
 
