@@ -28,6 +28,12 @@ Every class below is proven reachable by execution rather than argued from readi
          "differs from liblz4's output" — a one-bit check any other valid LZ4 block
          satisfies, so a re-pin to unrelated bytes passed.
 
+  4. The ratio-product width rule. The reader's product is swapped, in process, for
+     three 32-bit ones (u32 wrap, i32 wrap, reject on u32 overflow). Each must pass
+     every pinned vector and reject `envelope_ratio_product_wraps_32_bits`. A dropped
+     or altered constructed vector must fail `verify` by name, and a wrong checksum
+     must fail wherever `xxhash` is importable (the stdlib leg cannot see it).
+
 A guard with no mutation test is one refactor away from being deleted by someone
 who cannot see what it holds up.
 
@@ -53,6 +59,10 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 TOOL = HERE / "wire-format-reference.py"
 FIXTURE = HERE.parent / "test-vectors" / "wire-format.json"
+# The tool loads its LZ4 decoder from interop-v2-reference.py, which loads interop-reference.py.
+IMPORTED_TOOLS = (HERE / "interop-v2-reference.py", HERE / "interop-reference.py")
+WRAP_VECTOR = "envelope_ratio_product_wraps_32_bits"
+U32 = 1 << 32
 
 # A vector whose legacy base is dropped by a bad merge, leaving an orphan twin.
 # LAB-868's width-boundary vector: the only bin16 coverage in the fleet.
@@ -81,7 +91,8 @@ def _scratch(tmp: Path, mutate: Callable[[dict], None] | None = None) -> Path:
     """Mirror tool + fixture into a scratch tree so mutations never touch the repo."""
     (tmp / "tools").mkdir(parents=True, exist_ok=True)
     (tmp / "test-vectors").mkdir(parents=True, exist_ok=True)
-    shutil.copy(TOOL, tmp / "tools" / TOOL.name)
+    for tool in (TOOL, *IMPORTED_TOOLS):
+        shutil.copy(tool, tmp / "tools" / tool.name)
     fixture = json.loads(FIXTURE.read_text())
     if mutate:
         mutate(fixture)
@@ -253,6 +264,116 @@ def check_whole_file_properties() -> list[str]:
     return failures
 
 
+def _load_tool():
+    import importlib.util as u
+
+    spec = u.spec_from_file_location("_wfr_reader", TOOL)
+    if spec is None or spec.loader is None:
+        raise _ModuleLoadError(TOOL)
+    mod = u.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def check_32_bit_ratio_readers() -> list[str]:
+    """Three 32-bit ratio products pass every pinned vector and fail the constructed one.
+
+    The spec's >=64-bit rule is enforceable only if a published vector fails a reader
+    that breaks it. Before fixture 1.2.0 none did: the largest envelope was 478 B.
+    """
+    failures = []
+    mod = _load_tool()
+    fixture = json.loads(FIXTURE.read_text())
+    pinned = [(v["name"], bytes.fromhex(v["envelope_hex"]), bytes.fromhex(v["input_hex"])) for v in fixture["vectors"]]
+    wrap = next((v for v in fixture.get("constructed_vectors", []) if v["name"] == WRAP_VECTOR), None)
+    if wrap is None:
+        return [f"fixture has no {WRAP_VECTOR}: the mutation suite would pass vacuously"]
+    wrap_env = mod.iv2.construct(wrap["envelope_construction"])
+    wrap_input = mod.iv2.construct(wrap["input_construction"])
+    xxh3_64 = mod._load_xxh3()
+
+    def overflow_rejects(n: int) -> int:
+        """Rejects on 32-bit overflow instead of widening (`checked_mul` on u32 + REJECT)."""
+        if mod.MAX_RATIO * n >= U32:
+            raise mod.EnvelopeReject("ratio product overflows u32")
+        return mod.MAX_RATIO * n
+
+    mutants: dict[str, Callable[[int], int]] = {
+        "u32 wrap": lambda n: (mod.MAX_RATIO * n) % U32,
+        "i32 wrap": lambda n: (mod.MAX_RATIO * n + (1 << 31)) % U32 - (1 << 31),
+        "u32 reject-on-overflow": overflow_rejects,
+    }
+
+    def report(ok: bool, label: str) -> None:
+        print(f"  [{'ok' if ok else 'FAIL'}] {label}")
+        if not ok:
+            failures.append(label)
+
+    # Positive control: the conforming reader accepts everything, or the cases below prove nothing.
+    report(
+        all(mod.read_envelope(env, xxh3_64) == inp for _n, env, inp in pinned)
+        and mod.read_envelope(wrap_env, xxh3_64) == wrap_input,
+        "conforming reader accepts every vector",
+    )
+    for name, mutant in mutants.items():
+        mod.ratio_bound = mutant
+        try:
+            missed = [n for n, env, inp in pinned if mod.read_envelope(env, xxh3_64) != inp]
+        except ValueError as e:
+            missed = [f"raised {e!r}"]
+        report(not missed, f"{name}: every pinned vector still passes (the gap was real) {missed or ''}")
+        try:
+            mod.read_envelope(wrap_env, xxh3_64)
+            caught = False
+        except mod.EnvelopeReject as e:
+            caught = "ratio" in str(e)
+        report(caught, f"{name}: {WRAP_VECTOR} rejected as a ratio bomb")
+
+    # The stdlib leg takes the checksum on trust, so a wrong one must fail wherever
+    # xxhash is importable (CI's optional-deps leg), or every SDK re-vendor would
+    # fail this accept vector for the wrong reason.
+    mod = _load_tool()  # unpatched
+    wrong = mod.build_wrap_threshold_vector(lambda _original: bytes(8))
+    stdlib_passes = mod.read_envelope(mod.iv2.construct(wrong["envelope_construction"])) == wrap_input
+    report(stdlib_passes, "stdlib reader cannot see a wrong checksum (why the xxhash leg is required)")
+    if xxh3_64 is None:
+        print("  [skip] wrong checksum rejected: xxhash not importable (CI's optional-deps leg runs it)")
+    else:
+        try:
+            mod._verify_constructed(wrong, xxh3_64, None, None)
+            rejected = False
+        except AssertionError as e:
+            rejected = "checksum" in str(e)
+        report(rejected, "wrong checksum rejected with xxhash")
+    return failures
+
+
+def check_constructed_group() -> list[str]:
+    """verify fails a dropped or altered constructed vector, by name."""
+    failures = []
+
+    def drop_constructed(fixture: dict) -> None:
+        fixture["constructed_vectors"] = []
+
+    def shrink(fixture: dict) -> None:
+        # A block one 255-run shorter: compressed_size falls below the wrap threshold.
+        fixture["constructed_vectors"][0]["envelope_construction"][1]["count"] -= 1
+
+    def no_group(fixture: dict) -> None:
+        del fixture["constructed_vectors"]
+
+    cases = [
+        ("dropped constructed vector is set drift", drop_constructed, "constructed-vector set drifted"),
+        ("missing constructed group is set drift", no_group, "constructed-vector set drifted"),
+        ("altered construction differs from the builder", shrink, "differs from what the builder derives"),
+    ]
+    with tempfile.TemporaryDirectory() as td:
+        for label, mutate, marker in cases:
+            tool = _scratch(Path(tempfile.mkdtemp(dir=td)), mutate=mutate)
+            _expect(failures, label, _run([], ["verify"], tool=tool), 1, marker)
+    return failures
+
+
 def check_flag_rejections() -> list[str]:
     """A flag accepted-and-ignored on the fixture-writing path is a fail-open."""
     failures = []
@@ -284,6 +405,8 @@ def main() -> int:
         ("generate append-only", check_generate_is_append_only),
         ("whole-file properties", check_whole_file_properties),
         ("flag rejection", check_flag_rejections),
+        ("32-bit ratio readers", check_32_bit_ratio_readers),
+        ("constructed group", check_constructed_group),
     ):
         print(f"{label}:")
         failures += check()

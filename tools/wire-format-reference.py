@@ -1,12 +1,17 @@
 #!/usr/bin/env python3
-"""Reference encoder/verifier for the ByteStorage envelope (spec/wire-format.md).
+"""Reference encoder/verifier/reader for the ByteStorage envelope (spec/wire-format.md).
 
 Stdlib-only (optional extras, see below). Scope: the **MessagePack encoding**
 of the StorageEnvelope positional array — both the legacy element[0] encoding
 (array of integers, pre-1.1 writers) and the canonical one (msgpack `bin`,
-protocol 1.1+ writers). xxHash3-64 recomputation is NOT verified here (not
-stdlib); byte-level enforcement for the canonical writer lives in
-cachekit-core's CI (`tests/wire_format_vectors.rs`, LAB-423).
+protocol 1.1+ writers) — and a reader, `read_envelope`, that runs the spec's
+Retrieve Flow with every Security-Limits bound. The LZ4 decoder and the
+segment-list `construct` are imported from tools/interop-v2-reference.py, not
+copied. xxHash3-64 is verified only when the optional `xxhash` package is
+importable: a stdlib xxh3 would be a second hand-written hash needing its own
+verifier, and CI's optional-deps leg already pins third-party packages for this
+tool. Byte-level enforcement for the canonical writer lives in cachekit-core's
+CI (`tests/wire_format_vectors.rs`, LAB-423).
 
 What `verify` proves, for every vector pair in ../test-vectors/wire-format.json:
   1. Codec fidelity — decoding a legacy vector and re-encoding it in legacy form
@@ -28,6 +33,14 @@ What `verify` proves, for every vector pair in ../test-vectors/wire-format.json:
      whole-file properties: checks 1-4 iterate the fixture's vector list and so
      are structurally blind to a vector that is simply absent, or to a bound the
      fixture misdeclares to every SDK that reads it.
+  6. The reader accepts every pinned vector, both encodings, and returns its input.
+  7. Each `constructed_vectors` entry equals what its builder derives, byte for
+     byte, and the reader decodes the constructed envelope to the constructed
+     input. `envelope_ratio_product_wraps_32_bits` has a compressed_size of
+     ceil(2**32 / 1000) B, so a reader computing the ratio product in 32 bits
+     rejects it (mutation-tested by tools/test_wire_format_reference.py). Its
+     checksum is the one field stdlib cannot derive: only the `xxhash` leg proves
+     it is the true xxHash3-64 of the constructed input.
 
 Usage:
     python3 tools/wire-format-reference.py verify     # default
@@ -36,7 +49,9 @@ Usage:
                                                       # missing (CI optional-deps leg)
     python3 tools/wire-format-reference.py generate   # (re)derive *_bin vectors
 
-Two optional-dependency checks deepen `verify` when importable (both run in CI):
+Three optional-dependency checks deepen `verify` when importable (all run in CI):
+  - `xxhash`: the reader verifies every vector's checksum (Retrieve Flow steps
+    7-8), pinned and constructed. `generate` needs it to add a constructed vector.
   - `msgpack`: third-encoder conformance — msgpack-python re-encodes both forms
     from decoded fields and must reproduce the pinned bytes byte-identically.
   - `lz4`: C-implementation (liblz4) decode conformance — liblz4 must decompress
@@ -56,13 +71,30 @@ either; regression-tested by tools/test_wire_format_reference.py.
 
 from __future__ import annotations
 
+import importlib.util
 import json
 import sys
+from collections.abc import Callable
 from pathlib import Path
+from types import ModuleType
 
-FIXTURE_PATH = Path(__file__).resolve().parent.parent / "test-vectors" / "wire-format.json"
+_HERE = Path(__file__).resolve().parent
+FIXTURE_PATH = _HERE.parent / "test-vectors" / "wire-format.json"
 
-FIXTURE_VERSION = "1.1.1"
+
+def _load_iv2() -> ModuleType:
+    """Import tools/interop-v2-reference.py (hyphenated filename) for its LZ4 decoder and `construct`."""
+    spec = importlib.util.spec_from_file_location("interop_v2_reference", _HERE / "interop-v2-reference.py")
+    if spec is None or spec.loader is None:
+        raise ImportError("cannot load tools/interop-v2-reference.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+iv2 = _load_iv2()
+
+FIXTURE_VERSION = "1.2.0"
 # The base vectors this fixture is pinned to contain. Checked as a SET, because every
 # other integrity check here iterates the fixture's own vector list and therefore
 # cannot see a vector that is simply absent: dropping a legacy base AND its `_bin`
@@ -96,6 +128,12 @@ SPEC_LIMITS = {
     "max_compression_ratio": 1000,
 }
 MAX_UNCOMPRESSED_SIZE = SPEC_LIMITS["max_uncompressed_size"]
+MAX_COMPRESSED_SIZE = SPEC_LIMITS["max_compressed_size"]
+MAX_RATIO = SPEC_LIMITS["max_compression_ratio"]
+# Smallest compressed_size whose ratio product overflows UNSIGNED 32 bits:
+# ceil(2**32 / 1000) = 4,294,968. A signed 32-bit product overflows from 2,147,484 B;
+# at this size both wrap to 704, so one vector catches both.
+RATIO_WRAP_THRESHOLD = -(-(1 << 32) // MAX_RATIO)
 # spec/wire-format.md 'Compressed-byte reproducibility' names WHICH vectors liblz4
 # fails to reproduce on encode, and maps each to the bytes actually pinned. Encoder
 # agreement is not a conformance rule, but the spec's claim about the set is a fact,
@@ -128,8 +166,16 @@ GENERATOR = (
     "legacy vector: cachekit-core v0.5.0 real writer; *_bin vectors: "
     "tools/wire-format-reference.py generate - deterministic re-encode of the "
     "legacy fields, byte-verified against rmp-serde 1.3.1 + serde_bytes 0.11.19 "
-    "output (LAB-783)"
+    "output (LAB-783); constructed_vectors: tools/wire-format-reference.py "
+    "generate - stdlib construction, checksum by xxhash 4.0.1 (xxHash 0.8.3)"
 )
+CONSTRUCTION_NOTE = (
+    "constructed_vectors are too large to pin as hex. To build envelope or input "
+    "bytes, repeat each segment's hex `count` times and concatenate the segments in "
+    "order (the same list form as interop-v2.json). Readers MUST decode the "
+    "constructed envelope to the constructed input."
+)
+WRAP_VECTOR = "envelope_ratio_product_wraps_32_bits"
 
 # --- minimal MessagePack codec ------------------------------------------------
 # Deliberately scoped to the types a StorageEnvelope uses. The encoder emits
@@ -285,6 +331,132 @@ def encode_envelope(
     )
 
 
+# --- reader (spec/wire-format.md 'Retrieve Flow') ------------------------------
+
+
+class EnvelopeReject(ValueError):
+    """An envelope the Retrieve Flow must reject."""
+
+
+def ratio_bound(compressed_size: int) -> int:
+    """Retrieve Flow step 5's bound. Python ints never wrap, so this conforms by construction.
+
+    A function rather than an inline product so tools/test_wire_format_reference.py
+    can substitute a 32-bit product and show the published vectors catch it.
+    """
+    return MAX_RATIO * compressed_size
+
+
+def read_envelope(env: bytes, xxh3_64: Callable[[bytes], bytes] | None = None) -> bytes:
+    """Retrieve Flow steps 1-9: envelope bytes -> original data, or EnvelopeReject/ValueError.
+
+    Step 2's whole-document pre-scan is decode-bounds.json's subject
+    (tools/decode-bounds-reference.py); this codec's reads are bounds-checked before
+    they slice, so a forged length fails as truncation without allocating. Steps 7-8
+    run only when `xxh3_64` is given (8 bytes, big-endian), because xxHash3-64 is not
+    stdlib.
+    """
+    if len(env) > MAX_COMPRESSED_SIZE:
+        raise EnvelopeReject("envelope exceeds max compressed size")
+    data, checksum, original_size, _fmt, _encoding = decode_envelope(env)
+    if len(data) > MAX_COMPRESSED_SIZE:
+        raise EnvelopeReject("compressed_data exceeds max compressed size")
+    if original_size > MAX_UNCOMPRESSED_SIZE:
+        raise EnvelopeReject("original_size exceeds max uncompressed size")
+    if len(data) == 0:
+        raise EnvelopeReject("zero-length compressed_data")
+    if original_size > ratio_bound(len(data)):
+        raise EnvelopeReject("compression ratio exceeds 1000:1 — decompression bomb")
+    # Also step 9: the decoder rejects any output length other than original_size.
+    out = iv2.lz4_block_decompress(data, original_size)
+    if xxh3_64 is not None and xxh3_64(out) != checksum:
+        raise EnvelopeReject("checksum mismatch — integrity failure")
+    return out
+
+
+# --- constructed vectors --------------------------------------------------------
+
+
+def build_wrap_threshold_vector(checksum_of: Callable[[bytes], bytes]) -> dict:
+    """Canonical bin envelope whose compressed_data is exactly RATIO_WRAP_THRESHOLD bytes.
+
+    A real LZ4 block that long cannot decompress to a few hundred bytes, so it is a
+    literals-only block, and original_size is ~0.996 x compressed_size: far inside the
+    1000:1 bound, far above the 704 B a 32-bit product yields. The input is a
+    canonical msgpack bin32 of zeros, the same bytes as interop-v2.json's
+    lz4_ratio_product_wraps_32_bits value, so an SDK that deserialises the
+    "msgpack" payload after unpacking still succeeds. `checksum_of` maps the input to
+    its 8-byte checksum: xxHash3-64 in `generate` and on the xxhash leg, the pinned
+    value on the stdlib leg (which therefore cannot see a wrong checksum).
+    """
+    compressed_size = RATIO_WRAP_THRESHOLD
+    # Literals-only block: token 0xF0, the literal length as 255-runs plus a final
+    # byte < 255, then the literals: 1 + (ext + 1) + (15 + 255*ext + last).
+    ext, last = divmod(compressed_size - 17, 256)
+    assert last < 255, "literals-only block cannot hit this compressed_size exactly"
+    original_size = 15 + 255 * ext + last
+    input_header = b"\xc6" + (original_size - 5).to_bytes(4, "big")
+    input_construction = [
+        {"hex": input_header.hex(), "count": 1},
+        {"hex": "00", "count": original_size - len(input_header)},
+    ]
+    original = iv2.construct(input_construction)
+    checksum = checksum_of(original)
+    assert len(checksum) == 8, "checksum must be 8 bytes"
+    # Everything after compressed_data: checksum array, original_size, format.
+    tail = encode_envelope(b"", checksum, original_size, "msgpack", encoding="bin")[3:]
+    envelope_construction = [
+        {"hex": (b"\x94\xc6" + compressed_size.to_bytes(4, "big") + b"\xf0").hex(), "count": 1},
+        {"hex": "ff", "count": ext},
+        {"hex": (bytes([last]) + input_header).hex(), "count": 1},
+        input_construction[1],
+        {"hex": tail.hex(), "count": 1},
+    ]
+    env = iv2.construct(envelope_construction)
+    block = env[6 : 6 + compressed_size]
+    assert env == encode_envelope(block, checksum, original_size, "msgpack", encoding="bin"), (
+        "construction is not the canonical bin envelope"
+    )
+    assert iv2.lz4_block_decompress(block, original_size) == original, "block does not decompress to the input"
+    wrapped = (MAX_RATIO * compressed_size) % (1 << 32)
+    return {
+        "name": WRAP_VECTOR,
+        "description": (
+            f"canonical bin envelope whose compressed_data is {compressed_size} B = ceil(2^32/1000), the "
+            "first size at which 1000 * compressed_size overflows unsigned 32 bits. original_size is well "
+            "inside the 1000:1 bound, so readers MUST accept it and return the constructed input. A reader "
+            f"that computes the product in 32-bit width gets {wrapped} instead (signed or unsigned wrap "
+            "alike) and rejects it as a ratio bomb; so does one that rejects on 32-bit overflow. A "
+            "pointer-width product passes it on a 64-bit host, so a pass there proves nothing about a "
+            "32-bit target. spec/wire-format.md#decompression-bomb-detection says which implementations "
+            "must run it and on which targets."
+        ),
+        "format": "msgpack",
+        "envelope_encoding": "bin",
+        "original_size": original_size,
+        "compressed_size": compressed_size,
+        "envelope_size": len(env),
+        "checksum_hex": checksum.hex(),
+        "envelope_construction": envelope_construction,
+        "input_construction": input_construction,
+    }
+
+
+# name -> builder. The expected constructed-vector set lives in code, for the same
+# reason as EXPECTED_BASE_VECTORS: a set read from the fixture pins nothing.
+CONSTRUCTED_BUILDERS: dict[str, Callable[[Callable[[bytes], bytes]], dict]] = {
+    WRAP_VECTOR: build_wrap_threshold_vector,
+}
+
+
+def _load_xxh3() -> Callable[[bytes], bytes] | None:
+    try:
+        import xxhash  # type: ignore[import-untyped]
+    except ImportError:
+        return None
+    return lambda data: xxhash.xxh3_64(data).digest()  # digest() is big-endian
+
+
 # --- generate / verify ----------------------------------------------------------
 
 
@@ -388,16 +560,71 @@ def generate() -> int:
             file=sys.stderr,
         )
         return 1
+    # Constructed vectors are append-only too: a committed one is kept as it is (verify
+    # compares it to its builder), and only a missing one is built. Building needs the
+    # true xxHash3-64 of the input, which stdlib cannot compute.
+    constructed = list(fixture.get("constructed_vectors", []))
+    missing = [n for n in CONSTRUCTED_BUILDERS if n not in {v.get("name") for v in constructed}]
+    if missing:
+        xxh3_64 = _load_xxh3()
+        if xxh3_64 is None:
+            print(
+                f"REFUSED: building constructed vector(s) {', '.join(missing)} needs the `xxhash` "
+                "package for the checksum",
+                file=sys.stderr,
+            )
+            return 1
+        constructed += [CONSTRUCTED_BUILDERS[n](xxh3_64) for n in missing]
     fixture["vectors"] = rebuilt
+    fixture["constructed_vectors"] = constructed
+    fixture["construction_note"] = CONSTRUCTION_NOTE
     fixture["envelope_format"] = ENVELOPE_FORMAT
     fixture["generator"] = GENERATOR
     fixture["version"] = FIXTURE_VERSION
+    fixture = dict(sorted(fixture.items()))  # top level only: vector key order is pinned
     FIXTURE_PATH.write_text(json.dumps(fixture, indent=2) + "\n", encoding="utf-8")
-    print(f"wrote {FIXTURE_PATH.name}: {len(legacy)} legacy + {len(legacy)} bin vectors")
+    print(
+        f"wrote {FIXTURE_PATH.name}: {len(legacy)} legacy + {len(legacy)} bin + "
+        f"{len(constructed)} constructed vectors"
+    )
     return 0
 
 
-def _verify_vector(base: dict, bins: dict, msgpack, lz4_block) -> str:
+def _verify_constructed(vec: dict, xxh3_64, msgpack, lz4_block) -> str:
+    """Validate one constructed vector: builder equality, then a full read.
+
+    Returns a one-line summary, or raises like _verify_vector.
+    """
+    builder = CONSTRUCTED_BUILDERS[vec["name"]]
+    pinned = bytes.fromhex(vec["checksum_hex"])
+    # The builder derives every field from stdlib except the checksum. On the xxhash
+    # leg it computes the checksum too, so equality proves the pinned one is the true
+    # xxHash3-64 of the input; on the stdlib leg it takes the pinned value on trust.
+    expected = builder(xxh3_64 if xxh3_64 is not None else lambda _original: pinned)
+    for key in sorted(expected.keys() | vec.keys()):
+        assert vec.get(key) == expected.get(key), f"field {key!r} differs from what the builder derives"
+    env = iv2.construct(vec["envelope_construction"])
+    original = iv2.construct(vec["input_construction"])
+    assert read_envelope(env, xxh3_64) == original, "reader does not return the constructed input"
+
+    if msgpack is not None:
+        data, checksum, size, fmt, _encoding = decode_envelope(env)
+        assert msgpack.unpackb(env, raw=False) == [data, list(checksum), size, fmt], "msgpack-python decode mismatch"
+        assert msgpack.packb([data, list(checksum), size, fmt], use_bin_type=True) == env, (
+            "msgpack-python re-encode mismatch"
+        )
+    if lz4_block is not None:
+        data = decode_envelope(env)[0]
+        try:
+            got = lz4_block.decompress(data, uncompressed_size=vec["original_size"])
+        except (lz4_block.LZ4BlockError, OverflowError) as e:
+            raise AssertionError(f"liblz4 rejects the constructed compressed_data: {e}") from e
+        assert got == original, "liblz4 does not decompress the constructed compressed_data to the input"
+    checked = "checksum verified" if xxh3_64 is not None else "checksum NOT verified (no xxhash)"
+    return f"compressed_size {vec['compressed_size']} B, original_size {vec['original_size']} B, {checked}"
+
+
+def _verify_vector(base: dict, bins: dict, msgpack, lz4_block, xxh3_64=None) -> str:
     """Validate one legacy vector against its bin twin (popped from `bins`).
 
     Returns the one-line size-delta summary on success, or raises
@@ -469,6 +696,11 @@ def _verify_vector(base: dict, bins: dict, msgpack, lz4_block) -> str:
     # bin8 (2 B) vs fixarray (1 B), i.e. compressed_data <= 15 bytes,
     # so a bin twin is never more than 1 byte larger than its legacy base.
     assert len(new_env) <= len(old_env) + 1, "bin twin exceeds +1 B header bound"
+
+    # 4. the reader accepts both encodings and returns the input (checksum on the xxhash leg)
+    inp = bytes.fromhex(base["input_hex"])
+    assert read_envelope(old_env, xxh3_64) == inp, "reader does not return the legacy vector's input"
+    assert read_envelope(new_env, xxh3_64) == inp, "reader does not return the bin twin's input"
 
     # optional: third-encoder conformance via msgpack-python
     if msgpack is not None:
@@ -558,19 +790,36 @@ def verify(require_extras: bool = False) -> int:
         import lz4.block as lz4_block  # type: ignore[import-untyped]
     except ImportError:
         lz4_block = None
-    if require_extras and (msgpack is None or lz4_block is None):
+    xxh3_64 = _load_xxh3()
+    if require_extras and (msgpack is None or lz4_block is None or xxh3_64 is None):
         # CI's optional-deps leg passes --require-extras so a dependency drift
         # cannot silently turn the deeper conformance checks off (exit-0 with
         # a "stdlib-only" banner would be an unflagged loss of coverage).
-        missing = [n for n, mod in (("msgpack", msgpack), ("lz4", lz4_block)) if mod is None]
+        missing = [
+            n for n, mod in (("msgpack", msgpack), ("lz4", lz4_block), ("xxhash", xxh3_64)) if mod is None
+        ]
         print(f"FAIL: --require-extras set but not importable: {', '.join(missing)}", file=sys.stderr)
+        return 1
+    # Same whole-file doctrine as the base set: a dropped constructed vector is
+    # invisible to the per-vector loop below.
+    constructed = fixture.get("constructed_vectors", [])
+    names = [v.get("name") for v in constructed]
+    if sorted(names, key=str) != sorted(CONSTRUCTED_BUILDERS):
+        print(
+            f"FAIL: fixture constructed-vector set drifted — fixture {sorted(names, key=str)} != "
+            f"expected {sorted(CONSTRUCTED_BUILDERS)}",
+            file=sys.stderr,
+        )
+        return 1
+    if fixture.get("construction_note") != CONSTRUCTION_NOTE:
+        print("FAIL: fixture construction_note drifted from CONSTRUCTION_NOTE", file=sys.stderr)
         return 1
 
     failures = 0
     for base in legacy:
         name = base["name"]
         try:
-            print(f"  ok {name}: {_verify_vector(base, bins, msgpack, lz4_block)}")
+            print(f"  ok {name}: {_verify_vector(base, bins, msgpack, lz4_block, xxh3_64)}")
         except (AssertionError, ValueError, IndexError, KeyError) as e:
             # Per-vector isolation: a malformed vector (truncated hex, missing
             # field) fails only itself with a named FAIL line, not the whole run.
@@ -581,12 +830,23 @@ def verify(require_extras: bool = False) -> int:
         failures += 1
         print(f"  FAIL {orphan}: bin vector without a legacy base", file=sys.stderr)
 
-    extras = [label for label, mod in (("msgpack-python", msgpack), ("liblz4 decode", lz4_block)) if mod]
-    conformance = "with " + " + ".join(extras) + " conformance" if extras else "stdlib-only"
+    for vec in constructed:
+        try:
+            print(f"  ok {vec['name']}: {_verify_constructed(vec, xxh3_64, msgpack, lz4_block)}")
+        except (AssertionError, ValueError, IndexError, KeyError) as e:
+            failures += 1
+            print(f"  FAIL {vec['name']}: {e!r}", file=sys.stderr)
+
+    extras = [
+        label
+        for label, mod in (("xxHash3-64", xxh3_64), ("msgpack-python", msgpack), ("liblz4 decode", lz4_block))
+        if mod
+    ]
+    conformance = "with " + " + ".join(extras) + " conformance" if extras else "stdlib-only, checksums unverified"
     if failures:
         print(f"FAIL: {failures} failure(s) ({conformance})", file=sys.stderr)
         return 1
-    print(f"all {len(legacy)} vector pairs verified ({conformance})")
+    print(f"all {len(legacy)} vector pairs + {len(constructed)} constructed verified ({conformance})")
     return 0
 
 

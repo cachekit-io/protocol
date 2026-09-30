@@ -267,9 +267,14 @@ bytes are therefore
   every pinned vector is well-formed and declares a truthful `original_size`, so
   they evidence **none** of those bounds, and a reader that omits all four
   decompresses all of them successfully. The vectors prove decode
-  interoperability; the bounds in [Security Limits](#security-limits) are a
-  separate, non-negotiable obligation that no `wire-format.json` vector
-  demonstrates. Step 2's decode bounds have their own fixture,
+  interoperability. The one constructed vector,
+  `envelope_ratio_product_wraps_32_bits`, tests a single property of step 5: the
+  width of its product. A reader that multiplies in 32 bits rejects it (see
+  [Decompression Bomb Detection](#decompression-bomb-detection)). It is an accept
+  vector too, so it does not show that a reader rejects anything. Enforcing the
+  bounds in [Security Limits](#security-limits) is a separate, non-negotiable
+  obligation, and no `wire-format.json` vector shows a reader rejecting an
+  envelope that breaks one. Step 2's decode bounds have their own fixture,
   [`test-vectors/decode-bounds.json`](../test-vectors/decode-bounds.json).
 - A writer **other than the canonical `lz4_flex` writer** is NOT required to
   reproduce the pinned compressed bytes, and MUST NOT be judged non-conforming
@@ -472,13 +477,35 @@ floating-point ratio is the precision bypass the integer rule exists to prevent.
 > this specification; an implementation that refuses them is non-conforming.
 <!-- END shared-block: ratio-product-rule -->
 
-`test-vectors/wire-format.json` has no envelope large enough to test this rule. Its
-largest envelope is 478 B, so every `compressed_size` in it is smaller, and a 32-bit
-product goes wrong only from a `compressed_size` of 2,147,484 B (signed) or
-4,294,968 B (unsigned). The same product is tested for interop/v2 by
-`lz4_ratio_product_wraps_32_bits` in `test-vectors/interop-v2.json`
-([interop-v2.md → Test Vectors](interop-v2.md#test-vectors)), but no ByteStorage
-envelope vector tests it yet.
+`test-vectors/wire-format.json` tests this rule with one vector,
+`envelope_ratio_product_wraps_32_bits`, in its `constructed_vectors` group. The
+envelope is 4.3 MB, so the file describes it and its input as lists of repeated byte
+segments rather than hex (`construction_note`). Its `compressed_data` is exactly
+4,294,968 B, the first size whose product overflows unsigned 32 bits (a signed 32-bit
+product overflows from 2,147,484 B). Its `original_size` (4,278,189 B) is inside the
+1000:1 bound but above the 704 B that a 32-bit product yields, signed or unsigned. A
+reader that multiplies in 32 bits rejects it, and so does one that rejects on 32-bit
+overflow. A conforming reader returns the constructed input, and the envelope's
+`checksum` is that input's true xxHash3-64. Every other envelope in the file is 478 B
+or smaller.
+
+The vector shows the product's width and nothing else. It is an accept vector,
+because a 32-bit product only ever tightens the bound, so no reject vector can catch
+one; it does not show that a reader enforces the size caps, the zero-length check or
+the ratio bound. A pointer-width product is exact on a 64-bit host, so a pass there
+does not show the rule holds on a 32-bit target. interop/v2 tests the same product
+for its container with `lz4_ratio_product_wraps_32_bits`
+([interop-v2.md → Test Vectors](interop-v2.md#test-vectors)).
+
+An implementation of the ByteStorage envelope that supports a 32-bit target, as
+[interop-v2.md → SDK Implementation Requirements](interop-v2.md#sdk-implementation-requirements),
+item 7, defines that term, MUST, in its own CI, pass
+`envelope_ratio_product_wraps_32_bits` on each such target, built as its consumers
+get it: the artifact it distributes or, for source-distributed code, a build of its
+published source for that target. It runs the vector at this spec's limits, not at a
+stricter deployment limit. Anything other than returning the constructed input (a
+rejection for any reason, a checksum mismatch included, a skip, a crash) is a
+failure.
 
 ---
 
