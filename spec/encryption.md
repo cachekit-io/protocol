@@ -343,7 +343,7 @@ by `tools/encryption-verify.py`.
 ## Key Rotation (Keyring)
 
 > [!NOTE]
-> **Status: implemented in Python, Rust, and TypeScript; released in Python (`cachekit` 0.18.0+) — Rust and TypeScript are on `main` and pending their next release** (published artifacts inspected 2026-09-22; decision record:
+> **Status: implemented in Python, Rust, and TypeScript; released in Python (`cachekit` 0.18.0+) and Rust (`cachekit-rs` 0.8.0+) — TypeScript is on `main` and pending its next release** (published artifacts inspected 2026-09-22, the Rust `.crate` 2026-09-30; decision record:
 > [decisions/key-rotation.md](../decisions/key-rotation.md), 2026-07-23; LAB-516).
 > The shared decrypt helper is `cachekit_core::encryption::keyring::Keyring`
 > ([cachekit-core#67](https://github.com/cachekit-io/cachekit-core/pull/67)); the SDK
@@ -351,7 +351,10 @@ by `tools/encryption-verify.py`.
 > [cachekit-rs#63](https://github.com/cachekit-io/cachekit-rs/pull/63) and
 > [cachekit-ts#103](https://github.com/cachekit-io/cachekit-ts/pull/103). An SDK
 > release that does not carry this section invalidates every encrypted entry when its
-> master key rotates — fail-open readers take misses, fail-closed readers take errors. The
+> master key rotates — fail-open readers take misses, fail-closed readers take errors. In
+> `cachekit-rs`, only `from_env()` reads `CACHEKIT_PREVIOUS_MASTER_KEYS`; the `secure`
+> preset's `secure_from_env` ignores it, so a `secure` client passes its decrypt-only keys
+> programmatically ([feature matrix](../sdk-feature-matrix.md#encryption) note ⁵). The
 > [feature matrix](../sdk-feature-matrix.md) reflects per-SDK implementation status.
 >
 > Earlier revisions of this spec described a 32-byte `RotationAwareHeader` prepended
