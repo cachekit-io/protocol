@@ -472,6 +472,20 @@ CONTAINER_VECTOR_DEFS: list[dict] = [
 ]
 
 
+def expanding_block_shape(block_len: int) -> tuple[int, int, int, int]:
+    """(ext, last, literal_len, original_size) of the expanding zeros block that is block_len bytes long.
+
+    Shared with tools/wire-format-reference.py, whose wrap vector uses the same block.
+    Token 0xFF, literal-length extension (ext 255-runs + last), the literals, offset
+    0x0001, match-length extension (the same ext + last), then token 0x50 and 5 zero
+    literals: 26 + 257*ext + last bytes. The match is literal-length + 4 bytes long.
+    """
+    ext, last = divmod(block_len - 26, 257)
+    _require(last < 255, "this block shape cannot hit this block length exactly")
+    literal_len = 15 + 255 * ext + last
+    return ext, last, literal_len, 2 * literal_len + 4 + 5
+
+
 def _build_wrap_threshold_vector() -> dict:
     """method-1 container whose payload is exactly RATIO_WRAP_THRESHOLD bytes long.
 
@@ -483,13 +497,7 @@ def _build_wrap_threshold_vector() -> dict:
     8.6 MB of hex is not shippable, hence the `*_construction` segment lists.
     """
     payload_len = RATIO_WRAP_THRESHOLD
-    # Token 0xFF, literal-length extension (ext 255-runs + last), the literals, offset
-    # 0x0001, match-length extension (the same ext + last), then token 0x50 and 5 zero
-    # literals: 26 + 257*ext + last bytes. The match is literal-length + 4 bytes long.
-    ext, last = divmod(payload_len - 26, 257)
-    _require(last < 255, "this block shape cannot hit this payload length exactly")
-    literal_len = 15 + 255 * ext + last
-    original_size = 2 * literal_len + 4 + 5
+    ext, last, literal_len, original_size = expanding_block_shape(payload_len)
     value_header = b"\xc6" + (original_size - 5).to_bytes(4, "big")  # bin32 of zeros
     value_construction = [
         {"hex": value_header.hex(), "count": 1},
@@ -908,7 +916,10 @@ def _self_check(built: dict) -> None:
             and len(payload) >= RATIO_WRAP_THRESHOLD
             and original_size > max(len(payload), ratio_bound_u32_wrapped(len(payload)))
         )
-    _require(any(discriminating), "no constructed vector fails a reader that computes the ratio product in 32 bits")
+    _require(
+        any(discriminating),
+        "no constructed vector fails every 32-bit ratio reader, including the original <= payload fast path",
+    )
 
     by_name = {c["name"]: c for c in built["container_vectors"]}
     # The inherited-value-profile claim: identical inner bytes across the two wraps,

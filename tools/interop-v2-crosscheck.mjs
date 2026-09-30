@@ -324,7 +324,7 @@ for (const v of doc.constructed_container_vectors ?? []) {
 }
 if (discriminating === 0) {
   failures++;
-  console.error("FAIL constructed_container_vectors: no vector fails a reader computing the ratio product in 32 bits");
+  console.error("FAIL constructed_container_vectors: no vector fails every 32-bit ratio reader, including the original <= payload fast path");
 }
 
 for (const v of doc.aad_vectors) {

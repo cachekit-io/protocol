@@ -399,13 +399,7 @@ def build_wrap_threshold_vector(checksum_of: Callable[[bytes], bytes]) -> dict:
     xxHash3-64 in `generate` and on the xxhash leg, the pinned value on the stdlib leg.
     """
     compressed_size = RATIO_WRAP_THRESHOLD
-    # Token 0xFF, literal-length extension (ext 255-runs + last), the literals, offset
-    # 0x0001, match-length extension (the same ext + last), then token 0x50 and 5 zero
-    # literals: 26 + 257*ext + last bytes. The match is literal-length + 4 bytes long.
-    ext, last = divmod(compressed_size - 26, 257)
-    assert last < 255, "this block shape cannot hit this compressed_size exactly"
-    literal_len = 15 + 255 * ext + last
-    original_size = 2 * literal_len + 4 + 5
+    ext, last, literal_len, original_size = iv2.expanding_block_shape(compressed_size)
     input_header = b"\xc6" + (original_size - 5).to_bytes(4, "big")
     input_construction = [
         {"hex": input_header.hex(), "count": 1},

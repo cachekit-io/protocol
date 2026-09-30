@@ -22,7 +22,7 @@ import { dirname, join } from "node:path";
 const HERE = dirname(fileURLToPath(import.meta.url));
 const TOOL = join(HERE, "interop-v2-crosscheck.mjs");
 const FIXTURE = join(HERE, "..", "test-vectors", "interop-v2.json");
-const GUARD_MSG = "no vector fails a reader computing the ratio product in 32 bits";
+const GUARD_MSG = "no vector fails every 32-bit ratio reader, including the original <= payload fast path";
 
 const doc = JSON.parse(readFileSync(FIXTURE, "utf8"));
 const vector = doc.constructed_container_vectors[0];
