@@ -48,9 +48,13 @@ Every class below is proven reachable by execution rather than argued from readi
   6. The fixture's `reject_vectors`. The conforming reader rejects each at its named
      step. Then each bound (size cap, zero length, ratio, checksum, output length) is
      dropped from the reader in turn, and across every vector in the file only that
-     bound's vector may change outcome, to accepted or to a later step. verify must
-     fail a dropped, added or altered reject vector by name, and generate must refill
-     a missing group byte-identically without dropping a committed entry.
+     bound's vectors may change outcome, to accepted or to a later step. verify must
+     fail an altered reject vector by name and a dropped or added one as set drift, and
+     generate must refill a missing group byte-identically without dropping a committed
+     entry. A truncating original_size decode must accept only the u32-wrap vector, a
+     reader that decompresses first must miss the size-cap and ratio vectors' named
+     steps, and an allocation probe must catch a reader that reserves original_size
+     before its checks, which no error assertion can.
 
 A guard with no mutation test is one refactor away from being deleted by someone
 who cannot see what it holds up.
@@ -73,6 +77,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import tracemalloc
 from collections.abc import Callable
 from pathlib import Path
 from types import ModuleType
@@ -281,21 +286,45 @@ def check_whole_file_properties() -> list[str]:
     return failures
 
 
-def _load_tool(drop_guard: str | None = None) -> ModuleType:
-    """Load the tool as a module; with `drop_guard`, minus the one `if` in read_envelope
-    whose condition contains that source fragment.
+def _find(body: list[ast.stmt], kind: type, fragment: str) -> ast.stmt:
+    """The one `kind` statement of read_envelope's body whose source contains `fragment`."""
+    hits = [n for n in body if isinstance(n, kind) and fragment in ast.unparse(n.test if kind is ast.If else n)]
+    if len(hits) != 1:
+        raise _GuardNotFoundError(fragment, len(hits))
+    return hits[0]
 
-    The mutant is the reader itself with one bound deleted, not a patched seam, so a
-    bound moved out of the reader is not silently left in place. A fragment matching no
-    `if`, or more than one, raises: a refactor must fail this suite, not pass it vacuously.
+
+def _decompress_first(body: list[ast.stmt]) -> None:
+    """Move step 6 (decompression) to just after step 2, ahead of every size and ratio check."""
+    decompress = _find(body, ast.Try, "lz4_block_decompress")
+    body.remove(decompress)
+    body.insert(body.index(_find(body, ast.Try, "decode_envelope(env)")) + 1, decompress)
+
+
+def _reserve_first(body: list[ast.stmt]) -> None:
+    """Allocate an original_size output buffer right after step 2, then run every check as before."""
+    at = body.index(_find(body, ast.Try, "decode_envelope(env)")) + 1
+    body.insert(at, ast.parse("_reserved = bytearray(original_size)").body[0])
+
+
+def _load_tool(
+    drop_guard: str | None = None, reorder: Callable[[list[ast.stmt]], None] | None = None
+) -> ModuleType:
+    """Load the tool as a module; with `drop_guard`, minus the one `if` in read_envelope
+    whose condition contains that source fragment; with `reorder`, with read_envelope's
+    body rewritten by it.
+
+    The mutant is the reader itself with one bound deleted or moved, not a patched seam,
+    so a bound moved out of the reader is not silently left in place. A fragment matching
+    no statement, or more than one, raises: a refactor must fail this suite, not pass it
+    vacuously.
     """
     tree = ast.parse(TOOL.read_text(encoding="utf-8"))
+    reader = next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == "read_envelope")
     if drop_guard is not None:
-        reader = next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == "read_envelope")
-        hits = [n for n in reader.body if isinstance(n, ast.If) and drop_guard in ast.unparse(n.test)]
-        if len(hits) != 1:
-            raise _GuardNotFoundError(drop_guard, len(hits))
-        reader.body.remove(hits[0])
+        reader.body.remove(_find(reader.body, ast.If, drop_guard))
+    if reorder is not None:
+        reorder(reader.body)
     mod = ModuleType("_wfr_reader")
     mod.__file__ = str(TOOL)
     exec(compile(tree, str(TOOL), "exec"), mod.__dict__)  # noqa: S102 - the repo's own tool
@@ -376,16 +405,23 @@ def check_32_bit_ratio_readers() -> list[str]:
     return failures
 
 
-# Each bound of read_envelope that a reject vector isolates: the source fragment of its
-# guard (for _load_tool) and the vector whose outcome dropping it must change. The step-9
-# length bound lives in the LZ4 decoder, so its mutant swaps the decoder instead.
+# Each bound of read_envelope that reject vectors isolate: the source fragment of its
+# guard (for _load_tool) and the vectors whose outcome dropping it must change. The step-9
+# length bound lives in the LZ4 decoder, and the full-wire-value rule in the msgpack
+# decode, so those two mutants swap the decoder instead.
 READER_BOUNDS = {
-    "step 4 size cap": ("original_size > MAX_UNCOMPRESSED_SIZE", "reject_original_size_over_cap"),
-    "step 5 zero length": ("len(data) == 0", "reject_zero_length_compressed_data"),
-    "step 5 ratio bound": ("within_ratio(", "reject_ratio_bomb"),
-    "step 8 checksum": ("xxh3_64(out) != checksum", "reject_checksum_mismatch"),
+    "step 4 size cap": (
+        "original_size > MAX_UNCOMPRESSED_SIZE",
+        ("reject_original_size_over_cap", "reject_original_size_wraps_u32"),
+    ),
+    "step 5 zero length": ("len(data) == 0", ("reject_zero_length_compressed_data",)),
+    "step 5 ratio bound": ("within_ratio(", ("reject_ratio_bomb",)),
+    "step 8 checksum": ("xxh3_64(out) != checksum", ("reject_checksum_mismatch",)),
 }
-LENGTH_BOUND = ("step 6/9 output length", "reject_decompressed_length_mismatch")
+LENGTH_BOUND = ("step 6/9 output length", ("reject_decompressed_length_mismatch",))
+TRUNCATION_BOUND = ("original_size at its full wire value", ("reject_original_size_wraps_u32",))
+# The vectors whose named step a reader that decompresses first cannot reach.
+ORDERED_REJECTS = ("reject_original_size_over_cap", "reject_ratio_bomb")
 _SHORT_OUTPUT = re.compile(r"LZ4 output length (\d+) != original_size")
 
 
@@ -417,9 +453,11 @@ def check_reader_rejects() -> list[str]:
 
     Mutants: the conforming reader must reject each reject vector at its named step.
     Then each bound is dropped from the reader in turn, and across every vector in the
-    file (pinned, constructed, reject) the only outcome that may change is that bound's
-    vector, to accepted or to a later step. That is the fixture's claim, and what an SDK
-    test relies on when it asserts the step (spec/wire-format.md 'Reject vectors').
+    file (pinned, constructed, reject) the only outcomes that may change are that bound's
+    vectors, to accepted or to a later step. The same holds for a truncating original_size
+    decode. A reader that decompresses first must miss the size-cap and ratio vectors'
+    named steps. That is the fixture's claim, and what an SDK test relies on when it
+    asserts the named check's error (spec/wire-format.md 'Reject vectors').
     """
     failures = []
     mod = _load_tool()
@@ -443,8 +481,6 @@ def check_reader_rejects() -> list[str]:
             got, at = "accepted", None
         except mod.EnvelopeReject as e:
             got, at = str(e), e.step
-        except ValueError as e:
-            got, at = f"{type(e).__name__}: {e}", None
         ok = (got != "accepted" and marker not in got) if absent else (at == step and marker in got)
         report(ok, f"{label}: {got}")
 
@@ -495,7 +531,7 @@ def check_reader_rejects() -> list[str]:
 
     # --- the fixture's reject_vectors, and one mutant per bound ---
     rejects = {v["name"]: v for v in fixture.get("reject_vectors", [])}
-    wanted = {vector for _fragment, vector in READER_BOUNDS.values()} | {LENGTH_BOUND[1]}
+    wanted = {v for _fragment, vs in READER_BOUNDS.values() for v in vs} | set(LENGTH_BOUND[1])
     if set(rejects) != wanted:
         return [*failures, f"fixture reject_vectors {sorted(rejects)} != the bounds' vectors {sorted(wanted)}"]
     vectors: list[tuple[str, bytes, bytes | None]] = [
@@ -530,35 +566,107 @@ def check_reader_rejects() -> list[str]:
 
         return decode
 
-    mutants: list[tuple[str, str, ModuleType]] = []
-    for label, (fragment, vector) in READER_BOUNDS.items():
-        if vector == "reject_checksum_mismatch" and xxh3_64 is None:
+    mutants: list[tuple[str, tuple[str, ...], ModuleType]] = []
+    for label, (fragment, bound_vectors) in READER_BOUNDS.items():
+        if "reject_checksum_mismatch" in bound_vectors and xxh3_64 is None:
             print(f"  [skip] mutant without {label}: xxhash not importable (CI's optional-deps leg runs it)")
             continue
         try:
-            mutants.append((label, vector, _load_tool(drop_guard=fragment)))
+            mutants.append((label, bound_vectors, _load_tool(drop_guard=fragment)))
         except _GuardNotFoundError as e:
             report(False, f"mutant without {label}: {e}")
     length_mutant = _load_tool()
     length_mutant.iv2.lz4_block_decompress = lenient_decoder(length_mutant.iv2.lz4_block_decompress)
     mutants.append((*LENGTH_BOUND, length_mutant))
+    # Truncates original_size to its low 32 bits, the fail-open decode Security Limits forbids.
+    truncating = _load_tool()
+    strict_decode = truncating.decode_envelope
 
-    for label, vector, mutant in mutants:
+    def truncating_decode(envelope: bytes) -> tuple[bytes, bytes, int, str, str]:
+        data, checksum, original_size, fmt, encoding = strict_decode(envelope)
+        return data, checksum, original_size & 0xFFFFFFFF, fmt, encoding
+
+    truncating.decode_envelope = truncating_decode
+    mutants.append((*TRUNCATION_BOUND, truncating))
+
+    for label, bound_vectors, mutant in mutants:
         got = _outcomes(mutant, vectors, xxh3_64)
         changed = sorted(n for n in got if got[n] != conforming[n])
-        named = rejects[vector]["reject_step"]
-        moved = got[vector] == "accepted" or (
-            got[vector].startswith("step ") and int(got[vector].split()[1]) > named
+        moved = all(
+            got[v] == "accepted"
+            or (got[v].startswith("step ") and int(got[v].split()[1]) > rejects[v]["reject_step"])
+            for v in bound_vectors
         )
+        detail = ", ".join(f"{v}: step {rejects[v]['reject_step']} -> {got[v]}" for v in bound_vectors)
         report(
-            changed == [vector] and moved,
-            f"mutant without {label}: only {vector} changes (step {named} -> {got[vector]}); changed {changed}",
+            changed == sorted(bound_vectors) and moved,
+            f"mutant without {label}: only its vectors change ({detail}); changed {changed}",
         )
+
+    # Order, not presence. A reader that decompresses before steps 4 and 5 has every check
+    # and still reaches none of their errors on these vectors, because their block is not
+    # valid LZ4; that is why an SDK asserts the named check's error, not any rejection.
+    decode_first = _load_tool(reorder=_decompress_first)
+    got = _outcomes(decode_first, vectors, xxh3_64)
+    report(
+        all(got[v] == "step 6" for v in ORDERED_REJECTS),
+        f"reader that decompresses first misses the named step: {[(v, got[v]) for v in ORDERED_REJECTS]}",
+    )
+    failures += _check_allocation_probe(mod, rejects)
+    return failures
+
+
+def _peak_allocation(read: Callable[[], object]) -> int:
+    """Peak bytes Python allocated while `read` ran, whatever it raised."""
+    tracemalloc.start()
+    try:
+        read()
+    except Exception:  # noqa: BLE001, S110 - only the allocation matters here
+        pass
+    _current, peak = tracemalloc.get_traced_memory()
+    tracemalloc.stop()
+    return peak
+
+
+def _check_allocation_probe(mod: ModuleType, rejects: dict[str, dict]) -> list[str]:
+    """An allocation probe catches a reader that reserves original_size before its checks.
+
+    Such a reader raises exactly the named step's error, so no error assertion can see
+    it; spec/wire-format.md 'Reject vectors' therefore requires the probe. The reserve-first
+    mutant runs only on the ratio vector (1,000,001 B): on the size-cap vector it would
+    really allocate 512 MiB. The conforming reader is probed on both.
+    """
+    failures = []
+
+    def report(ok: bool, label: str) -> None:
+        print(f"  [{'ok' if ok else 'FAIL'}] {label}")
+        if not ok:
+            failures.append(label)
+
+    for name in ORDERED_REJECTS:
+        vec = rejects[name]
+        env = bytes.fromhex(vec["envelope_hex"])
+        peak = _peak_allocation(lambda env=env: mod.read_envelope(env))
+        report(peak < vec["original_size"] // 10, f"conforming reader, {name}: peak {peak} B, far under original_size")
+    ratio = rejects["reject_ratio_bomb"]
+    env = bytes.fromhex(ratio["envelope_hex"])
+    reserving = _load_tool(reorder=_reserve_first)
+    try:
+        reserving.read_envelope(env)
+        step = None
+    except reserving.EnvelopeReject as e:
+        step = e.step
+    peak = _peak_allocation(lambda: reserving.read_envelope(env))
+    report(
+        step == ratio["reject_step"] and peak >= ratio["original_size"],
+        f"reserve-first reader: same step-{step} error, but the probe sees a {peak} B peak",
+    )
     return failures
 
 
 def check_reject_group() -> list[str]:
-    """verify fails a dropped, added or altered reject vector by name; generate refills the group."""
+    """verify fails an altered reject vector by name and a dropped or added one as set drift;
+    generate refills the group."""
     failures = []
 
     def drop_one(fixture: dict) -> None:
