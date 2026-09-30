@@ -20,9 +20,11 @@ syntax the context needs (an HTML comment in prose, `//` inside a pseudocode
 fence). Any other line that carries a sentinel tag is an error, since text beside
 a sentinel would sit outside the comparison. This compares the copies modulo
 each document's operand name (`compressed_size` in wire-format, `payload.length`
-in interop-v2) and the block's common indentation, which are the only differences
-the copies are permitted to have. Relative indentation is compared: in Markdown a
-4-space indent turns a normative paragraph into a code block.
+in interop-v2) and a declared left margin per copy (BLOCKS), which are the only
+differences the copies are permitted to have. Every non-blank line must carry
+exactly its margin, and any indent beyond it is compared: in Markdown a 4-space
+indent turns a normative paragraph into a code block, and in pseudocode an
+indent changes which branch a line belongs to.
 
 **Scope, and what this does NOT catch.** It proves the two blocks say the same
 thing. It cannot prove either one is *correct*, and it does not police any other
@@ -41,27 +43,23 @@ from __future__ import annotations
 import difflib
 import re
 import sys
-import textwrap
 from pathlib import Path
 
-# (spec path, operand name normalised away)
-RATIO_MEMBERS = [
-    ("spec/wire-format.md", "compressed_size"),
-    ("spec/interop-v2.md", "payload.length"),
-]
-# block-id -> members; every member holds one copy of the block
-BLOCKS: dict[str, list[tuple[str, str]]] = {
-    "ratio-product-rule": RATIO_MEMBERS,
-    "ratio-product-pseudocode": RATIO_MEMBERS,
+# block-id -> members; every member holds one copy of the block, as
+# (spec path, operand name normalised away, declared left margin in spaces)
+BLOCKS: dict[str, list[tuple[str, str, int]]] = {
+    "ratio-product-rule": [("spec/wire-format.md", "compressed_size", 0), ("spec/interop-v2.md", "payload.length", 0)],
+    # interop-v2's copy sits inside `if method == 1:`
+    "ratio-product-pseudocode": [("spec/wire-format.md", "compressed_size", 0), ("spec/interop-v2.md", "payload.length", 4)],
 }
 PLACEHOLDER = "<OPERAND>"
 TAG = r"(BEGIN|END) shared-block: (\S+)"
-# The whole line: `<!-- TAG [(annotation)] -->` in prose, `// TAG` in pseudocode.
-SENTINEL = re.compile(rf"\s*(?:<!-- {TAG}(?: \([^()]*\))? -->|// {TAG})\s*")
+# The whole line: `<!-- TAG [(guarded by ...)] -->` in prose, `// TAG` in pseudocode.
+SENTINEL = re.compile(rf"\s*(?:<!-- {TAG}(?: \(guarded by tools/check-spec-duplication\.py\))? -->|// {TAG})\s*")
 STRAY = re.compile(r"\b(?:BEGIN|END) shared-block:")
 
 
-def extract(text: str, block_id: str) -> str:
+def extract(text: str, block_id: str, margin: int) -> str:
     """Return the block body, or raise ValueError naming the exact defect."""
     lines = text.splitlines()
     tags: list[tuple[str, str] | None] = []
@@ -69,7 +67,7 @@ def extract(text: str, block_id: str) -> str:
         if m := SENTINEL.fullmatch(line):
             tags.append((m[1] or m[3], m[2] or m[4]))
         elif STRAY.search(line):
-            raise ValueError(f"line {n}: sentinel tag shares its line with other text")
+            raise ValueError(f"line {n}: malformed sentinel line (a sentinel must be the whole line)")
         else:
             tags.append(None)
     begins = [i for i, tag in enumerate(tags) if tag == ("BEGIN", block_id)]
@@ -80,7 +78,12 @@ def extract(text: str, block_id: str) -> str:
         raise ValueError(f"expected exactly 1 END sentinel, found {len(ends)}")
     if ends[0] < begins[0]:
         raise ValueError("END sentinel precedes BEGIN sentinel")
-    body = textwrap.dedent("\n".join(lines[begins[0] + 1 : ends[0]])).strip("\n")
+    body_lines = lines[begins[0] + 1 : ends[0]]
+    pad = " " * margin
+    for n, line in enumerate(body_lines, begins[0] + 2):
+        if line.strip() and not line.startswith(pad):
+            raise ValueError(f"line {n}: expected a {margin}-space margin")
+    body = "\n".join(line[margin:] if line.strip() else "" for line in body_lines).strip("\n")
     if not body.strip():
         raise ValueError("block is empty")
     return body
@@ -95,10 +98,10 @@ def main(argv: list[str]) -> int:
             failures.append(f"BLOCKS['{block_id}'] has {len(members)} member(s) -- nothing to compare")
             continue
         bodies: list[tuple[str, str]] = []
-        for rel, operand in members:
+        for rel, operand, margin in members:
             path = root / rel
             try:
-                body = extract(path.read_text(encoding="utf-8"), block_id)
+                body = extract(path.read_text(encoding="utf-8"), block_id, margin)
             except OSError as exc:
                 failures.append(f"{rel}: cannot read ({exc})")
                 continue
@@ -128,7 +131,7 @@ def main(argv: list[str]) -> int:
             )
             failures.append(
                 f"shared-block '{block_id}' differs between {ref_path} and {rel} "
-                f"(after normalising operand names and common indentation):\n{diff}"
+                f"(after normalising operand names and declared margins):\n{diff}"
             )
 
     if failures:
@@ -144,7 +147,7 @@ def main(argv: list[str]) -> int:
 
     print(
         f"check-spec-duplication: OK -- {len(BLOCKS)} shared block(s), "
-        "every copy identical modulo its operand name and common indentation"
+        "every copy identical modulo its operand name and its declared margin"
     )
     return 0
 

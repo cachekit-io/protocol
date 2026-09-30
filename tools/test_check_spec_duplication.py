@@ -25,11 +25,13 @@ CHECKER = HERE / "check-spec-duplication.py"
 WIRE = "spec/wire-format.md"
 INTEROP = "spec/interop-v2.md"
 
+Mutate = Callable[[Path], None]
+
 # The obligation sentence, present in both copies -- the realistic drift target.
 MUST = "The ratio product MUST be computed **exactly**"
 
 
-def edit(rel: str, old: str, new: str, *, once: bool = True) -> Callable[[Path], None]:
+def edit(rel: str, old: str, new: str, *, once: bool = True) -> Mutate:
     def mutate(root: Path) -> None:
         path = root / rel
         text = path.read_text(encoding="utf-8")
@@ -40,7 +42,7 @@ def edit(rel: str, old: str, new: str, *, once: bool = True) -> Callable[[Path],
     return mutate
 
 
-def empty_block(rel: str, block_id: str) -> Callable[[Path], None]:
+def empty_block(rel: str, block_id: str) -> Mutate:
     """Delete every line strictly between the block's two sentinel lines."""
 
     def mutate(root: Path) -> None:
@@ -53,7 +55,7 @@ def empty_block(rel: str, block_id: str) -> Callable[[Path], None]:
     return mutate
 
 
-def swap_sentinels(rel: str, block_id: str) -> Callable[[Path], None]:
+def swap_sentinels(rel: str, block_id: str) -> Mutate:
     def mutate(root: Path) -> None:
         path = root / rel
         text = path.read_text(encoding="utf-8")
@@ -64,9 +66,25 @@ def swap_sentinels(rel: str, block_id: str) -> Callable[[Path], None]:
     return mutate
 
 
+def indent_block(rel: str, block_id: str, by: int) -> Mutate:
+    """Shift the block, sentinels included, right by `by` spaces (left if negative)."""
+
+    def mutate(root: Path) -> None:
+        path = root / rel
+        lines = path.read_text(encoding="utf-8").splitlines(keepends=True)
+        begin = next(i for i, ln in enumerate(lines) if f"BEGIN shared-block: {block_id}" in ln)
+        end = next(i for i, ln in enumerate(lines) if f"END shared-block: {block_id}" in ln)
+        for i in range(begin, end + 1):
+            lines[i] = " " * by + lines[i] if by >= 0 else lines[i][-by:]
+        path.write_text("".join(lines), encoding="utf-8")
+
+    return mutate
+
+
 RULE = "ratio-product-rule"
 PSEUDO = "ratio-product-pseudocode"
 DRIFT = "differs between"
+MALFORMED = "malformed sentinel line"
 
 OK = "OK -- 2 shared block(s)"
 
@@ -74,7 +92,6 @@ OK = "OK -- 2 shared block(s)"
 #  [, environment overrides for the checker])
 # The substring pins WHICH branch fired: a case that exits 1 through the wrong
 # branch would otherwise pass while the branch it names is dead code.
-Mutate = Callable[[Path], None]
 Case = tuple[str, Mutate, int, str] | tuple[str, Mutate, int, str, dict[str, str]]
 CASES: list[Case] = [
     ("unmodified tree", lambda _: None, 0, OK),
@@ -121,7 +138,31 @@ CASES: list[Case] = [
             f"<!-- END shared-block: {RULE} --> Implementations MAY instead compute the product in 32-bit width.",
         ),
         1,
-        "shares its line with other text",
+        MALFORMED,
+    ),
+    (
+        "text smuggled through the BEGIN annotation",
+        edit(
+            WIRE,
+            f"<!-- BEGIN shared-block: {RULE} (guarded by tools/check-spec-duplication.py) -->",
+            f"<!-- BEGIN shared-block: {RULE} (guarded --> Implementations MAY compute the product in 32-bit width."
+            " <!-- x) -->",
+        ),
+        1,
+        MALFORMED,
+    ),
+    (
+        # The indent moves the ratio check into the body of `if compressed_size == 0:`.
+        "pseudocode block indented under the preceding if",
+        indent_block(WIRE, PSEUDO, 4),
+        1,
+        f"shared-block '{PSEUDO}' differs",
+    ),
+    (
+        "interop pseudocode moved to column 0",
+        indent_block(INTEROP, PSEUDO, -4),
+        1,
+        "-space margin",
     ),
     ("BEGIN sentinel removed", edit(WIRE, f"BEGIN shared-block: {RULE}", "x"), 1, "exactly 1 BEGIN sentinel"),
     ("END sentinel removed", edit(INTEROP, f"END shared-block: {RULE}", "x"), 1, "exactly 1 END sentinel"),
@@ -148,7 +189,7 @@ CASES: list[Case] = [
 
 
 def run_case(
-    name: str, mutate: Callable[[Path], None], expected: int, needle: str, env: dict[str, str] | None = None
+    name: str, mutate: Mutate, expected: int, needle: str, env: dict[str, str] | None = None
 ) -> bool:
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp) / "repo"
@@ -159,7 +200,8 @@ def run_case(
         proc = subprocess.run(
             [sys.executable, str(CHECKER), str(root)],
             capture_output=True,
-            text=True,
+            encoding="utf-8",
+            errors="backslashreplace",
             env={**os.environ, **(env or {})},
         )
     output = proc.stdout + proc.stderr

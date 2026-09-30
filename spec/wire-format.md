@@ -366,7 +366,7 @@ let checksum: [u8; 8] = xxh3_64(&original_data).to_be_bytes();
 ## Security Limits
 
 > [!IMPORTANT]
-> All three limits below MUST be enforced by every implementation of the ByteStorage envelope. The decompression bomb check uses integer-valued arithmetic — do not substitute a floating-point *ratio*, and see [Decompression Bomb Detection](#decompression-bomb-detection) for the normative integer-width requirements: the ratio product, and `original_size` compared at its full wire value.
+> All three limits below MUST be enforced by every implementation of the ByteStorage envelope. The decompression bomb check uses integer-valued arithmetic — do not substitute a floating-point *ratio*, and see [Decompression Bomb Detection](#decompression-bomb-detection) for the normative arithmetic requirements: the ratio product, and `original_size` compared at its full wire value.
 > Additionally, a decoder MUST NOT allocate for declared MessagePack lengths
 > (collection, `str`, `bin`, `ext`) more than the input can back: the declared slots,
 > summed over the **whole document**, MUST NOT exceed the input length minus one,
