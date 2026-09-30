@@ -24,8 +24,8 @@ ROOT = Path(__file__).resolve().parents[1]
 VECTORS = ROOT / "test-vectors" / "path-encoding.json"
 
 # spec rule 2: `.`/`..` are dot segments; `health`/`ttl`/`lock` are route tokens at the
-# `/v1/cache/` level; the empty key is an empty segment, so `/v1/cache/{key}` becomes the
-# `/v1/cache/` collection path. Each encodes to itself under rule 1.
+# `/v1/cache/` level; the empty key is an empty segment, so `/v1/cache/{key}` becomes
+# `/v1/cache/`, which addresses no stored entry. Each encodes to itself under rule 1.
 RESERVED_SEGMENTS = {"", ".", "..", "health", "ttl", "lock"}
 # The sub-delims encodeURIComponent leaves raw (spec rule 4); quote() with these as safe
 # is byte-for-byte encodeURIComponent.
