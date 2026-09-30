@@ -366,7 +366,7 @@ let checksum: [u8; 8] = xxh3_64(&original_data).to_be_bytes();
 ## Security Limits
 
 > [!IMPORTANT]
-> All three limits below MUST be enforced by every implementation of the ByteStorage envelope. The decompression bomb check uses integer arithmetic — do not substitute a floating-point *ratio*, and see [Decompression Bomb Detection](#decompression-bomb-detection) for the normative integer-width requirements: the ratio product, and `original_size` compared at its full wire value.
+> All three limits below MUST be enforced by every implementation of the ByteStorage envelope. The decompression bomb check uses integer-valued arithmetic — do not substitute a floating-point *ratio*, and see [Decompression Bomb Detection](#decompression-bomb-detection) for the normative arithmetic requirements: the ratio product, and `original_size` compared at its full wire value.
 > Additionally, a decoder MUST NOT allocate for declared MessagePack lengths
 > (collection, `str`, `bin`, `ext`) more than the input can back: the declared slots,
 > summed over the **whole document**, MUST NOT exceed the input length minus one,
@@ -407,10 +407,8 @@ if compressed_size == 0:
 
 // BEGIN shared-block: ratio-product-pseudocode
 max_allowed = MAX_COMPRESSION_RATIO * uint64(compressed_size)  // 1000; widen BEFORE multiplying
+reject if original_size > max_allowed
 // END shared-block: ratio-product-pseudocode
-
-if original_size > max_allowed:
-    REJECT  // Ratio exceeded
 ```
 
 <!-- BEGIN shared-block: ratio-product-rule (guarded by tools/check-spec-duplication.py) -->
@@ -433,7 +431,7 @@ reader rejects it. Every target language has a conforming path: Rust `u64`, or `
 rejects an out-of-range value, whatever its marker width, instead of truncating it);
 Python's `int`; JavaScript `BigInt`, or `Number`.
 
-The ratio product MUST be computed in **at least 64-bit unsigned integers**:
+The ratio product MUST be computed **exactly**:
 promote `compressed_size` to a ≥ 64-bit unsigned or arbitrary-precision integer, or to an
 IEEE-754 binary64 in which the operand and the product are exact integers
 (< 2⁵³), *before* the multiply. Multiplying in pointer width and widening the

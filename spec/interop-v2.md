@@ -232,8 +232,8 @@ bomb — that bare-MessagePack v1 does not have. These bounds reuse the
 ByteStorage constants from
 [wire-format.md → Security Limits](wire-format.md#security-limits) so the fleet
 carries **one** set of numbers, and all of them MUST be enforced **before**
-decompressing (integer arithmetic only — no floating-point *ratio*; the ratio
-product's integer-width requirement, and the rule that `original_size` is
+decompressing (integer-valued arithmetic only — no floating-point *ratio*; the ratio
+product's exactness requirement, and the rule that `original_size` is
 compared at its full wire value, are stated below):
 
 | Limit | Value | Applies to |
@@ -251,8 +251,8 @@ if method == 1:
     reject if payload.length == 0                   // zero-length compressed = bomb
     // BEGIN shared-block: ratio-product-pseudocode
     max_allowed = MAX_COMPRESSION_RATIO * uint64(payload.length)  // 1000; widen BEFORE multiplying
-    // END shared-block: ratio-product-pseudocode
     reject if original_size > max_allowed
+    // END shared-block: ratio-product-pseudocode
 if method == 0:
     reject if original_size != payload.length
 ```
@@ -277,7 +277,7 @@ reader rejects it. Every target language has a conforming path: Rust `u64`, or `
 rejects an out-of-range value, whatever its marker width, instead of truncating it);
 Python's `int`; JavaScript `BigInt`, or `Number`.
 
-The ratio product MUST be computed in **at least 64-bit unsigned integers**:
+The ratio product MUST be computed **exactly**:
 promote `payload.length` to a ≥ 64-bit unsigned or arbitrary-precision integer, or to an
 IEEE-754 binary64 in which the operand and the product are exact integers
 (< 2⁵³), *before* the multiply. Multiplying in pointer width and widening the
@@ -541,7 +541,7 @@ An SDK implementation of interop/v2 MUST:
 | **Minimal 3-element container** | Reuse the ByteStorage envelope | The envelope drags xxHash3-64 into every SDK — a second native dependency per language (the PHP-fork class of cost) duplicating integrity the AES-GCM tag already provides when encrypted, and exceeding v1's posture when not. Its `format` field is also dead weight here (the content is always one plain-MessagePack document). What *is* kept from the envelope experience: `bin` payload encoding as normative from birth (protocol 1.1, [decisions/envelope-bin-encoding.md](../decisions/envelope-bin-encoding.md)). |
 | **Array-of-ints payload rejected** | Inherit cachekit-core's permanent dual-read leniency | That leniency serves a deployed installed base and falls out of rmp-serde for free; interop/v2 has no installed base, and hand-written readers in new languages would pay extra code to be lenient. One legal encoding is the lowest implementation bar. Pinned by vector. |
 | **Compressed bytes non-canonical, read-side conformance** | Pin one canonical LZ4 output | LZ4 encoders legally differ (implementation, level, version). Pinning writer bytes would freeze one library's output as protocol law and break on its next release. Keys stay byte-canonical; values never needed to be. |
-| **Bounds reuse wire-format.md constants (512 MiB / 1000:1)** | Profile-specific numbers | One set of constants fleet-wide; the guards are already implemented, reviewed, and vector-tested in cachekit-core. The integer-width rule is stated in full in both documents — edit this section and [wire-format.md → Decompression Bomb Detection](wire-format.md#decompression-bomb-detection) together; `tools/check-spec-duplication.py` fails CI if they drift. |
+| **Bounds reuse wire-format.md constants (512 MiB / 1000:1)** | Profile-specific numbers | One set of constants fleet-wide; the guards are already implemented, reviewed, and vector-tested in cachekit-core. The ratio-product rule is stated in full in both documents — edit this section and [wire-format.md → Decompression Bomb Detection](wire-format.md#decompression-bomb-detection) together; `tools/check-spec-duplication.py` fails CI if they drift. |
 | **No length padding** | Bucketed padding vs CRIME | Quantized leakage at real cost is not elimination; documented guidance plus the `method 0` / stay-v1 escape hatches are honest. Length-hiding from the backend is explicitly out of protocol scope (v1 leaks exact lengths today). |
 
 ---
