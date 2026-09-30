@@ -351,7 +351,10 @@ by `tools/encryption-verify.py`.
 > [cachekit-rs#63](https://github.com/cachekit-io/cachekit-rs/pull/63) and
 > [cachekit-ts#103](https://github.com/cachekit-io/cachekit-ts/pull/103). An SDK
 > release that does not carry this section invalidates every encrypted entry when its
-> master key rotates — fail-open readers take misses, fail-closed readers take errors. The
+> master key rotates — fail-open readers take misses, fail-closed readers take errors. In
+> `cachekit-rs`, only `from_env()` reads `CACHEKIT_PREVIOUS_MASTER_KEYS`; the `secure`
+> preset's `secure_from_env` ignores it, so a `secure` client passes its decrypt-only keys
+> programmatically ([feature matrix](../sdk-feature-matrix.md#encryption) note ⁵). The
 > [feature matrix](../sdk-feature-matrix.md) reflects per-SDK implementation status.
 >
 > Earlier revisions of this spec described a 32-byte `RotationAwareHeader` prepended
