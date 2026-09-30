@@ -239,7 +239,7 @@ The contract a storage backend must satisfy per SDK (bytes in / bytes out; seria
 | Feature | Python | Rust | TypeScript | PHP |
 | :--- | :---: | :---: | :---: | :---: |
 | Decorator API | ✅ `@cache` — wraps sync and async functions | ✅ `#[cachekit]` proc-macro — async fns returning `Result<T, CachekitError>` only | N/A (functional `wrap()` API) | ❌ attributes |
-| Intent-based presets | ✅ `.minimal` `.production` `.secure` `.io` (+ Python-only `.dev` `.test` `.local`) | ⚠️ `::minimal` `::production` `::secure`¹¹ `::io` — only `::io` (and `::io_from_env`) compiles on default features¹¹ | ✅ `createCache.minimal()` `.production()` `.secure()` `.io()` | ❌ |
+| Intent-based presets | ✅ `.minimal` `.production` `.secure` `.io` (+ Python-only `.dev` `.test` `.local`) | ⚠️ `::minimal` `::production` `::secure` `::io` — only `::io` (and `::io_from_env`) compiles on default features¹¹ | ✅ `createCache.minimal()` `.production()` `.secure()` `.io()` | ❌ |
 | Builder API | ❌ No builder — `DecoratorConfig` presets + kwargs (frozen dataclass) + pydantic-settings, intentional¹² | ✅ `CacheKit::builder()` / `from_env()` | ❌ Options object on `createCache()` — no builder chain, no `from_env()`¹² | ❌ |
 | Async support | ✅ | ✅ | ✅ | ❌ |
 | Sync support | ✅ Same decorator wraps both | ❌ **Async-only** — every cache op is an `async fn` and the macro output only compiles on async fns¹¹ | ❌ | ✅ |
