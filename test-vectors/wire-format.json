@@ -55,12 +55,74 @@
   ],
   "construction_note": "constructed_vectors are too large to pin as hex. To build envelope or input bytes, repeat each segment's hex `count` times and concatenate the segments in order (the same list form as interop-v2.json). Readers MUST decode the constructed envelope to the constructed input.",
   "envelope_format": "MessagePack positional array (rmp_serde::to_vec): [compressed_data, checksum, original_size, format]. Vectors without an 'envelope_encoding' field use the legacy array-of-integers encoding for compressed_data and are retained forever as legacy-read proof; their '*_bin' twins use msgpack bin (canonical for protocol 1.1+ writers). checksum always encodes as an array of 8 integers. Normative rules: spec/wire-format.md, 'Byte Layout' / 'Encoding compatibility'.",
-  "generator": "six original legacy vectors: cachekit-core v0.2.0; width_boundary_bin16 legacy vector: cachekit-core v0.5.0 real writer; *_bin vectors: tools/wire-format-reference.py generate - deterministic re-encode of the legacy fields, byte-verified against rmp-serde 1.3.1 + serde_bytes 0.11.19 output (LAB-783); constructed_vectors: tools/wire-format-reference.py generate - stdlib construction, checksum by xxhash 4.0.1 (xxHash 0.8.3)",
+  "generator": "six original legacy vectors: cachekit-core v0.2.0; width_boundary_bin16 legacy vector: cachekit-core v0.5.0 real writer; *_bin vectors: tools/wire-format-reference.py generate - deterministic re-encode of the legacy fields, byte-verified against rmp-serde 1.3.1 + serde_bytes 0.11.19 output (LAB-783); constructed_vectors: tools/wire-format-reference.py generate - stdlib construction, checksum by xxhash 4.0.1 (xxHash 0.8.3); reject_vectors: tools/wire-format-reference.py generate - canonical bin re-encode of legacy base fields with one bound broken",
   "limits": {
     "max_compressed_size": 536870912,
     "max_compression_ratio": 1000,
     "max_uncompressed_size": 536870912
   },
+  "reject_vectors": [
+    {
+      "name": "reject_original_size_over_cap",
+      "description": "simple_string's compressed_data and checksum with original_size 536870913 B, one byte over the 512 MiB max_uncompressed_size. Readers MUST reject it at Retrieve Flow step 4, before allocating anything for the output. A reader without step 4 still rejects it at step 5, because the declared size is far past 1000:1, so a failed read alone does not show the cap.",
+      "reject_step": 4,
+      "derived_from": "simple_string",
+      "format": "msgpack",
+      "envelope_encoding": "bin",
+      "original_size": 536870913,
+      "compressed_size": 18,
+      "envelope_hex": "94c412f00168656c6c6f2c2063616368656b697421986dcc8a34ccb63a3c52ccd3ce20000001a76d73677061636b",
+      "envelope_size": 46
+    },
+    {
+      "name": "reject_zero_length_compressed_data",
+      "description": "empty compressed_data with original_size 0 and the checksum of the empty input. Readers MUST reject it at step 5's zero-length check; the ratio bound cannot, because 0 <= 1000 * 0. A reader without the zero-length check hands an empty block to its LZ4 decoder, which rejects it at step 6 if it refuses an empty block and accepts it if it decodes one to empty output.",
+      "reject_step": 5,
+      "derived_from": "empty",
+      "format": "msgpack",
+      "envelope_encoding": "bin",
+      "original_size": 0,
+      "compressed_size": 0,
+      "envelope_hex": "94c400982d06cc800538ccd3cc94ccc200a76d73677061636b",
+      "envelope_size": 25
+    },
+    {
+      "name": "reject_ratio_bomb",
+      "description": "simple_string's 18 B compressed_data with original_size 18001 B = 1000 * 18 + 1, one byte past the 1000:1 bound. Readers MUST reject it at step 5, before decompression allocates original_size. A reader without the ratio check still rejects it at step 6, because the block decodes to 16 B, so a failed read alone does not show the bound.",
+      "reject_step": 5,
+      "derived_from": "simple_string",
+      "format": "msgpack",
+      "envelope_encoding": "bin",
+      "original_size": 18001,
+      "compressed_size": 18,
+      "envelope_hex": "94c412f00168656c6c6f2c2063616368656b697421986dcc8a34ccb63a3c52ccd3cd4651a76d73677061636b",
+      "envelope_size": 44
+    },
+    {
+      "name": "reject_decompressed_length_mismatch",
+      "description": "simple_string's compressed_data and checksum with original_size 17 B, one more than the 16 B the block decodes to, and inside every size and ratio bound. Readers MUST reject it. This reader's decoder rejects any output length other than original_size (step 6). A reader whose decoder returns a shorter output without error, as liblz4 does, rejects it at step 9 instead. A reader with neither check accepts it, because the checksum matches the decoded bytes.",
+      "reject_step": 6,
+      "derived_from": "simple_string",
+      "format": "msgpack",
+      "envelope_encoding": "bin",
+      "original_size": 17,
+      "compressed_size": 18,
+      "envelope_hex": "94c412f00168656c6c6f2c2063616368656b697421986dcc8a34ccb63a3c52ccd311a76d73677061636b",
+      "envelope_size": 42
+    },
+    {
+      "name": "reject_checksum_mismatch",
+      "description": "simple_string's envelope with the first and last checksum bytes flipped (xor 0x01). Readers MUST reject it at step 8. A reader without step 8 accepts it.",
+      "reject_step": 8,
+      "derived_from": "simple_string",
+      "format": "msgpack",
+      "envelope_encoding": "bin",
+      "original_size": 16,
+      "compressed_size": 18,
+      "envelope_hex": "94c412f00168656c6c6f2c2063616368656b697421986ccc8a34ccb63a3c52ccd210a76d73677061636b",
+      "envelope_size": 42
+    }
+  ],
   "vectors": [
     {
       "description": "Zero-length payload",
@@ -203,5 +265,5 @@
       "derived_from": "width_boundary_bin16"
     }
   ],
-  "version": "1.2.0"
+  "version": "1.3.0"
 }

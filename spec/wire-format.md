@@ -270,17 +270,21 @@ bytes are therefore
 - A conforming reader MUST decompress every pinned vector's `compressed_data`
   to its pinned input, **and MUST enforce [Retrieve Flow](#retrieve-flow) steps
   2, 4, 5 and 9 while doing so.** Read-side conformance is not "the vectors pass":
-  every pinned vector is well-formed and declares a truthful `original_size`, so
-  they evidence **none** of those bounds, and a reader that omits all four
-  decompresses all of them successfully. The vectors prove decode
+  every vector in the `vectors` group is well-formed and declares a truthful
+  `original_size`, so those vectors evidence **none** of the bounds, and a reader
+  that omits all four decompresses all of them successfully. The vectors prove decode
   interoperability. The one constructed vector,
   `envelope_ratio_product_wraps_32_bits`, tests a single property of step 5: the
   width of its product. A reader that multiplies in 32 bits rejects it (see
   [Decompression Bomb Detection](#decompression-bomb-detection)). It is an accept
   vector too, so it does not show that a reader rejects anything. Enforcing the
   bounds in [Security Limits](#security-limits) is a separate, non-negotiable
-  obligation, and no `wire-format.json` vector shows a reader rejecting an
-  envelope that breaks one. Step 2's decode bounds have their own fixture,
+  obligation. The `reject_vectors` group tests it with five envelopes, each
+  breaking one bound: step 4's size cap, step 5's zero-length check and ratio
+  bound, the output length of steps 6 and 9, and step 8's checksum
+  ([Reject vectors](#reject-vectors)). For three of them a failed read alone does
+  not show the bound, so a conformance test also asserts which check rejected. No vector covers steps 1 and 3. Step 2's
+  decode bounds have their own fixture,
   [`test-vectors/decode-bounds.json`](../test-vectors/decode-bounds.json).
 - A writer **other than the canonical `lz4_flex` writer** is NOT required to
   reproduce the pinned compressed bytes, and MUST NOT be judged non-conforming
@@ -500,7 +504,7 @@ The vector is built to show the product's width. It is also the file's only bin3
 not prove a 32-bit product: check the rejection reason. It is an accept vector,
 because a 32-bit product only ever tightens the bound, so no reject vector can catch
 one; it does not show that a reader enforces the size caps, the zero-length check or
-the ratio bound. A pointer-width product is exact on a 64-bit host, so a pass there
+the ratio bound. The `reject_vectors` group does that ([Reject vectors](#reject-vectors)). A pointer-width product is exact on a 64-bit host, so a pass there
 does not show the rule holds on a 32-bit target. interop/v2 has its own vector for
 its container's product, `lz4_ratio_product_wraps_32_bits`
 ([interop-v2.md → Test Vectors](interop-v2.md#test-vectors)).
@@ -516,6 +520,65 @@ rejection for any reason, a checksum mismatch included, a skip, a crash) is a
 failure. A package that distributes a build of an envelope implementation for a
 32-bit target is itself such an implementation, whichever repository the envelope
 code comes from.
+
+### Reject vectors
+
+`test-vectors/wire-format.json` has a `reject_vectors` group: five canonical `bin`
+envelopes, each hex-pinned and derived from a legacy base vector with one
+[Retrieve Flow](#retrieve-flow) bound broken. Each names in `reject_step` the step
+that MUST reject it. A conforming reader rejects all five. Each vector exists to show
+whether a reader enforces one particular bound, so the last column matters as much
+as the verdict:
+
+| Vector | `reject_step` | What it breaks | A reader missing only that bound |
+| :--- | :---: | :--- | :--- |
+| `reject_original_size_over_cap` | 4 | `original_size` 536,870,913 B, one byte over the cap | rejects it at step 5, by the ratio bound |
+| `reject_zero_length_compressed_data` | 5 | empty `compressed_data`, `original_size` 0 | rejects it at step 6 if its LZ4 decoder refuses an empty block, as liblz4 does; accepts it if the decoder returns empty output |
+| `reject_ratio_bomb` | 5 | `original_size` 18,001 B from 18 B of `compressed_data`, one byte past 1000:1 | rejects it at step 6, after decompression has allocated `original_size` |
+| `reject_decompressed_length_mismatch` | 6 | `original_size` 17 B; the block decodes to 16 B and the checksum matches those 16 B | accepts it |
+| `reject_checksum_mismatch` | 8 | the first and last `checksum` bytes flipped | accepts it |
+
+The zero-length vector declares `original_size` 0 on purpose. With a non-zero size,
+the ratio bound rejects it at the same step, because 1000 × 0 = 0, and the vector
+could not tell a reader missing the zero-length check from a conforming one.
+
+The length-mismatch vector names step 6 because the reference reader's decoder
+rejects any output length other than `original_size`, which enforces step 9 inside
+step 6. A decoder that returns a shorter output without error, as liblz4 does when
+its destination is larger than the block's output, leaves the rejection to step 9.
+Both conform. A reader that does neither accepts the vector.
+
+For `reject_decompressed_length_mismatch` and `reject_checksum_mismatch`, a reader
+missing the bound accepts the vector, so the verdict alone shows the bound. For
+`reject_original_size_over_cap` and `reject_ratio_bomb`, and for
+`reject_zero_length_compressed_data` under a decoder that refuses an empty block, a
+reader missing the bound still rejects the vector, only at a later step. A verdict
+cannot show that, because it does not say *when* a reader rejected, the same limit
+[interop-mode.md → Decode bounds](interop-mode.md#decode-bounds) sets out for
+`decode-bounds.json`. An SDK's conformance test for the ByteStorage envelope MUST
+therefore drive each reject vector through its envelope read path, below the point
+where the SDK turns the error into a cache miss, and assert an error that only the
+named step's check produces: the `original_size` cap for step 4, the zero-length
+check or the ratio bound for step 5. For steps 4 and 5, that error MUST come before
+decompression allocates `original_size`. For the length-mismatch and checksum
+vectors, asserting the rejection is enough. Calling a check directly as well is
+fine, but on its own does not show that the read path runs it. A run that only
+asserts that every read fails does not demonstrate conformance. Run the vectors at
+this spec's limits, not at a stricter deployment limit.
+[`tools/test_wire_format_reference.py`](../tools/test_wire_format_reference.py)
+shows the vectors isolate their bounds: it drops each bound from the reference
+reader in turn, and across every vector in the file only that bound's vector changes
+outcome.
+
+No vector covers step 1 or step 3. Step 1 needs an envelope over 512 MiB. The file
+could describe one in a few repeated segments, as it does the constructed vector, but
+every reader would have to materialise more than 512 MiB to run it. A short envelope
+with a forged `bin32` length is not a substitute: a conforming reader and one without
+step 1 both reject it as truncated at step 2. Step 3 cannot fire once step 1 has
+passed, because `compressed_data` is a strict slice of an envelope that step 1 has
+already bounded to 512 MiB. An implementation MUST still enforce both. Test step 1
+with a lowered cap, as `check_reader_rejects` in
+`tools/test_wire_format_reference.py` does.
 
 ---
 
