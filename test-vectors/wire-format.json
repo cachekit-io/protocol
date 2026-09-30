@@ -64,7 +64,7 @@
   "reject_vectors": [
     {
       "name": "reject_original_size_over_cap",
-      "description": "original_size 536870913 B, one byte over the 512 MiB max_uncompressed_size, with a 1000 B compressed_data that is not a valid LZ4 block (a literal-length extension that never ends). Readers MUST reject it. An SDK test asserts the size-cap error, and that the read allocated no output of original_size (spec/wire-format.md#reject-vectors). The reference reader rejects it at Retrieve Flow step 4. A reader without step 4 rejects it at step 5, by the ratio bound; one that decompresses first never raises the size-cap error.",
+      "description": "original_size 536870913 B, one byte over the 512 MiB max_uncompressed_size, with a 1000 B compressed_data that is not a valid LZ4 block (a literal-length extension that never ends). Readers MUST reject it. An SDK test asserts the size-cap error, and that the read's allocation high-water stayed below original_size (spec/wire-format.md#reject-vectors). The reference reader rejects it at Retrieve Flow step 4. A reader without step 4 rejects it at step 5, by the ratio bound. One that decompresses first with a strict decoder, or into an output sized from original_size, never raises the size-cap error.",
       "reject_step": 4,
       "derived_from": "simple_string",
       "format": "msgpack",
@@ -100,7 +100,7 @@
     },
     {
       "name": "reject_ratio_bomb",
-      "description": "original_size 1000001 B = 1000 * 1000 + 1, one byte past the 1000:1 bound, with a 1000 B compressed_data that is not a valid LZ4 block. Readers MUST reject it. An SDK test asserts the ratio error, and that the read allocated no output of original_size (spec/wire-format.md#reject-vectors). The reference reader rejects it at Retrieve Flow step 5. A reader without the ratio check, or one that decompresses first, never raises the ratio error.",
+      "description": "original_size 1000001 B = 1000 * 1000 + 1, one byte past the 1000:1 bound, with a 1000 B compressed_data that is not a valid LZ4 block. Readers MUST reject it. An SDK test asserts the ratio error, and that the read's allocation high-water stayed below original_size (spec/wire-format.md#reject-vectors). The reference reader rejects it at Retrieve Flow step 5. A reader without the ratio check never raises the ratio error, and neither does one that decompresses first with a strict decoder or into an output sized from original_size.",
       "reject_step": 5,
       "derived_from": "simple_string",
       "format": "msgpack",

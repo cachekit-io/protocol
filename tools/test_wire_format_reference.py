@@ -462,13 +462,7 @@ def check_reader_rejects() -> list[str]:
     strict `<` or a looser division form each fails one of the two. Step 3 is not
     covered; see the module docstring.
 
-    Mutants: the conforming reader must reject each reject vector at its named step.
-    Then each bound is dropped from the reader in turn, and across every vector in the
-    file (pinned, constructed, reject) the only outcomes that may change are that bound's
-    vectors, to accepted or to a later step. The same holds for a truncating original_size
-    decode. A reader that decompresses first must miss the size-cap and ratio vectors'
-    named steps. That is the fixture's claim, and what an SDK test relies on when it
-    asserts the named check's error (spec/wire-format.md 'Reject vectors').
+    Mutants: see item 6 of the module docstring.
     """
     failures = []
     mod = _load_tool()
@@ -618,18 +612,32 @@ def check_reader_rejects() -> list[str]:
     # Order, not presence. A reader that decompresses before steps 4 and 5 has every check
     # and still reaches none of their errors on these vectors, because their block is not
     # valid LZ4; that is why an SDK asserts the named check's error, not any rejection.
+    # Pinned here, not read from the tool: an emptied tuple would pass every check below
+    # by iterating nothing.
+    undecodable = {"reject_original_size_over_cap", "reject_ratio_bomb"}
+    report(
+        set(mod.UNDECODABLE_REJECTS) == undecodable,
+        f"the tool's UNDECODABLE_REJECTS is {sorted(mod.UNDECODABLE_REJECTS)}, expected {sorted(undecodable)}",
+    )
     decode_first = _load_tool(reorder=_decompress_first)
     got = _outcomes(decode_first, vectors, xxh3_64)
     report(
         all(got[v] == "step 6" for v in mod.UNDECODABLE_REJECTS),
         f"reader that decompresses first misses the named step: {[(v, got[v]) for v in mod.UNDECODABLE_REJECTS]}",
     )
+    # The spec says a half-join rejects the u32-wrap vector only on length: check the error, not just the step.
     for label in ("its 32-bit halves joined by +", "its 32-bit halves joined by |"):
-        got = _outcomes(wire_mutants[label], vectors, xxh3_64)
-        report(
-            all(got[v] == "step 6" for v in WIRE_VALUE_VECTORS),
-            f"original_size {label}: rejected only after decompression ({got[WIRE_VALUE_VECTORS[0]]})",
-        )
+        mutant = wire_mutants[label]
+        for v in WIRE_VALUE_VECTORS:
+            try:
+                mutant.read_envelope(bytes.fromhex(rejects[v]["envelope_hex"]), xxh3_64)
+                got, at = "accepted", None
+            except mutant.EnvelopeReject as e:
+                got, at = str(e), e.step
+            report(
+                at == 6 and _SHORT_OUTPUT.search(got) is not None,
+                f"original_size {label}: {v} rejected only on length after decompression ({got})",
+            )
     failures += _check_allocation_probe(mod, rejects)
     return failures
 
@@ -732,9 +740,7 @@ def check_reject_group() -> list[str]:
             _expect(failures, label, _run([], ["generate"], tool=tool), 0)
             got = json.loads((tool.parent.parent / "test-vectors" / FIXTURE.name).read_text())["reject_vectors"]
             ok = got == want if want is not None else [v["name"] for v in got][-1] == "reject_extra"
-            print(f"  [{'ok' if ok else 'FAIL'}] {label}: group as expected after generate")
-            if not ok:
-                failures.append(f"{label}: group wrong after generate")
+            _report(failures, ok, f"{label}: group as expected after generate")
     return failures
 
 

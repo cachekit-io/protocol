@@ -42,12 +42,13 @@ This document specifies two layers:
    canonical `*_bin` vectors only — legacy array-of-integers vectors are
    decode-only, retained as legacy-read proof. That re-encode assertion covers
    only the vectors the pinned file contains. cachekit-core's vendored test reads
-   only `vectors`. The `constructed_vectors` and `reject_vectors` groups are verified in this repo's
-   `verify.yml`: the reference tool rebuilds each constructed entry from its segment
-   lists and reads it, and only its optional-dependency (`xxhash`) leg checks the
-   entry's checksum; the stdlib leg takes it on trust. Each reject entry is rebuilt
-   from its legacy base and must be rejected ([Reject vectors](#reject-vectors)). An implementation that supports a
-   32-bit target also runs it in its own CI, per
+   only `vectors`. The `constructed_vectors` and `reject_vectors` groups are
+   verified in this repo's `verify.yml`: the reference tool rebuilds each constructed
+   entry from its segment lists and reads it, and only its optional-dependency
+   (`xxhash`) leg checks the entry's checksum; the stdlib leg takes it on trust. Each
+   reject entry is rebuilt from its legacy base and must be rejected
+   ([Reject vectors](#reject-vectors)). An implementation that supports a 32-bit
+   target also runs `envelope_ratio_product_wraps_32_bits` in its own CI, per
    [Decompression Bomb Detection](#decompression-bomb-detection). Byte-canonicity scopes to the
    envelope's MessagePack encoding and to the **canonical writer's** output:
    the LZ4 bytes inside `compressed_data` are not reproducible across
@@ -542,16 +543,22 @@ is the last column below:
 
 The size-cap and ratio vectors carry a literal-length extension that never ends.
 Strict decoders (liblz4, `lz4_flex`) refuse it. A lenient one returns a short
-output, which then fails the length check. Either way, a reader that decompresses
-before steps 4 and 5 never raises the error its test asserts.
+output, which then fails the length check. So a reader that decompresses before
+steps 4 and 5, with a strict decoder or into an output sized from `original_size`,
+never raises the error its test asserts. These vectors do not detect one case: a
+reader that decompresses first with a lenient decoder that grows its output. It gets
+a few bytes and no error, then runs steps 4 and 5 and raises exactly the expected
+error, well inside the allocation bound. Its real exposure is up to about 255 times
+the envelope's length, before step 4 has seen `original_size`. The Retrieve Flow
+still forbids it, because steps 4 and 5 come before step 6.
 
 The zero-length vector declares `original_size` 0 on purpose. With a non-zero size,
 the ratio bound rejects it at the same step, because 1000 × 0 = 0, and the vector
 could not tell a reader missing the zero-length check from a conforming one.
 
 The u32-wrap vector tests the full-wire-value rule in
-[Decompression Bomb Detection](#decompression-bomb-detection) for truncation and for
-the 32-bit half-joins, which read 16 and 17. It does not exercise sign
+[Decompression Bomb Detection](#decompression-bomb-detection) for truncation, which
+reads 16, and for the 32-bit half-joins, which both read 17. It does not exercise sign
 reinterpretation, which needs a value of 2⁶³ or more. A reader without step 4 still
 rejects it by the ratio bound, so it is the size-cap vector that shows step 4 runs.
 
@@ -559,9 +566,9 @@ The reference reader's decoder rejects any output length other than
 `original_size`, which enforces step 9 inside step 6. A decoder that returns a
 shorter output without error, as liblz4 does when its destination is larger than the
 block's output, leaves the rejection to step 9. Both conform. A reader that does
-neither accepts the length vector. So does a reader that decodes into a zero-filled
-`original_size` buffer and ignores the decoded length, when the checksum covers the
-padded output; on this vector's checksum it fails at step 8 instead.
+neither accepts the length vector. A reader that zero-pads to `original_size` and
+ignores the decoded length fails at step 8 on this vector, so it fails a test that
+asserts a length error.
 
 A verdict cannot show which check rejected a vector, the same limit
 [interop-mode.md → Decode bounds](interop-mode.md#decode-bounds) sets out for
@@ -589,18 +596,24 @@ reaches `original_size`. The measurement MUST satisfy all of these:
   allocations minus frees does not qualify.
 - It attributes allocations to this read alone: a per-thread counter with the read
   on that thread, or a single-threaded run.
-- A positive control shows the same probe, over the same window and allocator,
-  detecting a buffer of `original_size` that is allocated and freed the way a
-  reserve-first reader would.
+- It counts every allocation exactly, never a sample.
+- A positive control shows the same probe detecting an `original_size` buffer that
+  is allocated and freed *inside the envelope read path*, after step 2, as a
+  reserve-first reader would: a reserve-first build of the reader, or a hook after
+  step 2. It runs on the read's own threads and through the read's own allocation
+  calls, so a probe blind to a worker thread, or to an allocation call it does not
+  wrap, fails its control. A control allocated by the test itself does not
+  qualify. One control at the ratio vector's `original_size`, 1,000,001 B, covers
+  both vectors; the size-cap vector needs no 512 MiB control.
+
+[`tools/test_wire_format_reference.py`](../tools/test_wire_format_reference.py)
+implements such a probe, with its positive control, for the reference reader.
 
 An SDK whose envelope code runs inside another implementation, such as an SDK over
 `cachekit-core`, may rely on that implementation's probe only when the SDK passes
 the raw envelope bytes through, with no allocation of its own sized from an envelope
-field, and the probe runs in CI on the exact version the SDK pins. No released
-`cachekit-core` has such a probe yet. The SDK still asserts the named error through
-its own read path.
-[`tools/test_wire_format_reference.py`](../tools/test_wire_format_reference.py)
-checks each of these properties on the reference reader.
+field, and the probe runs in CI on the exact version the SDK pins. The SDK still
+asserts the named error through its own read path.
 
 No vector covers step 1 or step 3. Step 1 needs an envelope over 512 MiB. The file
 could describe one in a few repeated segments, as it does the constructed vector, but

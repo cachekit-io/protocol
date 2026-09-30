@@ -502,9 +502,12 @@ CONSTRUCTED_BUILDERS: dict[str, Callable[[Callable[[bytes], bytes]], dict]] = {
 
 # A literal-length extension that never ends. Strict decoders (liblz4, lz4_flex) refuse
 # it; a lenient one returns a short output that fails the length check. The size-cap and
-# ratio vectors carry it, so a reader that decompresses before those checks never raises
-# the cap or ratio error.
+# ratio vectors carry it, so a reader that decompresses first with a strict decoder, or
+# into an output sized from original_size, never raises the cap or ratio error. A lenient
+# decoder that grows its output can still reach those errors: spec/wire-format.md
+# 'Reject vectors' names that case.
 UNDECODABLE_BLOCK = b"\xf0" + b"\xff" * 999
+RATIO_REJECT = "reject_ratio_bomb"
 
 
 def _reject_vector(
@@ -539,10 +542,11 @@ def build_reject_size_cap(bases: dict[str, dict]) -> dict:
         "reject_original_size_over_cap", 4, base, UNDECODABLE_BLOCK, checksum, size,
         f"original_size {size} B, one byte over the 512 MiB max_uncompressed_size, with a "
         f"{len(UNDECODABLE_BLOCK)} B compressed_data that is not a valid LZ4 block (a literal-length "
-        "extension that never ends). Readers MUST reject it. An SDK test asserts the size-cap error, and "
-        "that the read allocated no output of original_size (spec/wire-format.md#reject-vectors). The "
+        "extension that never ends). Readers MUST reject it. An SDK test asserts the size-cap error, and that "
+        "the read's allocation high-water stayed below original_size (spec/wire-format.md#reject-vectors). The "
         "reference reader rejects it at Retrieve Flow step 4. A reader without step 4 rejects it at step 5, "
-        "by the ratio bound; one that decompresses first never raises the size-cap error.",
+        "by the ratio bound. One that decompresses first with a strict decoder, or into an output sized from "
+        "original_size, never raises the size-cap error.",
     )
 
 
@@ -577,12 +581,13 @@ def build_reject_ratio_bomb(bases: dict[str, dict]) -> dict:
     n = len(UNDECODABLE_BLOCK)
     size = MAX_RATIO * n + 1
     return _reject_vector(
-        "reject_ratio_bomb", 5, base, UNDECODABLE_BLOCK, checksum, size,
+        RATIO_REJECT, 5, base, UNDECODABLE_BLOCK, checksum, size,
         f"original_size {size} B = 1000 * {n} + 1, one byte past the 1000:1 bound, with a {n} B "
         "compressed_data that is not a valid LZ4 block. Readers MUST reject it. An SDK test asserts the ratio "
-        "error, and that the read allocated no output of original_size (spec/wire-format.md#reject-vectors). "
-        "The reference reader rejects it at Retrieve Flow step 5. A reader without the ratio check, or one "
-        "that decompresses first, never raises the ratio error.",
+        "error, and that the read's allocation high-water stayed below original_size "
+        "(spec/wire-format.md#reject-vectors). The reference reader rejects it at Retrieve Flow step 5. A "
+        "reader without the ratio check never raises the ratio error, and neither does one that decompresses "
+        "first with a strict decoder or into an output sized from original_size.",
     )
 
 
@@ -620,13 +625,13 @@ REJECT_BUILDERS: dict[str, Callable[[dict[str, dict]], dict]] = {
     "reject_original_size_over_cap": build_reject_size_cap,
     "reject_original_size_wraps_u32": build_reject_size_wraps_u32,
     "reject_zero_length_compressed_data": build_reject_zero_length,
-    "reject_ratio_bomb": build_reject_ratio_bomb,
+    RATIO_REJECT: build_reject_ratio_bomb,
     "reject_decompressed_length_mismatch": build_reject_length_mismatch,
     "reject_checksum_mismatch": build_reject_checksum,
 }
 LENGTH_REJECT = "reject_decompressed_length_mismatch"
 ZERO_LENGTH_REJECT = "reject_zero_length_compressed_data"
-UNDECODABLE_REJECTS = ("reject_original_size_over_cap", "reject_ratio_bomb")
+UNDECODABLE_REJECTS = ("reject_original_size_over_cap", RATIO_REJECT)
 
 
 def _load_xxh3() -> Callable[[bytes], bytes] | None:
@@ -833,7 +838,7 @@ def _verify_reject(vec: dict, bases: dict[str, dict], xxh3_64, msgpack, lz4_bloc
         got = lz4_block.decompress(data, uncompressed_size=vec["original_size"])
         assert len(got) < vec["original_size"], "liblz4 no longer returns a short output for this vector"
         lz4_note = f"; liblz4 returns {len(got)} B without error"
-    elif lz4_block is not None and vec["name"] in (ZERO_LENGTH_REJECT, "reject_ratio_bomb"):
+    elif lz4_block is not None and vec["name"] in (ZERO_LENGTH_REJECT, RATIO_REJECT):
         # The spec says liblz4 refuses these blocks, so a decode-first reader fails rather than decodes.
         # Each at its own original_size, so an undersized destination cannot be the reason. The
         # size-cap vector carries the same block but would need a 512 MiB destination.
