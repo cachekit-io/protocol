@@ -51,9 +51,10 @@ Every class below is proven reachable by execution rather than argued from readi
      bound's vectors may change outcome, to accepted or to a later step. verify must
      fail an altered reject vector by name and a dropped or added one as set drift, and
      generate must refill a missing group byte-identically without dropping a committed
-     entry. A truncating original_size decode must accept only the u32-wrap vector, a
-     reader that decompresses first must miss the size-cap and ratio vectors' named
-     steps, and an allocation probe must catch a reader that reserves original_size
+     entry. A truncating original_size decode must accept only the u32-wrap vector,
+     and a half-joining one must reject it only after decompression. A reader that
+     decompresses first must miss the size-cap and ratio vectors' named steps. An
+     allocation probe must catch a reader that allocates and frees original_size
      before its checks, which no error assertion can.
 
 A guard with no mutation test is one refactor away from being deleted by someone
@@ -79,6 +80,7 @@ import sys
 import tempfile
 import tracemalloc
 from collections.abc import Callable
+from functools import partial
 from pathlib import Path
 from types import ModuleType
 from unittest.mock import patch
@@ -130,6 +132,12 @@ def _drop(*names: str) -> Callable[[dict], None]:
         fixture["vectors"] = [v for v in fixture["vectors"] if v["name"] not in names]
 
     return mutate
+
+
+def _report(failures: list[str], ok: bool, label: str) -> None:
+    print(f"  [{'ok' if ok else 'FAIL'}] {label}")
+    if not ok:
+        failures.append(label)
 
 
 def _expect(
@@ -302,9 +310,11 @@ def _decompress_first(body: list[ast.stmt]) -> None:
 
 
 def _reserve_first(body: list[ast.stmt]) -> None:
-    """Allocate an original_size output buffer right after step 2, then run every check as before."""
+    """Allocate and free an original_size output buffer right after step 2, then run every
+    check as before. Freed at once, so a probe that nets allocations against frees sees
+    nothing: only the high-water mark, or the cumulative bytes requested, catches it."""
     at = body.index(_find(body, ast.Try, "decode_envelope(env)")) + 1
-    body.insert(at, ast.parse("_reserved = bytearray(original_size)").body[0])
+    body.insert(at, ast.parse("bytearray(original_size)").body[0])
 
 
 def _load_tool(
@@ -364,10 +374,7 @@ def check_32_bit_ratio_readers() -> list[str]:
         "u32 wrap after an original <= compressed fast path": lambda original, n: original <= n or original <= u32(n),
     }
 
-    def report(ok: bool, label: str) -> None:
-        print(f"  [{'ok' if ok else 'FAIL'}] {label}")
-        if not ok:
-            failures.append(label)
+    report = partial(_report, failures)
 
     # Positive control: the conforming reader accepts everything, or the cases below prove nothing.
     report(
@@ -419,9 +426,13 @@ READER_BOUNDS = {
     "step 8 checksum": ("xxh3_64(out) != checksum", ("reject_checksum_mismatch",)),
 }
 LENGTH_BOUND = ("step 6/9 output length", ("reject_decompressed_length_mismatch",))
-TRUNCATION_BOUND = ("original_size at its full wire value", ("reject_original_size_wraps_u32",))
-# The vectors whose named step a reader that decompresses first cannot reach.
-ORDERED_REJECTS = ("reject_original_size_over_cap", "reject_ratio_bomb")
+# The full-wire-value rule for original_size, broken the three ways Security Limits names.
+WIRE_VALUE_VECTORS = ("reject_original_size_wraps_u32",)
+WIRE_VALUE_DECODES: dict[str, Callable[[int], int]] = {
+    "truncated to its low 32 bits": lambda v: v & 0xFFFFFFFF,
+    "its 32-bit halves joined by +": lambda v: ((v >> 32) + (v & 0xFFFFFFFF)) & 0xFFFFFFFF,
+    "its 32-bit halves joined by |": lambda v: ((v >> 32) | (v & 0xFFFFFFFF)) & 0xFFFFFFFF,
+}
 _SHORT_OUTPUT = re.compile(r"LZ4 output length (\d+) != original_size")
 
 
@@ -469,10 +480,7 @@ def check_reader_rejects() -> list[str]:
     data, checksum, size, fmt, _encoding = mod.decode_envelope(env)
     xxh3_64 = mod._load_xxh3()
 
-    def report(ok: bool, label: str) -> None:
-        print(f"  [{'ok' if ok else 'FAIL'}] {label}")
-        if not ok:
-            failures.append(label)
+    report = partial(_report, failures)
 
     def expect(label: str, envelope: bytes, step: int, marker: str, xxh3=None, *, absent: bool = False) -> None:
         """Pass on a rejection at `step` carrying `marker`, or, with `absent`, any rejection without it."""
@@ -578,16 +586,20 @@ def check_reader_rejects() -> list[str]:
     length_mutant = _load_tool()
     length_mutant.iv2.lz4_block_decompress = lenient_decoder(length_mutant.iv2.lz4_block_decompress)
     mutants.append((*LENGTH_BOUND, length_mutant))
-    # Truncates original_size to its low 32 bits, the fail-open decode Security Limits forbids.
-    truncating = _load_tool()
-    strict_decode = truncating.decode_envelope
+    # original_size decoded other than at its full wire value, each a decode Security Limits forbids.
+    # Truncation accepts the u32-wrap vector; a half-join reads 17 and fails only on length,
+    # which is why its SDK test asserts a rejection before decompression.
+    wire_mutants = {}
+    for label, narrow in WIRE_VALUE_DECODES.items():
+        mutant = _load_tool()
 
-    def truncating_decode(envelope: bytes) -> tuple[bytes, bytes, int, str, str]:
-        data, checksum, original_size, fmt, encoding = strict_decode(envelope)
-        return data, checksum, original_size & 0xFFFFFFFF, fmt, encoding
+        def narrowing_decode(envelope: bytes, strict=mutant.decode_envelope, narrow=narrow):
+            data, checksum, original_size, fmt, encoding = strict(envelope)
+            return data, checksum, narrow(original_size), fmt, encoding
 
-    truncating.decode_envelope = truncating_decode
-    mutants.append((*TRUNCATION_BOUND, truncating))
+        mutant.decode_envelope = narrowing_decode
+        wire_mutants[label] = mutant
+        mutants.append((f"full-wire-value original_size ({label})", WIRE_VALUE_VECTORS, mutant))
 
     for label, bound_vectors, mutant in mutants:
         got = _outcomes(mutant, vectors, xxh3_64)
@@ -609,57 +621,68 @@ def check_reader_rejects() -> list[str]:
     decode_first = _load_tool(reorder=_decompress_first)
     got = _outcomes(decode_first, vectors, xxh3_64)
     report(
-        all(got[v] == "step 6" for v in ORDERED_REJECTS),
-        f"reader that decompresses first misses the named step: {[(v, got[v]) for v in ORDERED_REJECTS]}",
+        all(got[v] == "step 6" for v in mod.UNDECODABLE_REJECTS),
+        f"reader that decompresses first misses the named step: {[(v, got[v]) for v in mod.UNDECODABLE_REJECTS]}",
     )
+    for label in ("its 32-bit halves joined by +", "its 32-bit halves joined by |"):
+        got = _outcomes(wire_mutants[label], vectors, xxh3_64)
+        report(
+            all(got[v] == "step 6" for v in WIRE_VALUE_VECTORS),
+            f"original_size {label}: rejected only after decompression ({got[WIRE_VALUE_VECTORS[0]]})",
+        )
     failures += _check_allocation_probe(mod, rejects)
     return failures
 
 
-def _peak_allocation(read: Callable[[], object]) -> int:
-    """Peak bytes Python allocated while `read` ran, whatever it raised."""
+def _peak_allocation(read: Callable[[], object]) -> tuple[int, BaseException | None]:
+    """(high-water bytes Python allocated while `read` ran, what it raised).
+
+    High-water, not net: a buffer allocated and freed inside the read still counts. The
+    window is this read alone, so an earlier trace (PYTHONTRACEMALLOC) is refused rather
+    than folded in.
+    """
+    if tracemalloc.is_tracing():
+        raise RuntimeError("tracemalloc is already tracing: the probe window would include earlier allocations")
     tracemalloc.start()
     try:
         read()
-    except Exception:  # noqa: BLE001, S110 - only the allocation matters here
-        pass
+        raised = None
+    except Exception as e:  # noqa: BLE001 - the probe reports what the read raised
+        raised = e
     _current, peak = tracemalloc.get_traced_memory()
     tracemalloc.stop()
-    return peak
+    return peak, raised
 
 
 def _check_allocation_probe(mod: ModuleType, rejects: dict[str, dict]) -> list[str]:
-    """An allocation probe catches a reader that reserves original_size before its checks.
+    """The allocation probe the spec requires, shown on the reference reader.
 
-    Such a reader raises exactly the named step's error, so no error assertion can see
-    it; spec/wire-format.md 'Reject vectors' therefore requires the probe. The reserve-first
-    mutant runs only on the ratio vector (1,000,001 B): on the size-cap vector it would
-    really allocate 512 MiB. The conforming reader is probed on both.
+    A reader that allocates and frees original_size before its checks raises exactly the
+    named step's error, so no error assertion can see it. The positive control is that
+    reader: the same probe, window and allocator must see its allocation. It runs only on
+    the ratio vector (1,000,001 B), because on the size-cap vector it would really
+    allocate 512 MiB. The conforming reader is probed on both.
     """
     failures = []
-
-    def report(ok: bool, label: str) -> None:
-        print(f"  [{'ok' if ok else 'FAIL'}] {label}")
-        if not ok:
-            failures.append(label)
-
-    for name in ORDERED_REJECTS:
+    report = partial(_report, failures)
+    for name in mod.UNDECODABLE_REJECTS:
         vec = rejects[name]
         env = bytes.fromhex(vec["envelope_hex"])
-        peak = _peak_allocation(lambda env=env: mod.read_envelope(env))
-        report(peak < vec["original_size"] // 10, f"conforming reader, {name}: peak {peak} B, far under original_size")
+        peak, raised = _peak_allocation(lambda env=env: mod.read_envelope(env))
+        step = getattr(raised, "step", None)
+        report(
+            step == vec["reject_step"] and peak < vec["original_size"],
+            f"conforming reader, {name}: step {step}, peak {peak} B < original_size {vec['original_size']}",
+        )
     ratio = rejects["reject_ratio_bomb"]
     env = bytes.fromhex(ratio["envelope_hex"])
     reserving = _load_tool(reorder=_reserve_first)
-    try:
-        reserving.read_envelope(env)
-        step = None
-    except reserving.EnvelopeReject as e:
-        step = e.step
-    peak = _peak_allocation(lambda: reserving.read_envelope(env))
+    peak, raised = _peak_allocation(lambda: reserving.read_envelope(env))
+    step = getattr(raised, "step", None)
     report(
         step == ratio["reject_step"] and peak >= ratio["original_size"],
-        f"reserve-first reader: same step-{step} error, but the probe sees a {peak} B peak",
+        f"positive control, reader that allocates and frees original_size first: same step-{step} error, "
+        f"probe sees a {peak} B peak",
     )
     return failures
 
