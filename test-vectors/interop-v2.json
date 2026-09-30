@@ -79,7 +79,7 @@
   "constructed_container_vectors": [
     {
       "name": "lz4_ratio_product_wraps_32_bits",
-      "description": "method 1 container whose payload is 4294968 B = ceil(2^32/1000), the first length at which 1000 * payload_len overflows unsigned 32 bits. original_size is larger than payload_len and well inside the 1000:1 bound, so readers MUST accept it and decode it to the constructed value. A reader that computes the product in 32-bit width gets 704 instead (signed or unsigned wrap alike) and rejects it as a ratio bomb; so does one that rejects on 32-bit overflow, and one that skips the product when original_size <= payload_len. A pointer-width product passes it on a 64-bit host, so a pass there proves nothing about a 32-bit target. spec/interop-v2.md#sdk-implementation-requirements, item 7, says which implementations must run it, on which targets, and at which limits.",
+      "description": "method 1 container whose payload is 4294968 B = ceil(2^32/1000), the first length at which 1000 * payload_len overflows unsigned 32 bits. original_size is larger than payload_len and well inside the 1000:1 bound, so readers MUST accept it and decode it to the constructed value. A reader that computes the product in 32-bit width gets 704 instead (signed or unsigned wrap alike) and rejects it as a ratio bomb; so does one that rejects on 32-bit overflow, and a 32-bit one that skips the product when original_size <= payload_len. A pointer-width product passes it on a 64-bit host, so a pass there proves nothing about a 32-bit target. spec/interop-v2.md#sdk-implementation-requirements, item 7, says which implementations must run it, on which targets, and at which limits.",
       "method": 1,
       "original_size": 8523079,
       "payload_len": 4294968,

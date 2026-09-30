@@ -529,7 +529,7 @@ def _build_wrap_threshold_vector() -> dict:
             "well inside the 1000:1 bound, so readers MUST accept it and decode it to the constructed value. A "
             f"reader that computes the product in 32-bit width gets {ratio_bound_u32_wrapped(payload_len)} "
             "instead (signed or unsigned wrap alike) and rejects it as a ratio bomb; so does one that rejects "
-            "on 32-bit overflow, and one that skips the product when original_size <= payload_len. "
+            "on 32-bit overflow, and a 32-bit one that skips the product when original_size <= payload_len. "
             "A pointer-width product passes it on a 64-bit host, so a pass there proves nothing about a "
             "32-bit target. spec/interop-v2.md#sdk-implementation-requirements, item 7, says which "
             "implementations must run it, on which targets, and at which limits."
