@@ -28,6 +28,23 @@ Every class below is proven reachable by execution rather than argued from readi
          "differs from liblz4's output" — a one-bit check any other valid LZ4 block
          satisfies, so a re-pin to unrelated bytes passed.
 
+  4. The ratio-product width rule. The reader's ratio check is swapped, in process,
+     for four 32-bit ones (u32 wrap, i32 wrap, reject on u32 overflow, and u32 wrap
+     that skips the product when original_size <= compressed_size). Each must pass
+     every pinned vector and reject `envelope_ratio_product_wraps_32_bits`. A dropped
+     or altered constructed vector must fail `verify` by name, and a wrong checksum
+     must fail wherever `xxhash` is importable (the stdlib leg cannot see it).
+
+  5. The reader's own reject branches, called directly: each of the 8 checksum bytes
+     flipped in turn (xxhash leg), an envelope over the envelope cap, an original_size
+     over the size cap, an empty compressed_data, and the ratio bound at 1000:1 + 1 B
+     (rejected) and exactly 1000:1 (inside the bound, so the reader must get past it).
+     Each reject must fail with its own message, and the exact-bound case with
+     anything but the ratio message, so deleting or loosening one branch fails this
+     suite even where a later check would also reject. Step 3's compressed_data cap is not
+     covered: compressed_data is a strict slice of the envelope step 1 already bounded,
+     so no input reaches it.
+
 A guard with no mutation test is one refactor away from being deleted by someone
 who cannot see what it holds up.
 
@@ -49,10 +66,13 @@ import sys
 import tempfile
 from collections.abc import Callable
 from pathlib import Path
+from unittest.mock import patch
 
 HERE = Path(__file__).resolve().parent
 TOOL = HERE / "wire-format-reference.py"
 FIXTURE = HERE.parent / "test-vectors" / "wire-format.json"
+# The tool loads its LZ4 decoder from interop-v2-reference.py, which loads interop-reference.py.
+IMPORTED_TOOLS = (HERE / "interop-v2-reference.py", HERE / "interop-reference.py")
 
 # A vector whose legacy base is dropped by a bad merge, leaving an orphan twin.
 # LAB-868's width-boundary vector: the only bin16 coverage in the fleet.
@@ -81,7 +101,8 @@ def _scratch(tmp: Path, mutate: Callable[[dict], None] | None = None) -> Path:
     """Mirror tool + fixture into a scratch tree so mutations never touch the repo."""
     (tmp / "tools").mkdir(parents=True, exist_ok=True)
     (tmp / "test-vectors").mkdir(parents=True, exist_ok=True)
-    shutil.copy(TOOL, tmp / "tools" / TOOL.name)
+    for tool in (TOOL, *IMPORTED_TOOLS):
+        shutil.copy(tool, tmp / "tools" / tool.name)
     fixture = json.loads(FIXTURE.read_text())
     if mutate:
         mutate(fixture)
@@ -211,13 +232,7 @@ def check_whole_file_properties() -> list[str]:
             vec["envelope_size"] = len(env)
 
     def _encode(data: bytes, base: dict, encoding: str) -> bytes:
-        import importlib.util as u
-
-        spec = u.spec_from_file_location("_wfr", TOOL)
-        if spec is None or spec.loader is None:
-            raise _ModuleLoadError(TOOL)
-        mod = u.module_from_spec(spec)
-        spec.loader.exec_module(mod)
+        mod = _load_tool()
         _d, checksum, size, fmt, _e = mod.decode_envelope(bytes.fromhex(base["envelope_hex"]))
         return mod.encode_envelope(data, checksum, size, fmt, encoding=encoding)
 
@@ -228,7 +243,10 @@ def check_whole_file_properties() -> list[str]:
         del fixture["limits"]["max_compression_ratio"]
 
     def unclassifiable(fixture: dict) -> None:
-        next(v for v in fixture["vectors"] if v["name"] == "simple_string_bin")["envelope_encoding"] = "bin16"
+        vec = next((v for v in fixture["vectors"] if v["name"] == "simple_string_bin"), None)
+        if vec is None:
+            raise KeyError("fixture has no simple_string_bin to mutate")
+        vec["envelope_encoding"] = "bin16"
 
     cases = [
         (
@@ -245,6 +263,197 @@ def check_whole_file_properties() -> list[str]:
         ("a missing declared limit is drift, not a skip", limits_missing, "limits' drifted"),
         ("divergent vector keeps its pinned bytes", repin_divergent, "no longer carries its pinned"),
         ("unusable fixture fails by name, not by traceback", unclassifiable, "simple_string_bin"),
+    ]
+    with tempfile.TemporaryDirectory() as td:
+        for label, mutate, marker in cases:
+            tool = _scratch(Path(tempfile.mkdtemp(dir=td)), mutate=mutate)
+            _expect(failures, label, _run([], ["verify"], tool=tool), 1, marker)
+    return failures
+
+
+def _load_tool():
+    import importlib.util as u
+
+    spec = u.spec_from_file_location("_wfr_reader", TOOL)
+    if spec is None or spec.loader is None:
+        raise _ModuleLoadError(TOOL)
+    mod = u.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def check_32_bit_ratio_readers() -> list[str]:
+    """Four 32-bit ratio checks pass every pinned vector and fail the constructed one.
+
+    The spec's >=64-bit rule is enforceable only if a published vector fails a reader
+    that breaks it. Before fixture 1.2.0 none did: the largest envelope was 478 B.
+    """
+    failures = []
+    mod = _load_tool()
+    fixture = json.loads(FIXTURE.read_text())
+    pinned = [(v["name"], bytes.fromhex(v["envelope_hex"]), bytes.fromhex(v["input_hex"])) for v in fixture["vectors"]]
+    wrap = next((v for v in fixture.get("constructed_vectors", []) if v["name"] == mod.WRAP_VECTOR), None)
+    if wrap is None:
+        return [f"fixture has no {mod.WRAP_VECTOR}: the mutation suite would pass vacuously"]
+    wrap_env = mod.iv2.construct(wrap["envelope_construction"])
+    wrap_input = mod.iv2.construct(wrap["input_construction"])
+    xxh3_64 = mod._load_xxh3()
+
+    u32 = mod.iv2.ratio_bound_u32_wrapped
+
+    def overflow_rejects(original: int, n: int) -> bool:
+        """Rejects on 32-bit overflow instead of widening (`checked_mul` on u32 + REJECT)."""
+        if mod.MAX_RATIO * n >= 1 << 32:
+            raise mod.EnvelopeReject("ratio product overflows u32")
+        return original <= mod.MAX_RATIO * n
+
+    mutants: dict[str, Callable[[int, int], bool]] = {
+        "u32 wrap": lambda original, n: original <= u32(n),
+        "i32 wrap": lambda original, n: original <= (mod.MAX_RATIO * n + (1 << 31)) % (1 << 32) - (1 << 31),
+        "u32 reject-on-overflow": overflow_rejects,
+        # Only a vector whose original is larger than its compressed data catches this one.
+        "u32 wrap after an original <= compressed fast path": lambda original, n: original <= n or original <= u32(n),
+    }
+
+    def report(ok: bool, label: str) -> None:
+        print(f"  [{'ok' if ok else 'FAIL'}] {label}")
+        if not ok:
+            failures.append(label)
+
+    # Positive control: the conforming reader accepts everything, or the cases below prove nothing.
+    report(
+        all(mod.read_envelope(env, xxh3_64) == inp for _n, env, inp in pinned)
+        and mod.read_envelope(wrap_env, xxh3_64) == wrap_input,
+        "conforming reader accepts every vector",
+    )
+    for name, mutant in mutants.items():
+        with patch.object(mod, "within_ratio", mutant):
+            try:
+                missed = [n for n, env, inp in pinned if mod.read_envelope(env, xxh3_64) != inp]
+            except ValueError as e:
+                missed = [f"raised {e!r}"]
+            report(not missed, f"{name}: every pinned vector still passes (the gap was real) {missed or ''}")
+            try:
+                mod.read_envelope(wrap_env, xxh3_64)
+                caught = False
+            except mod.EnvelopeReject as e:
+                caught = "ratio" in str(e)
+            report(caught, f"{name}: {mod.WRAP_VECTOR} rejected as a ratio bomb")
+
+    # The stdlib leg takes the checksum on trust, so a wrong one must fail wherever
+    # xxhash is importable (CI's optional-deps leg), or every SDK re-vendor would
+    # fail this accept vector for the wrong reason.
+    if xxh3_64 is None:
+        print("  [skip] wrong checksum rejected: xxhash not importable (CI's optional-deps leg runs it)")
+    else:
+        wrong = mod.build_wrap_threshold_vector(lambda _original: bytes(8))
+        try:
+            mod._verify_constructed(wrong, xxh3_64, None, None)
+            rejected = False
+        except AssertionError as e:
+            rejected = "checksum" in str(e)
+        report(rejected, "wrong checksum rejected with xxhash")
+    return failures
+
+
+def check_reader_rejects() -> list[str]:
+    """Each reachable reject branch of read_envelope fires, by its own message; an
+    envelope exactly at the ratio bound gets past it.
+
+    Every published vector is an accept vector, so without these a deleted branch
+    stays green: a later check (the ratio bound, the LZ4 decoder) often rejects the
+    same envelope under a different message, or nothing does. The ratio pair pins
+    the bound's own logic, which the 32-bit mutants replace wholesale and so cannot:
+    `return True`, a strict `<` or a looser division form each fails one of the two.
+    Step 3 is not covered; see the module docstring.
+    """
+    failures = []
+    mod = _load_tool()
+    fixture = json.loads(FIXTURE.read_text())
+    base = next((v for v in fixture["vectors"] if v["name"] == "simple_string_bin"), None)
+    if base is None:
+        return ["fixture has no simple_string_bin: the reject cases would not run"]
+    env = bytes.fromhex(base["envelope_hex"])
+    data, checksum, size, fmt, _encoding = mod.decode_envelope(env)
+    xxh3_64 = mod._load_xxh3()
+
+    def expect(label: str, envelope: bytes, marker: str, xxh3=None, *, absent: bool = False) -> None:
+        """Pass when `marker` is in the rejection, or, with `absent`, when it rejects without it."""
+        try:
+            mod.read_envelope(envelope, xxh3)
+            got = "accepted"
+        except mod.EnvelopeReject as e:
+            got = str(e)
+        except ValueError as e:
+            got = f"{type(e).__name__}: {e}"
+        ok = (got != "accepted" and marker not in got) if absent else marker in got
+        print(f"  [{'ok' if ok else 'FAIL'}] {label}: {got}")
+        if not ok:
+            failures.append(label)
+
+    if xxh3_64 is None:
+        print("  [skip] flipped checksum bytes: xxhash not importable (CI's optional-deps leg runs it)")
+    else:
+        # Every byte, so a compare over only part of the checksum fails too.
+        for i in range(len(checksum)):
+            flipped = checksum[:i] + bytes([checksum[i] ^ 0x01]) + checksum[i + 1 :]
+            expect(
+                f"checksum byte {i} flipped rejected",
+                mod.encode_envelope(data, flipped, size, fmt, encoding="bin"),
+                "checksum mismatch",
+                xxh3_64,
+            )
+    # The envelope cap is 512 MiB; lowering it for one call avoids a 512 MiB allocation.
+    with patch.object(mod, "MAX_COMPRESSED_SIZE", len(env) - 1):
+        expect("envelope over the envelope cap rejected", env, "envelope exceeds max compressed size")
+    expect(
+        "original_size over the size cap rejected",
+        mod.encode_envelope(data, checksum, mod.MAX_UNCOMPRESSED_SIZE + 1, fmt, encoding="bin"),
+        "original_size exceeds max uncompressed size",
+    )
+    expect(
+        "empty compressed_data rejected",
+        mod.encode_envelope(b"", checksum, 0, fmt, encoding="bin"),
+        "zero-length compressed_data",
+    )
+    expect(
+        "original_size one byte over 1000:1 rejected by the ratio bound",
+        mod.encode_envelope(data, checksum, mod.MAX_RATIO * len(data) + 1, fmt, encoding="bin"),
+        "compression ratio exceeds",
+    )
+    # Exactly 1000:1 is inside the bound, so the reader must get past it. The data does
+    # not decode to that length, so it still rejects, just never as a ratio bomb.
+    expect(
+        "original_size at exactly 1000:1 passes the ratio bound",
+        mod.encode_envelope(data, checksum, mod.MAX_RATIO * len(data), fmt, encoding="bin"),
+        "compression ratio exceeds",
+        absent=True,
+    )
+    return failures
+
+
+def check_constructed_group() -> list[str]:
+    """verify fails a dropped or altered constructed vector, by name."""
+    failures = []
+
+    def drop_constructed(fixture: dict) -> None:
+        fixture["constructed_vectors"] = []
+
+    def shrink(fixture: dict) -> None:
+        # A block one 255-run shorter: compressed_size falls below the wrap threshold.
+        fixture["constructed_vectors"][0]["envelope_construction"][1]["count"] -= 1
+
+    def no_group(fixture: dict) -> None:
+        del fixture["constructed_vectors"]
+
+    def note_drift(fixture: dict) -> None:
+        fixture["construction_note"] = "x"
+
+    cases = [
+        ("dropped constructed vector is set drift", drop_constructed, "constructed-vector set drifted"),
+        ("missing constructed group is set drift", no_group, "constructed-vector set drifted"),
+        ("altered construction differs from the builder", shrink, "differs from what the builder derives"),
+        ("construction_note drift fails", note_drift, "construction_note drifted"),
     ]
     with tempfile.TemporaryDirectory() as td:
         for label, mutate, marker in cases:
@@ -284,6 +493,9 @@ def main() -> int:
         ("generate append-only", check_generate_is_append_only),
         ("whole-file properties", check_whole_file_properties),
         ("flag rejection", check_flag_rejections),
+        ("32-bit ratio readers", check_32_bit_ratio_readers),
+        ("reader reject branches", check_reader_rejects),
+        ("constructed group", check_constructed_group),
     ):
         print(f"{label}:")
         failures += check()
