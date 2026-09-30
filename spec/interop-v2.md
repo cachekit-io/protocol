@@ -232,7 +232,7 @@ bomb — that bare-MessagePack v1 does not have. These bounds reuse the
 ByteStorage constants from
 [wire-format.md → Security Limits](wire-format.md#security-limits) so the fleet
 carries **one** set of numbers, and all of them MUST be enforced **before**
-decompressing (integer arithmetic only — no floating-point *ratio*; the ratio
+decompressing (integer-valued arithmetic only — no floating-point *ratio*; the ratio
 product's integer-width requirement, and the rule that `original_size` is
 compared at its full wire value, are stated below):
 
@@ -251,8 +251,8 @@ if method == 1:
     reject if payload.length == 0                   // zero-length compressed = bomb
     // BEGIN shared-block: ratio-product-pseudocode
     max_allowed = MAX_COMPRESSION_RATIO * uint64(payload.length)  // 1000; widen BEFORE multiplying
-    // END shared-block: ratio-product-pseudocode
     reject if original_size > max_allowed
+    // END shared-block: ratio-product-pseudocode
 if method == 0:
     reject if original_size != payload.length
 ```
@@ -277,7 +277,7 @@ reader rejects it. Every target language has a conforming path: Rust `u64`, or `
 rejects an out-of-range value, whatever its marker width, instead of truncating it);
 Python's `int`; JavaScript `BigInt`, or `Number`.
 
-The ratio product MUST be computed in **at least 64-bit unsigned integers**:
+The ratio product MUST be computed **exactly**:
 promote `payload.length` to a ≥ 64-bit unsigned or arbitrary-precision integer, or to an
 IEEE-754 binary64 in which the operand and the product are exact integers
 (< 2⁵³), *before* the multiply. Multiplying in pointer width and widening the
