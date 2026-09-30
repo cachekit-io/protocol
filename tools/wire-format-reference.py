@@ -501,11 +501,10 @@ CONSTRUCTED_BUILDERS: dict[str, Callable[[Callable[[bytes], bytes]], dict]] = {
 # fire once step 1 has passed.
 
 # A literal-length extension that never ends. Strict decoders (liblz4, lz4_flex) refuse
-# it; a lenient one returns a short output that fails the length check. The size-cap and
-# ratio vectors carry it, so a reader that decompresses first with a strict decoder, or
-# into an output sized from original_size, never raises the cap or ratio error. A lenient
-# decoder that grows its output can still reach those errors: spec/wire-format.md
-# 'Reject vectors' names that case.
+# it. The size-cap and ratio vectors carry it, so a reader that decompresses first with a
+# strict decoder fails the error assertion, and one that sizes an output from
+# original_size first fails the allocation bound. spec/wire-format.md 'Reject vectors'
+# names the late-check readers these vectors do not detect.
 UNDECODABLE_BLOCK = b"\xf0" + b"\xff" * 999
 RATIO_REJECT = "reject_ratio_bomb"
 
@@ -545,8 +544,8 @@ def build_reject_size_cap(bases: dict[str, dict]) -> dict:
         "extension that never ends). Readers MUST reject it. An SDK test asserts the size-cap error, and that "
         "the read's allocation high-water stayed below original_size (spec/wire-format.md#reject-vectors). The "
         "reference reader rejects it at Retrieve Flow step 4. A reader without step 4 rejects it at step 5, "
-        "by the ratio bound. One that decompresses first with a strict decoder, or into an output sized from "
-        "original_size, never raises the size-cap error.",
+        "by the ratio bound. One that decompresses first with a strict decoder never raises the size-cap "
+        "error, and one that allocates an output sized from original_size first fails the allocation bound.",
     )
 
 
@@ -586,8 +585,9 @@ def build_reject_ratio_bomb(bases: dict[str, dict]) -> dict:
         "compressed_data that is not a valid LZ4 block. Readers MUST reject it. An SDK test asserts the ratio "
         "error, and that the read's allocation high-water stayed below original_size "
         "(spec/wire-format.md#reject-vectors). The reference reader rejects it at Retrieve Flow step 5. A "
-        "reader without the ratio check never raises the ratio error, and neither does one that decompresses "
-        "first with a strict decoder or into an output sized from original_size.",
+        "reader without the ratio check, or one that decompresses first with a strict decoder, never raises "
+        "the ratio error, and one that allocates an output sized from original_size first fails the allocation "
+        "bound.",
     )
 
 
@@ -602,8 +602,8 @@ def build_reject_length_mismatch(bases: dict[str, dict]) -> dict:
         "reference reader's decoder (tools/wire-format-reference.py) rejects any output length other than "
         "original_size, at step 6. A reader whose decoder returns a shorter output without error, as liblz4 "
         "does, rejects it at step 9; both conform. A reader with neither check accepts it, because the checksum "
-        "matches the decoded bytes. A reader that zero-pads the output to original_size fails the checksum "
-        "instead, which is not a length error.",
+        "matches the decoded bytes. A reader that zero-pads the output to original_size fails the checksum, or "
+        "accepts it if it checksums before padding; neither is a length error.",
     )
 
 

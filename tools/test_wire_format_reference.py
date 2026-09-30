@@ -52,7 +52,7 @@ Every class below is proven reachable by execution rather than argued from readi
      fail an altered reject vector by name and a dropped or added one as set drift, and
      generate must refill a missing group byte-identically without dropping a committed
      entry. A truncating original_size decode must accept only the u32-wrap vector,
-     and a half-joining one must reject it only after decompression. A reader that
+     and a half-joining one must reject it only on length after decompression. A reader that
      decompresses first must miss the size-cap and ratio vectors' named steps. An
      allocation probe must catch a reader that allocates and frees original_size
      before its checks, which no error assertion can.
@@ -99,8 +99,8 @@ ORPHANED_BASE = "width_boundary_bin16"
 class _GuardNotFoundError(RuntimeError):
     """A mutant's guard does not match exactly one `if` in read_envelope (message per TRY003)."""
 
-    def __init__(self, fragment: str, hits: int) -> None:
-        super().__init__(f"read_envelope guard {fragment!r} matches {hits} `if` statements, not 1")
+    def __init__(self, fragment: str, hits: int, kind: str = "if") -> None:
+        super().__init__(f"read_envelope fragment {fragment!r} matches {hits} `{kind}` statements, not 1")
 
 
 # The realistic bad-merge shape the orphan case does NOT cover: base and twin go
@@ -298,7 +298,7 @@ def _find(body: list[ast.stmt], kind: type, fragment: str) -> ast.stmt:
     """The one `kind` statement of read_envelope's body whose source contains `fragment`."""
     hits = [n for n in body if isinstance(n, kind) and fragment in ast.unparse(n.test if kind is ast.If else n)]
     if len(hits) != 1:
-        raise _GuardNotFoundError(fragment, len(hits))
+        raise _GuardNotFoundError(fragment, len(hits), "if" if kind is ast.If else "try")
     return hits[0]
 
 
@@ -529,6 +529,14 @@ def check_reader_rejects() -> list[str]:
         "compression ratio exceeds",
         absent=True,
     )
+    # Exactly the cap is inside it, so the reader must get past step 4. The ratio bound
+    # then rejects it, so this allocates nothing.
+    expect(
+        "original_size at exactly the size cap passes step 4",
+        mod.encode_envelope(data, checksum, mod.MAX_UNCOMPRESSED_SIZE, fmt, encoding="bin"),
+        5,
+        "compression ratio exceeds",
+    )
     expect("truncated envelope rejected at decode", env[:-1], 2, "malformed envelope")
 
     # --- the fixture's reject_vectors, and one mutant per bound ---
@@ -631,12 +639,12 @@ def check_reader_rejects() -> list[str]:
         for v in WIRE_VALUE_VECTORS:
             try:
                 mutant.read_envelope(bytes.fromhex(rejects[v]["envelope_hex"]), xxh3_64)
-                got, at = "accepted", None
+                reason, at = "accepted", None
             except mutant.EnvelopeReject as e:
-                got, at = str(e), e.step
+                reason, at = str(e), e.step
             report(
-                at == 6 and _SHORT_OUTPUT.search(got) is not None,
-                f"original_size {label}: {v} rejected only on length after decompression ({got})",
+                at == 6 and _SHORT_OUTPUT.search(reason) is not None,
+                f"original_size {label}: {v} rejected only on length after decompression ({reason})",
             )
     failures += _check_allocation_probe(mod, rejects)
     return failures
