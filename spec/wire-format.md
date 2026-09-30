@@ -428,9 +428,10 @@ reject if original_size > max_allowed
 // END shared-block: ratio-product-pseudocode
 ```
 
-<a id="check-order"></a>A reader MUST complete these checks before it decompresses `compressed_data` or
-allocates any output buffer, whatever size it derives that buffer from:
-`original_size`, the length of `compressed_data`, or a multiple of either.
+<a id="check-order"></a>For each envelope, a reader MUST complete these checks before it decompresses
+that envelope's `compressed_data`, and before it allocates or grows any output buffer
+for it, however that buffer is sized (for example from `original_size`, from the
+length of `compressed_data`, from a multiple of either, or from a constant).
 
 <!-- BEGIN shared-block: ratio-product-rule (guarded by tools/check-spec-duplication.py) -->
 The `MAX_UNCOMPRESSED` comparison MUST be decided on the **full wire value** of
@@ -549,20 +550,19 @@ The size-cap and ratio vectors carry a literal-length extension that never ends.
 Strict decoders (liblz4, `lz4_flex`) refuse it. Lenient decoders come in two kinds.
 A *fixed-output* decoder writes into a buffer the reader sized in advance and returns
 a short output with no error. A *growing* decoder extends its output as it goes. What
-the tests detect, for a reader that runs steps 4 and 5 late:
+the tests detect, and miss, for a reader that runs steps 4 and 5 late:
 
 - A reader that decompresses first with a strict decoder, and lets its error
   propagate, never raises the expected error, so it fails the error assertion.
 - A reader that allocates an output sized from `original_size` before steps 4 and 5,
   whether to decompress into it with a fixed-output decoder or to reserve it, fails
   the allocation bound.
-- These vectors do not detect a reader that decompresses first with a growing
-  decoder, a reader that holds a strict decoder's error until after steps 4 and 5,
-  or a reader that reserves a buffer sized from the length of `compressed_data`
-  below `original_size`, for example 255 × that length. Each raises exactly the
-  expected error inside the allocation bound. The first and last can still allocate
-  up to about 255 times the envelope's length before step 4 has seen
-  `original_size`. The [ordering rule](#check-order) forbids all three.
+- These vectors do not detect three readers. One decompresses first with a growing
+  decoder. One holds a strict decoder's error until after steps 4 and 5. One sizes
+  its output from the length of `compressed_data`, smaller than `original_size`,
+  whether it decompresses into it first or only reserves it. Each raises exactly
+  the expected error inside the allocation bound. The
+  [ordering rule](#check-order) forbids all three.
 
 The zero-length vector declares `original_size` 0 on purpose. With a non-zero size,
 the ratio bound rejects it at the same step, because 1000 × 0 = 0, and the vector

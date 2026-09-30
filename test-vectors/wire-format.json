@@ -55,7 +55,7 @@
   ],
   "construction_note": "constructed_vectors are too large to pin as hex. To build envelope or input bytes, repeat each segment's hex `count` times and concatenate the segments in order (the same list form as interop-v2.json). Readers MUST decode the constructed envelope to the constructed input.",
   "envelope_format": "MessagePack positional array (rmp_serde::to_vec): [compressed_data, checksum, original_size, format]. Vectors without an 'envelope_encoding' field use the legacy array-of-integers encoding for compressed_data and are retained forever as legacy-read proof; their '*_bin' twins use msgpack bin (canonical for protocol 1.1+ writers). checksum always encodes as an array of 8 integers. Normative rules: spec/wire-format.md, 'Byte Layout' / 'Encoding compatibility'.",
-  "generator": "six original legacy vectors: cachekit-core v0.2.0; width_boundary_bin16 legacy vector: cachekit-core v0.5.0 real writer; *_bin vectors: tools/wire-format-reference.py generate - deterministic re-encode of the legacy fields, byte-verified against rmp-serde 1.3.1 + serde_bytes 0.11.19 output (LAB-783); constructed_vectors: tools/wire-format-reference.py generate - stdlib construction, checksum by xxhash 4.0.1 (xxHash 0.8.3); reject_vectors: tools/wire-format-reference.py generate - canonical bin re-encode of legacy base fields with one bound broken",
+  "generator": "six original legacy vectors: cachekit-core v0.2.0; width_boundary_bin16 legacy vector: cachekit-core v0.5.0 real writer; *_bin vectors: tools/wire-format-reference.py generate - deterministic re-encode of the legacy fields, byte-verified against rmp-serde 1.3.1 + serde_bytes 0.11.19 output (LAB-783); constructed_vectors: tools/wire-format-reference.py generate - stdlib construction, checksum by xxhash 4.0.1 (xxHash 0.8.3); reject_vectors: tools/wire-format-reference.py generate - canonical bin re-encode of legacy base fields with one check broken",
   "limits": {
     "max_compressed_size": 536870912,
     "max_compression_ratio": 1000,
@@ -64,7 +64,7 @@
   "reject_vectors": [
     {
       "name": "reject_original_size_over_cap",
-      "description": "original_size 536870913 B, one byte over the 512 MiB max_uncompressed_size, with a 1000 B compressed_data that is not a valid LZ4 block (a literal-length extension that never ends). Readers MUST reject it. An SDK test asserts the size-cap error, and that the read's allocation high-water stayed below original_size (spec/wire-format.md#reject-vectors). The reference reader rejects it at Retrieve Flow step 4. A reader without step 4 rejects it at step 5, by the ratio bound. One that decompresses first with a strict decoder never raises the size-cap error, and one that allocates an output sized from original_size first fails the allocation bound.",
+      "description": "original_size 536870913 B, one byte over the 512 MiB max_uncompressed_size, with a 1000 B compressed_data that is not a valid LZ4 block (a literal-length extension that never ends). Readers MUST reject it. An SDK test asserts the size-cap error, and that the read's allocation high-water stayed below original_size (spec/wire-format.md#reject-vectors). The reference reader rejects it at Retrieve Flow step 4. A reader without step 4 rejects it at step 5, by the ratio bound. One that decompresses first with a strict decoder and lets its error propagate never raises the size-cap error, and one that allocates an output sized from original_size first fails the allocation bound.",
       "reject_step": 4,
       "derived_from": "simple_string",
       "format": "msgpack",
@@ -100,7 +100,7 @@
     },
     {
       "name": "reject_ratio_bomb",
-      "description": "original_size 1000001 B = 1000 * 1000 + 1, one byte past the 1000:1 bound, with a 1000 B compressed_data that is not a valid LZ4 block. Readers MUST reject it. An SDK test asserts the ratio error, and that the read's allocation high-water stayed below original_size (spec/wire-format.md#reject-vectors). The reference reader rejects it at Retrieve Flow step 5. A reader without the ratio check, or one that decompresses first with a strict decoder, never raises the ratio error, and one that allocates an output sized from original_size first fails the allocation bound.",
+      "description": "original_size 1000001 B = 1000 * 1000 + 1, one byte past the 1000:1 bound, with a 1000 B compressed_data that is not a valid LZ4 block. Readers MUST reject it. An SDK test asserts the ratio error, and that the read's allocation high-water stayed below original_size (spec/wire-format.md#reject-vectors). The reference reader rejects it at Retrieve Flow step 5. A reader without the ratio check, or one that decompresses first with a strict decoder and lets its error propagate, never raises the ratio error, and one that allocates an output sized from original_size first fails the allocation bound.",
       "reject_step": 5,
       "derived_from": "simple_string",
       "format": "msgpack",

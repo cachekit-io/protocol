@@ -182,7 +182,7 @@ GENERATOR = (
     "output (LAB-783); constructed_vectors: tools/wire-format-reference.py "
     "generate - stdlib construction, checksum by xxhash 4.0.1 (xxHash 0.8.3); "
     "reject_vectors: tools/wire-format-reference.py generate - canonical bin re-encode of legacy "
-    "base fields with one bound broken"
+    "base fields with one check broken"
 )
 CONSTRUCTION_NOTE = (
     "constructed_vectors are too large to pin as hex. To build envelope or input "
@@ -493,18 +493,16 @@ CONSTRUCTED_BUILDERS: dict[str, Callable[[Callable[[bytes], bytes]], dict]] = {
 
 # --- reject vectors --------------------------------------------------------------
 # Each is a canonical bin envelope derived from a legacy base vector, so `generate`
-# needs no xxhash. Each breaks one Retrieve Flow bound, and dropping that bound alone
-# changes the outcome of that bound's vectors and no other vector's (mutation-tested by
+# needs no xxhash. Each breaks one Retrieve Flow check, and dropping that check alone
+# changes the outcome of that check's vectors and no other vector's (mutation-tested by
 # tools/test_wire_format_reference.py). `reject_step` is the step at which the reference
 # reader rejects it; spec/wire-format.md 'Reject vectors' says what an SDK asserts.
 # Steps 1 and 3 have none: step 1 needs a 512 MiB + 1 B envelope, and step 3 cannot
 # fire once step 1 has passed.
 
-# A literal-length extension that never ends. Strict decoders (liblz4, lz4_flex) refuse
-# it. The size-cap and ratio vectors carry it, so a reader that decompresses first with a
-# strict decoder fails the error assertion, and one that sizes an output from
-# original_size first fails the allocation bound. spec/wire-format.md 'Reject vectors'
-# names the late-check readers these vectors do not detect.
+# A literal-length extension that never ends, carried by the size-cap and ratio vectors.
+# Strict decoders (liblz4, lz4_flex) refuse it. spec/wire-format.md 'Reject vectors' says
+# which late-check readers it detects and which it does not.
 UNDECODABLE_BLOCK = b"\xf0" + b"\xff" * 999
 RATIO_REJECT = "reject_ratio_bomb"
 
@@ -544,8 +542,9 @@ def build_reject_size_cap(bases: dict[str, dict]) -> dict:
         "extension that never ends). Readers MUST reject it. An SDK test asserts the size-cap error, and that "
         "the read's allocation high-water stayed below original_size (spec/wire-format.md#reject-vectors). The "
         "reference reader rejects it at Retrieve Flow step 4. A reader without step 4 rejects it at step 5, "
-        "by the ratio bound. One that decompresses first with a strict decoder never raises the size-cap "
-        "error, and one that allocates an output sized from original_size first fails the allocation bound.",
+        "by the ratio bound. One that decompresses first with a strict decoder and lets its error propagate "
+        "never raises the size-cap error, and one that allocates an output sized from original_size first "
+        "fails the allocation bound.",
     )
 
 
@@ -585,7 +584,8 @@ def build_reject_ratio_bomb(bases: dict[str, dict]) -> dict:
         "compressed_data that is not a valid LZ4 block. Readers MUST reject it. An SDK test asserts the ratio "
         "error, and that the read's allocation high-water stayed below original_size "
         "(spec/wire-format.md#reject-vectors). The reference reader rejects it at Retrieve Flow step 5. A "
-        "reader without the ratio check, or one that decompresses first with a strict decoder, never raises "
+        "reader without the ratio check, or one that decompresses first with a strict decoder and lets its "
+        "error propagate, never raises "
         "the ratio error, and one that allocates an output sized from original_size first fails the allocation "
         "bound.",
     )

@@ -37,12 +37,14 @@ Every class below is proven reachable by execution rather than argued from readi
 
   5. The reader's own reject branches, called directly: each of the 8 checksum bytes
      flipped in turn (xxhash leg), an envelope over the envelope cap, an original_size
-     over the size cap, an empty compressed_data, the ratio bound at 1000:1 + 1 B
-     (rejected) and exactly 1000:1 (inside the bound, so the reader must get past it),
-     and a truncated envelope. Each reject must fail at its own step with its own
-     message, and the exact-bound case with anything but the ratio message, so
-     deleting or loosening one branch fails this suite even where a later check would
-     also reject. Step 3's compressed_data cap is not covered: compressed_data is a
+     over the size cap, an original_size of exactly the size cap (inside it, so the
+     reader must get past step 4), an empty compressed_data, the ratio bound at 1000:1
+     + 1 B (rejected) and exactly 1000:1 (inside the bound, so the reader must get past
+     it), and a truncated envelope. Each reject must fail at its own step with its own
+     message. Exactly the size cap must reach the ratio bound, and the exact-1000:1 case
+     must fail with anything but the ratio message. So deleting or loosening one branch
+     fails this suite even where a later check would also reject. Step 3's
+     compressed_data cap is not covered: compressed_data is a
      strict slice of the envelope step 1 already bounded, so no input reaches it.
 
   6. The fixture's `reject_vectors`. The conforming reader rejects each at its named
@@ -52,10 +54,10 @@ Every class below is proven reachable by execution rather than argued from readi
      fail an altered reject vector by name and a dropped or added one as set drift, and
      generate must refill a missing group byte-identically without dropping a committed
      entry. A truncating original_size decode must accept only the u32-wrap vector,
-     and a half-joining one must reject it only on length after decompression. A reader that
-     decompresses first must miss the size-cap and ratio vectors' named steps. An
-     allocation probe must catch a reader that allocates and frees original_size
-     before its checks, which no error assertion can.
+     and a half-joining one must reject it only on length after decompression. A
+     reader that decompresses first must miss the size-cap and ratio vectors' named
+     steps. An allocation probe must catch a reader that allocates and frees
+     original_size before its checks, which no error assertion can.
 
 A guard with no mutation test is one refactor away from being deleted by someone
 who cannot see what it holds up.
@@ -97,9 +99,9 @@ ORPHANED_BASE = "width_boundary_bin16"
 
 
 class _GuardNotFoundError(RuntimeError):
-    """A mutant's guard does not match exactly one `if` in read_envelope (message per TRY003)."""
+    """A mutant's fragment does not match exactly one statement of its kind in read_envelope (message per TRY003)."""
 
-    def __init__(self, fragment: str, hits: int, kind: str = "if") -> None:
+    def __init__(self, fragment: str, hits: int, kind: str) -> None:
         super().__init__(f"read_envelope fragment {fragment!r} matches {hits} `{kind}` statements, not 1")
 
 
@@ -298,7 +300,7 @@ def _find(body: list[ast.stmt], kind: type, fragment: str) -> ast.stmt:
     """The one `kind` statement of read_envelope's body whose source contains `fragment`."""
     hits = [n for n in body if isinstance(n, kind) and fragment in ast.unparse(n.test if kind is ast.If else n)]
     if len(hits) != 1:
-        raise _GuardNotFoundError(fragment, len(hits), "if" if kind is ast.If else "try")
+        raise _GuardNotFoundError(fragment, len(hits), kind.__name__.lower())
     return hits[0]
 
 
@@ -529,8 +531,8 @@ def check_reader_rejects() -> list[str]:
         "compression ratio exceeds",
         absent=True,
     )
-    # Exactly the cap is inside it, so the reader must get past step 4. The ratio bound
-    # then rejects it, so this allocates nothing.
+    # Exactly the cap is inside the cap, so the reader must get past step 4. The ratio
+    # bound then rejects the envelope, so this allocates nothing.
     expect(
         "original_size at exactly the size cap passes step 4",
         mod.encode_envelope(data, checksum, mod.MAX_UNCOMPRESSED_SIZE, fmt, encoding="bin"),
