@@ -32,16 +32,19 @@ This document specifies two layers:
 
 1. **The ByteStorage envelope** — the LZ4 + xxHash3-64 container implemented by
    `cachekit-core` and exposed to SDKs. This layer is byte-canonical and pinned by
-   [`test-vectors/wire-format.json`](../test-vectors/wire-format.json), which is
-   enforced in CI in two independent places (LAB-423): this repo's `verify.yml`
-   runs [`tools/wire-format-reference.py verify`](../tools/wire-format-reference.py)
+   [`test-vectors/wire-format.json`](../test-vectors/wire-format.json). Its hex-pinned
+   `vectors` are enforced in CI in two independent places (LAB-423): this repo's
+   `verify.yml` runs [`tools/wire-format-reference.py verify`](../tools/wire-format-reference.py)
    against the stdlib-only reference implementation, and the canonical
    implementation [`cachekit-core`](https://github.com/cachekit-io/cachekit-core)
    vendors the file sha256-pinned in `tests/wire_format_vectors.rs`, asserting
-   decode byte-identity for every vector and re-encode byte-identity for the
+   decode byte-identity for every entry in `vectors` and re-encode byte-identity for the
    canonical `*_bin` vectors only — legacy array-of-integers vectors are
    decode-only, retained as legacy-read proof. That re-encode assertion covers
-   only the vectors the pinned file contains. Byte-canonicity scopes to the
+   only the vectors the pinned file contains. The `constructed_vectors` group is
+   verified here: the reference tool rebuilds each entry from its segment lists and
+   reads it, and only its optional-dependency (`xxhash`) leg checks the entry's
+   checksum; the stdlib leg takes it on trust. Byte-canonicity scopes to the
    envelope's MessagePack encoding and to the **canonical writer's** output:
    the LZ4 bytes inside `compressed_data` are not reproducible across
    conforming compressors — see
@@ -482,14 +485,18 @@ floating-point ratio is the precision bypass the integer rule exists to prevent.
 envelope is 4.3 MB, so the file describes it and its input as lists of repeated byte
 segments rather than hex (`construction_note`). Its `compressed_data` is exactly
 4,294,968 B, the first size whose product overflows unsigned 32 bits (a signed 32-bit
-product overflows from 2,147,484 B). Its `original_size` (4,278,189 B) is inside the
-1000:1 bound but above the 704 B that a 32-bit product yields, signed or unsigned. A
+product overflows from 2,147,484 B). Its `original_size` (8,523,079 B) is inside the
+1000:1 bound but above the 704 B that a 32-bit product yields, signed or unsigned. It
+is also larger than `compressed_data`, so a reader that skips the product when
+`original_size` is at most the compressed size still has to compute it. A
 reader that multiplies in 32 bits rejects it, and so does one that rejects on 32-bit
 overflow. A conforming reader returns the constructed input, and the envelope's
 `checksum` is that input's true xxHash3-64. Every other envelope in the file is 478 B
 or smaller.
 
-The vector shows the product's width and nothing else. It is an accept vector,
+The vector is built to show the product's width. It is also the file's only bin32
+`compressed_data` and its only multi-megabyte decode, so a failure on it alone does
+not prove a 32-bit product: check the rejection reason. It is an accept vector,
 because a 32-bit product only ever tightens the bound, so no reject vector can catch
 one; it does not show that a reader enforces the size caps, the zero-length check or
 the ratio bound. A pointer-width product is exact on a 64-bit host, so a pass there

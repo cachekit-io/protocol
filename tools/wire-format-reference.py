@@ -5,7 +5,8 @@ Stdlib-only (optional extras, see below). Scope: the **MessagePack encoding**
 of the StorageEnvelope positional array — both the legacy element[0] encoding
 (array of integers, pre-1.1 writers) and the canonical one (msgpack `bin`,
 protocol 1.1+ writers) — and a reader, `read_envelope`, that runs the spec's
-Retrieve Flow with every Security-Limits bound. The LZ4 decoder and the
+Retrieve Flow with every size and ratio bound (the step-2 decode-bounds pre-scan is
+decode-bounds.json's subject). The LZ4 decoder and the
 segment-list `construct` are imported from tools/interop-v2-reference.py, not
 copied. xxHash3-64 is verified only when the optional `xxhash` package is
 importable: a stdlib xxh3 would be a second hand-written hash needing its own
@@ -37,8 +38,10 @@ What `verify` proves, for every vector pair in ../test-vectors/wire-format.json:
   7. Each `constructed_vectors` entry equals what its builder derives, byte for
      byte, and the reader decodes the constructed envelope to the constructed
      input. `envelope_ratio_product_wraps_32_bits` has a compressed_size of
-     ceil(2**32 / 1000) B, so a reader computing the ratio product in 32 bits
-     rejects it (mutation-tested by tools/test_wire_format_reference.py). Its
+     ceil(2**32 / 1000) B and an original larger than its compressed data, so a
+     reader computing the ratio product in 32 bits rejects it, even one that skips
+     the product when original_size <= compressed_size (mutation-tested by
+     tools/test_wire_format_reference.py). Its
      checksum is the one field stdlib cannot derive: only the `xxhash` leg proves
      it is the true xxHash3-64 of the constructed input.
 
@@ -338,13 +341,15 @@ class EnvelopeReject(ValueError):
     """An envelope the Retrieve Flow must reject."""
 
 
-def ratio_bound(compressed_size: int) -> int:
+def within_ratio(original_size: int, compressed_size: int) -> bool:
     """Retrieve Flow step 5's bound. Python ints never wrap, so this conforms by construction.
 
-    A function rather than an inline product so tools/test_wire_format_reference.py
-    can substitute a 32-bit product and show the published vectors catch it.
+    A function rather than an inline comparison so tools/test_wire_format_reference.py
+    can substitute 32-bit readers and show the published vectors catch them. It takes
+    both sizes because one such reader skips the product when
+    original_size <= compressed_size.
     """
-    return MAX_RATIO * compressed_size
+    return original_size <= MAX_RATIO * compressed_size
 
 
 def read_envelope(env: bytes, xxh3_64: Callable[[bytes], bytes] | None = None) -> bytes:
@@ -359,13 +364,15 @@ def read_envelope(env: bytes, xxh3_64: Callable[[bytes], bytes] | None = None) -
     if len(env) > MAX_COMPRESSED_SIZE:
         raise EnvelopeReject("envelope exceeds max compressed size")
     data, checksum, original_size, _fmt, _encoding = decode_envelope(env)
+    # Step 3. Unreachable here, since compressed_data is a strict slice of the envelope
+    # step 1 already bounded; kept so the reader reads as the spec's step list.
     if len(data) > MAX_COMPRESSED_SIZE:
         raise EnvelopeReject("compressed_data exceeds max compressed size")
     if original_size > MAX_UNCOMPRESSED_SIZE:
         raise EnvelopeReject("original_size exceeds max uncompressed size")
     if len(data) == 0:
         raise EnvelopeReject("zero-length compressed_data")
-    if original_size > ratio_bound(len(data)):
+    if not within_ratio(original_size, len(data)):
         raise EnvelopeReject("compression ratio exceeds 1000:1 — decompression bomb")
     # Also step 9: the decoder rejects any output length other than original_size.
     out = iv2.lz4_block_decompress(data, original_size)
@@ -380,21 +387,23 @@ def read_envelope(env: bytes, xxh3_64: Callable[[bytes], bytes] | None = None) -
 def build_wrap_threshold_vector(checksum_of: Callable[[bytes], bytes]) -> dict:
     """Canonical bin envelope whose compressed_data is exactly RATIO_WRAP_THRESHOLD bytes.
 
-    A real LZ4 block that long cannot decompress to a few hundred bytes, so it is a
-    literals-only block, and original_size is ~0.996 x compressed_size: far inside the
-    1000:1 bound, far above the 704 B a 32-bit product yields. The input is a
-    canonical msgpack bin32 of zeros, the same bytes as interop-v2.json's
-    lz4_ratio_product_wraps_32_bits value, so an SDK that deserialises the
-    "msgpack" payload after unpacking still succeeds. `checksum_of` maps the input to
-    its 8-byte checksum: xxHash3-64 in `generate` and on the xxhash leg, the pinned
-    value on the stdlib leg (which therefore cannot see a wrong checksum).
+    The block is one sequence (a literal run, then an offset-1 match of zeros) and the
+    5-literal final run LZ4's end-of-block rules require, so original_size is ~1.98 x
+    compressed_size: far inside the 1000:1 bound, far above the 704 B a 32-bit product
+    yields, and larger than compressed_size, so a reader that skips the product when
+    original_size <= compressed_size still has to compute it. The input is a canonical
+    msgpack bin32 of zeros, so an SDK that deserialises the "msgpack" payload after
+    unpacking still succeeds. `checksum_of` maps the input to its 8-byte checksum:
+    xxHash3-64 in `generate` and on the xxhash leg, the pinned value on the stdlib leg.
     """
     compressed_size = RATIO_WRAP_THRESHOLD
-    # Literals-only block: token 0xF0, the literal length as 255-runs plus a final
-    # byte < 255, then the literals: 1 + (ext + 1) + (15 + 255*ext + last).
-    ext, last = divmod(compressed_size - 17, 256)
-    assert last < 255, "literals-only block cannot hit this compressed_size exactly"
-    original_size = 15 + 255 * ext + last
+    # Token 0xFF, literal-length extension (ext 255-runs + last), the literals, offset
+    # 0x0001, match-length extension (the same ext + last), then token 0x50 and 5 zero
+    # literals: 26 + 257*ext + last bytes. The match is literal-length + 4 bytes long.
+    ext, last = divmod(compressed_size - 26, 257)
+    assert last < 255, "this block shape cannot hit this compressed_size exactly"
+    literal_len = 15 + 255 * ext + last
+    original_size = 2 * literal_len + 4 + 5
     input_header = b"\xc6" + (original_size - 5).to_bytes(4, "big")
     input_construction = [
         {"hex": input_header.hex(), "count": 1},
@@ -406,11 +415,13 @@ def build_wrap_threshold_vector(checksum_of: Callable[[bytes], bytes]) -> dict:
     # Everything after compressed_data: checksum array, original_size, format.
     tail = encode_envelope(b"", checksum, original_size, "msgpack", encoding="bin")[3:]
     envelope_construction = [
-        {"hex": (b"\x94\xc6" + compressed_size.to_bytes(4, "big") + b"\xf0").hex(), "count": 1},
+        {"hex": (b"\x94\xc6" + compressed_size.to_bytes(4, "big") + b"\xff").hex(), "count": 1},
         {"hex": "ff", "count": ext},
         {"hex": (bytes([last]) + input_header).hex(), "count": 1},
-        input_construction[1],
-        {"hex": tail.hex(), "count": 1},
+        {"hex": "00", "count": literal_len - len(input_header)},
+        {"hex": "0100", "count": 1},
+        {"hex": "ff", "count": ext},
+        {"hex": (bytes([last, 0x50]) + bytes(5) + tail).hex(), "count": 1},
     ]
     env = iv2.construct(envelope_construction)
     block = env[6 : 6 + compressed_size]
@@ -423,10 +434,11 @@ def build_wrap_threshold_vector(checksum_of: Callable[[bytes], bytes]) -> dict:
         "name": WRAP_VECTOR,
         "description": (
             f"canonical bin envelope whose compressed_data is {compressed_size} B = ceil(2^32/1000), the "
-            "first size at which 1000 * compressed_size overflows unsigned 32 bits. original_size is well "
-            "inside the 1000:1 bound, so readers MUST accept it and return the constructed input. A reader "
-            f"that computes the product in 32-bit width gets {wrapped} instead (signed or unsigned wrap "
-            "alike) and rejects it as a ratio bomb; so does one that rejects on 32-bit overflow. A "
+            "first size at which 1000 * compressed_size overflows unsigned 32 bits. original_size is larger "
+            "than compressed_size and well inside the 1000:1 bound, so readers MUST accept it and return the "
+            f"constructed input. A reader that computes the product in 32-bit width gets {wrapped} instead "
+            "(signed or unsigned wrap alike) and rejects it as a ratio bomb; so does one that rejects on "
+            "32-bit overflow, and one that skips the product when original_size <= compressed_size. A "
             "pointer-width product passes it on a 64-bit host, so a pass there proves nothing about a "
             "32-bit target. spec/wire-format.md#decompression-bomb-detection says which implementations "
             "must run it and on which targets."

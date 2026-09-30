@@ -4,43 +4,51 @@
   "constructed_vectors": [
     {
       "name": "envelope_ratio_product_wraps_32_bits",
-      "description": "canonical bin envelope whose compressed_data is 4294968 B = ceil(2^32/1000), the first size at which 1000 * compressed_size overflows unsigned 32 bits. original_size is well inside the 1000:1 bound, so readers MUST accept it and return the constructed input. A reader that computes the product in 32-bit width gets 704 instead (signed or unsigned wrap alike) and rejects it as a ratio bomb; so does one that rejects on 32-bit overflow. A pointer-width product passes it on a 64-bit host, so a pass there proves nothing about a 32-bit target. spec/wire-format.md#decompression-bomb-detection says which implementations must run it and on which targets.",
+      "description": "canonical bin envelope whose compressed_data is 4294968 B = ceil(2^32/1000), the first size at which 1000 * compressed_size overflows unsigned 32 bits. original_size is larger than compressed_size and well inside the 1000:1 bound, so readers MUST accept it and return the constructed input. A reader that computes the product in 32-bit width gets 704 instead (signed or unsigned wrap alike) and rejects it as a ratio bomb; so does one that rejects on 32-bit overflow, and one that skips the product when original_size <= compressed_size. A pointer-width product passes it on a 64-bit host, so a pass there proves nothing about a 32-bit target. spec/wire-format.md#decompression-bomb-detection says which implementations must run it and on which targets.",
       "format": "msgpack",
       "envelope_encoding": "bin",
-      "original_size": 4278189,
+      "original_size": 8523079,
       "compressed_size": 4294968,
-      "envelope_size": 4295000,
-      "checksum_hex": "79efc35a35d8a31c",
+      "envelope_size": 4295001,
+      "checksum_hex": "6d8571f174e2b890",
       "envelope_construction": [
         {
-          "hex": "94c600418938f0",
+          "hex": "94c600418938ff",
           "count": 1
         },
         {
           "hex": "ff",
-          "count": 16777
+          "count": 16711
         },
         {
-          "hex": "27c6004147a8",
+          "hex": "d7c600820d42",
           "count": 1
         },
         {
           "hex": "00",
-          "count": 4278184
+          "count": 4261530
         },
         {
-          "hex": "9879ccefccc35a35ccd8cca31cce004147ada76d73677061636b",
+          "hex": "0100",
+          "count": 1
+        },
+        {
+          "hex": "ff",
+          "count": 16711
+        },
+        {
+          "hex": "d7500000000000986dcc8571ccf174cce2ccb8cc90ce00820d47a76d73677061636b",
           "count": 1
         }
       ],
       "input_construction": [
         {
-          "hex": "c6004147a8",
+          "hex": "c600820d42",
           "count": 1
         },
         {
           "hex": "00",
-          "count": 4278184
+          "count": 8523074
         }
       ]
     }
