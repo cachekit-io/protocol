@@ -371,10 +371,18 @@ Across all presets:
    Other misconfiguration **SHOULD** surface at construction rather than on first use.
 4. In a language without optional arguments, the environment fallback of
    [Master Key Input](#master-key-input) rule 2 or [`io` Credentials](#io-credentials)
-   rule 1 **MAY** be a companion constructor that takes no key and reads only that one
-   variable (Rust: `CacheKit::secure_from_env`, `CacheKit::io_from_env`). It builds the same
-   preset and is not a further name under [Encrypted Preset Name](#encrypted-preset-name)
-   rule 4.
+   rule 1 **MAY** be a companion constructor that takes no key argument (Rust:
+   `CacheKit::secure_from_env`, `CacheKit::io_from_env`). It builds the same preset and is
+   not a further name under [Encrypted Preset Name](#encrypted-preset-name) rule 4. It
+   **MUST** read that preset's environment configuration:
+   - for `secure`, `CACHEKIT_MASTER_KEY` and `CACHEKIT_PREVIOUS_MASTER_KEYS`
+     ([encryption.md → Key Rotation](encryption.md#key-rotation-keyring)); if it does not
+     support previous keys, it **MUST** fail at construction when that variable is set,
+     never ignore it (rule 2);
+   - for `io`, `CACHEKIT_API_KEY` only.
+
+   It **MUST NOT** read a variable that changes encryption activation
+   ([Encryption Activation](#encryption-activation)).
 
 ---
 
@@ -401,7 +409,7 @@ encryption entirely; it is not a member of this family.
 > ([rule 3](#encrypted-preset-name)). Only `::io` (and, from 0.8.0, `::io_from_env`)
 > compiles on a default `cargo add cachekit-rs`; the Redis presets need
 > `features = ["redis"]`, and the encrypted preset needs `redis` + `encryption`
-> (`intents.rs:67,107,159,209`; `Cargo.toml:26`).
+> (`intents.rs:67,107,159,209`; `Cargo.toml:26` at `cachekit-rs@6587ce9`).
 
 ---
 
@@ -414,8 +422,6 @@ rows were re-checked against the PyPI 0.19.0 wheel on 2026-09-24 (unchanged); th
 ✅ with a version floor when a PyPI release carries the fix. Rust claims carrying the floor
 `cachekit-rs` 0.8.0+ were verified against the published 0.8.0 `.crate` on 2026-09-30 and
 carry no line cite, because this document's line refs are pinned to `cachekit-rs@6587ce9`.
-The `*_from_env` constructors they name are the environment fallback that
-[Explicit Configuration](#explicit-configuration) rule 4 allows.
 
 | Requirement | Python | Rust | TypeScript |
 | :--- | :--- | :--- | :--- |
@@ -426,6 +432,7 @@ The `*_from_env` constructors they name are the environment fallback that
 | Reliability stack on for `production` / `secure` / `io` | ✅ | ✅ `ReliabilityConfig::default()` | ✅ `PRODUCTION_RELIABILITY` |
 | `secure` takes a hex key and falls back to `CACHEKIT_MASTER_KEY` | ✅ ≥ 32 B (`validation.py:95`) | ✅ hex `CacheKit::secure(url, master_key_hex)`, ≥ 32 B, and `CacheKit::secure_from_env(url)` reads `CACHEKIT_MASTER_KEY` — `cachekit-rs` 0.8.0+ (0.7.0 and earlier: `encrypted(url, &[u8])`, raw bytes, no env fallback) · ❌ [Master Key Input](#master-key-input) rule 4: the raw-bytes entry points `encryption_from_bytes`, `encryption_from_bytes_with_previous`, `EncryptionLayer::new` and `EncryptionLayer::with_previous_keys` check `len() >= 32` and so accept more than exactly 32 B (`encryption.rs:101`) — LAB-4663 | ✅ exactly 32 B (`constants.ts:138`) |
 | Missing master key fails at construction | ✅ `intent.py:212` | ✅ required argument on `::secure`; `::secure_from_env` with `CACHEKIT_MASTER_KEY` unset or empty → `Err` at construction, before any Redis I/O (`cachekit-rs` 0.8.0+); short or non-hex key → `Err` | ✅ `intents-core.ts:257` |
+| `secure` companion env constructor honours `CACHEKIT_PREVIOUS_MASTER_KEYS` ([Explicit Configuration](#explicit-configuration) rule 4) | N/A — no companion constructor; the preset's optional key argument falls back itself | ❌ `::secure_from_env` reads `CACHEKIT_MASTER_KEY` only and ignores `CACHEKIT_PREVIOUS_MASTER_KEYS` without an error (`cachekit-rs` 0.8.0) — LAB-6591 | N/A — no companion constructor; the preset's optional `masterKey` falls back itself |
 | Default `tenant_id` is `"default"`, identical for HKDF and AAD | ✅ `cache_handler.py` `DEFAULT_TENANT_ID` (LAB-4666); explicit `deployment_uuid` / `CACHEKIT_DEPLOYMENT_UUID` override only, no machine-local fallback | ❌ `"default"` via `::secure` (`::encrypted` through 0.7.0), deployment namespace via `from_env()` — inconsistent by constructor — LAB-4667 | ❌ HKDF `'default'` (`manager-core.ts:206`) but AAD `''` (`manager-core.ts:375`) — mismatched within one SDK — LAB-4668 |
 | `CACHEKIT_MASTER_KEY` does not activate encryption on `minimal` / `production` / `io` | ❌ tri-state auto-detect on every preset (`cache_handler.py:580-585`) — LAB-4642 | ❌ `from_env()` activates from key presence alone (`config.rs:112`) — no constructor is exempt under the revised rule 2 — LAB-4669 | ✅ `secure()` only (`intents-core.ts:255`) |
 | Explicit encryption option encrypts every operation (activation rule 1) | ❌ `encryption=True` wraps the serializer on the backend path (`cache_handler.py:574`, `:636`), but the `backend=None` L1-only path bypasses the wrapper entirely and stores plaintext in L1 (`decorators/wrapper.py:659`) — so the option does not encrypt *every* operation — LAB-4665 | ❌ the builder's `.encryption()` layer is consulted only by the `SecureCache` handle (`client.rs:734`); plain `set`/`get` never read it (`client.rs:537`, `:358`), and with the `encryption` feature off the builder methods return `Ok(self)` (`client.rs:1077`) — LAB-4676 | ✅ `if (this.encryption)` on both paths (`cache-core.ts:558`, `:823`) |
