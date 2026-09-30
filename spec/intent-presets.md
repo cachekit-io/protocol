@@ -129,10 +129,9 @@ its Rust twin by an unbounded margin.
 **Rationale.** `minimal` means minimal *features*, not minimal *layers*. L1 is what turns
 a hit into tens of nanoseconds instead of a network round trip, and the staleness it
 introduces on `minimal` — no invalidation — is already bounded by the 300 s TTL the same
-preset accepts. Rust 0.7.0's `.no_l1()` (`intents.rs:77`) makes `minimal` the only preset whose
-every read crosses the network, contradicting its own "speed-first" rustdoc (fix in
-[cachekit-rs#85](https://github.com/cachekit-io/cachekit-rs/pull/85), unreleased as of
-2026-09-23). On
+preset accepts. Rust 0.7.0's `.no_l1()` (`intents.rs:77`) made `minimal` the only preset whose
+every read crosses the network, contradicting its own "speed-first" rustdoc; `cachekit-rs`
+0.8.0 fixed it ([cachekit-rs#85](https://github.com/cachekit-io/cachekit-rs/pull/85)). On
 `secure`, ciphertext in L1 costs nothing in the zero-knowledge model (decryption happens
 only at read time, on the client) and removes the incentive to trade security for speed.
 
@@ -181,10 +180,11 @@ recorded as such in the matrix.
    feature matrix and cross-SDK documentation refer to it as `secure`.
 2. Python `@cache.secure` and TypeScript `createCache.secure()` are the canonical
    spelling.
-3. Rust's spelling is `CacheKit::secure(url, key)`. `cachekit-rs` 0.7.0 spells it
-   `CacheKit::encrypted` (`intents.rs:160`) because the `SecureCache` accessor held the
-   name `secure` (`client.rs:664`); that is a non-conformance tracked in
-   [SDK Conformance](#sdk-conformance) (LAB-4651), not a second spelling.
+3. Rust spells it `CacheKit::secure(url, key)` from `cachekit-rs` 0.8.0. `cachekit-rs`
+   0.7.0 and earlier spell it `CacheKit::encrypted` (`intents.rs:160`) because the
+   `SecureCache` accessor held the name `secure` (`client.rs:664`); 0.8.0 renamed the
+   accessor `secure_cache()` and removed `::encrypted`, so it is a superseded spelling,
+   not a second one.
 4. No SDK **MAY** introduce a further name or alias for this preset. In particular Python
    and TypeScript **MUST NOT** add `encrypted` aliases "for parity" — that creates a third
    spelling, not a second.
@@ -232,8 +232,8 @@ string pass the ≥ 32-byte check and derive a key no other SDK derives. Nothing
 the entries are simply unreadable from Python and TypeScript, and encrypted
 [interop-mode](interop-mode.md#encryption-in-interop-mode) values silently stop
 interoperating. Rust already hex-decodes in `CacheKitBuilder::encryption` and
-`CacheKit::from_env()` (`client.rs:1049`, `config.rs:121`); the preset is the only entry
-point that does not.
+`CacheKit::from_env()` (`client.rs:1049`, `config.rs:121`); through 0.7.0 the preset was the
+only entry point that did not, and from `cachekit-rs` 0.8.0 it takes hex too.
 
 > [!NOTE]
 > The Master Key table in encryption.md previously listed a **16-byte** minimum. All
@@ -391,11 +391,11 @@ encryption entirely; it is not a member of this family.
 | `secure` | `@cache.secure(master_key=…)` | `CacheKit::secure(url, key)` — `redis` + `encryption` features¹ | `createCache.secure({ masterKey, url \| backend })` |
 | `io` | `@cache.io` | `CacheKit::io(api_key)` — default features | `createCache.io({ apiKey })` |
 
-> ¹ `cachekit-rs` 0.7.0 spells this `CacheKit::encrypted(url, key)` — see
-> [SDK Conformance](#sdk-conformance) (LAB-4651). Only `::io` compiles on a default
-> `cargo add cachekit-rs`; the Redis presets need `features = ["redis"]`, and the
-> encrypted preset needs `redis` + `encryption` (`intents.rs:67,107,159,209`;
-> `Cargo.toml:26`).
+> ¹ From `cachekit-rs` 0.8.0; 0.7.0 and earlier spell this `CacheKit::encrypted(url, key)`
+> ([rule 3](#encrypted-preset-name)). Only `::io` (and, from 0.8.0, `::io_from_env`)
+> compiles on a default `cargo add cachekit-rs`; the Redis presets need
+> `features = ["redis"]`, and the encrypted preset needs `redis` + `encryption`
+> (`intents.rs:67,107,159,209`; `Cargo.toml:26`).
 
 ---
 
@@ -405,22 +405,24 @@ Code-verified 2026-09-22 against `cachekit-py@2f7c979` (0.18.0), `cachekit-rs@65
 (0.7.0) and `cachekit-ts@379847c` (0.1.5) on `main`. ❌ cells link the alignment ticket;
 implementation is out of scope for the specification itself. The two default-TTL Python
 rows were re-checked against the PyPI 0.19.0 wheel on 2026-09-24 (unchanged); they flip to
-✅ with a version floor when a PyPI release carries the fix.
+✅ with a version floor when a PyPI release carries the fix. Rust cells carrying the floor
+`cachekit-rs` 0.8.0+ were verified against the published 0.8.0 `.crate` on 2026-09-30 and
+carry no line cite, because this document's line refs are pinned to `cachekit-rs@6587ce9`.
 
 | Requirement | Python | Rust | TypeScript |
 | :--- | :--- | :--- | :--- |
 | Finite default TTL 300 / 600 / 600 / 3 600 s | ❌ none — entries never expire (`wrapper.py:499`) — LAB-4641; fix in [cachekit-py#318](https://github.com/cachekit-io/cachekit-py/pull/318) | ✅ `intents.rs:76,117,167,217` | ✅ `intents-core.ts:220,242,265,297` |
 | No process-wide default-TTL override (rule 3) | ❌ `CACHEKIT_DEFAULT_TTL` is offered — `settings.py:226`, env-settable and documented — even though nothing on the decorator path reads it; rule 3 forbids offering one — LAB-4641; fix in [cachekit-py#318](https://github.com/cachekit-io/cachekit-py/pull/318) | ❌ `from_env()` reads `CACHEKIT_DEFAULT_TTL` (`config.rs:165`), an override this specification no longer defines — LAB-4664 | ✅ |
-| `minimal`: L1 on, SWR / invalidation off | ✅ `decorator.py:335-350` | ❌ `.no_l1()` (`intents.rs:77`) on 0.7.0 — LAB-4644, fixed in [cachekit-rs#85](https://github.com/cachekit-io/cachekit-rs/pull/85) (unreleased as of 2026-09-23; flips ✅ when a release carries it) | ✅ `intents-core.ts:221-230` |
+| `minimal`: L1 on, SWR / invalidation off | ✅ `decorator.py:335-350` | ✅ `CacheKit::minimal` — L1 on, SWR off — `cachekit-rs` 0.8.0+ (`.no_l1()` on 0.7.0 and earlier) | ✅ `intents-core.ts:221-230` |
 | `secure`: L1 on, ciphertext only | ❌ `@cache.secure(backend=None)` sets `_explicit_l1_only` (`decorators/intent.py:136`) → `ObjectCache`, which stores raw Python objects with no serializer in the path — encryption in cachekit-py is a serializer wrapper, so plaintext lands in L1 (`decorators/wrapper.py:659`) — LAB-4665 | ✅ `client.rs:656` | ✅ `cache-core.ts:654,831` |
 | Reliability stack on for `production` / `secure` / `io` | ✅ | ✅ `ReliabilityConfig::default()` | ✅ `PRODUCTION_RELIABILITY` |
-| `secure` takes a hex key and falls back to `CACHEKIT_MASTER_KEY` | ✅ ≥ 32 B (`validation.py:95`) | ❌ `encrypted(url, &[u8])` — raw bytes only, no env fallback, `len() >= 32` accepts more than exactly 32 B (`intents.rs:160-163`; `encryption.rs:101`) — LAB-4645, LAB-4663 | ✅ exactly 32 B (`constants.ts:138`) |
-| Missing master key fails at construction | ✅ `intent.py:212` | ✅ required argument; short key → `Err` | ✅ `intents-core.ts:257` |
-| Default `tenant_id` is `"default"`, identical for HKDF and AAD | ✅ `cache_handler.py` `DEFAULT_TENANT_ID` (LAB-4666); explicit `deployment_uuid` / `CACHEKIT_DEPLOYMENT_UUID` override only, no machine-local fallback | ❌ `"default"` via `::encrypted`, deployment namespace via `from_env()` — inconsistent by constructor — LAB-4667 | ❌ HKDF `'default'` (`manager-core.ts:206`) but AAD `''` (`manager-core.ts:375`) — mismatched within one SDK — LAB-4668 |
+| `secure` takes a hex key and falls back to `CACHEKIT_MASTER_KEY` | ✅ ≥ 32 B (`validation.py:95`) | ✅ hex `CacheKit::secure(url, master_key_hex)`, ≥ 32 B, and `CacheKit::secure_from_env(url)` reads `CACHEKIT_MASTER_KEY` — `cachekit-rs` 0.8.0+ (0.7.0 and earlier: `encrypted(url, &[u8])`, raw bytes, no env fallback) · ❌ rule 4: the raw-bytes entry points `encryption_from_bytes`, `encryption_from_bytes_with_previous` and `EncryptionLayer::new` check `len() >= 32` and so accept more than exactly 32 B (`encryption.rs:101`) — LAB-4663 | ✅ exactly 32 B (`constants.ts:138`) |
+| Missing master key fails at construction | ✅ `intent.py:212` | ✅ required argument on `::secure`; `::secure_from_env` with `CACHEKIT_MASTER_KEY` unset or empty → `Err` at construction, before any Redis I/O (`cachekit-rs` 0.8.0+); short or non-hex key → `Err` | ✅ `intents-core.ts:257` |
+| Default `tenant_id` is `"default"`, identical for HKDF and AAD | ✅ `cache_handler.py` `DEFAULT_TENANT_ID` (LAB-4666); explicit `deployment_uuid` / `CACHEKIT_DEPLOYMENT_UUID` override only, no machine-local fallback | ❌ `"default"` via `::secure` (`::encrypted` through 0.7.0), deployment namespace via `from_env()` — inconsistent by constructor — LAB-4667 | ❌ HKDF `'default'` (`manager-core.ts:206`) but AAD `''` (`manager-core.ts:375`) — mismatched within one SDK — LAB-4668 |
 | `CACHEKIT_MASTER_KEY` does not activate encryption on `minimal` / `production` / `io` | ❌ tri-state auto-detect on every preset (`cache_handler.py:580-585`) — LAB-4642 | ❌ `from_env()` activates from key presence alone (`config.rs:112`) — no constructor is exempt under the revised rule 2 — LAB-4669 | ✅ `secure()` only (`intents-core.ts:255`) |
 | Explicit encryption option encrypts every operation (activation rule 1) | ❌ `encryption=True` wraps the serializer on the backend path (`cache_handler.py:574`, `:636`), but the `backend=None` L1-only path bypasses the wrapper entirely and stores plaintext in L1 (`decorators/wrapper.py:659`) — so the option does not encrypt *every* operation — LAB-4665 | ❌ the builder's `.encryption()` layer is consulted only by the `SecureCache` handle (`client.rs:734`); plain `set`/`get` never read it (`client.rs:537`, `:358`), and with the `encryption` feature off the builder methods return `Ok(self)` (`client.rs:1077`) — LAB-4676 | ✅ `if (this.encryption)` on both paths (`cache-core.ts:558`, `:823`) |
-| Encrypted preset is spelled `secure` | ✅ `@cache.secure` | ❌ `CacheKit::encrypted(url, key)` (`intents.rs:160`); the `SecureCache` accessor holds the name (`client.rs:664`) — LAB-4651 | ✅ `createCache.secure()` |
-| `io`: API key by argument **or** `CACHEKIT_API_KEY` | ❌ env only; `backend=` silently dropped (`decorator.py:577`, `intent.py:220`) — LAB-4643 | ❌ argument only (`intents.rs:210`) — LAB-4647 | ✅ `intents-core.ts:283-288` |
+| Encrypted preset is spelled `secure` | ✅ `@cache.secure` | ✅ `CacheKit::secure(url, key)` — `cachekit-rs` 0.8.0+ (`CacheKit::encrypted` through 0.7.0) | ✅ `createCache.secure()` |
+| `io`: API key by argument **or** `CACHEKIT_API_KEY` | ❌ env only; `backend=` silently dropped (`decorator.py:577`, `intent.py:220`) — LAB-4643 | ✅ `CacheKit::io(api_key)` or `CacheKit::io_from_env()` — `cachekit-rs` 0.8.0+ (argument only through 0.7.0) | ✅ `intents-core.ts:283-288` |
 
 TypeScript's `cache.secure.wrap()` fails closed on `main` since
 [cachekit-ts#123](https://github.com/cachekit-io/cachekit-ts/pull/123) (LAB-513,

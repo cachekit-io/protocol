@@ -343,7 +343,7 @@ by `tools/encryption-verify.py`.
 ## Key Rotation (Keyring)
 
 > [!NOTE]
-> **Status: implemented in Python, Rust, and TypeScript; released in Python (`cachekit` 0.18.0+) — Rust and TypeScript are on `main` and pending their next release** (published artifacts inspected 2026-09-22; decision record:
+> **Status: implemented in Python, Rust, and TypeScript; released in Python (`cachekit` 0.18.0+) and Rust (`cachekit-rs` 0.8.0+) — TypeScript is on `main` and pending its next release** (published artifacts inspected 2026-09-22, the Rust `.crate` 2026-09-30; decision record:
 > [decisions/key-rotation.md](../decisions/key-rotation.md), 2026-07-23; LAB-516).
 > The shared decrypt helper is `cachekit_core::encryption::keyring::Keyring`
 > ([cachekit-core#67](https://github.com/cachekit-io/cachekit-core/pull/67)); the SDK
