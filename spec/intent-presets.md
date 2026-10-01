@@ -270,9 +270,10 @@ only entry point that did not, and from `cachekit-rs` 0.8.0 it takes hex too.
    - the key fallback for an explicit encryption option that names no key;
    - **legacy-decrypt**: transparently decrypting ciphertext a still-encrypting peer
      already wrote, on a client whose current write path is not encrypting (see the
-     migration story below). This is a read-side obligation, not an activation path —
-     it does not put the client in an encrypting state and does not satisfy rule 1's
-     "explicit intent" for new writes.
+     migration story below, which also says why an interop cache has no such path).
+     This is a read-side obligation, not an activation path — it does not put the
+     client in an encrypting state and does not satisfy rule 1's "explicit intent" for
+     new writes.
 3. An explicit opt-out (`encryption=False` or equivalent) **MUST** be honoured even when
    a key is present.
 
@@ -310,7 +311,9 @@ variable is set, and the same auto-detect path is also how a config-drift deploy
 transparently decrypts stale ciphertext left behind after encryption is turned off
 (**legacy-decrypt**) — rule 2's constructor list above governs *activation*, not this
 read-side role, and removing auto-activation **MUST NOT** remove the ability to decrypt
-what a still-encrypting peer already wrote. For one transitional minor release Python:
+what a still-encrypting peer already wrote into an auto-mode cache. An interop cache
+never had that ability on a non-encrypting client (step 3's second branch). For one
+transitional minor release Python:
 
 1. **MUST** keep decrypting existing ciphertext on the legacy-decrypt path.
 2. **MUST** keep the current auto-*activation* of new writes, but **MUST** emit a
@@ -325,14 +328,26 @@ what a still-encrypting peer already wrote. For one transitional minor release P
    - `encryption=True` (or `@cache.secure(...)`) → construct encrypting, as today.
    - `encryption=False` → construct **not** encrypting new writes, and **MUST** still
      retain legacy-decrypt from `CACHEKIT_MASTER_KEY` if present — the read-side role
-     rule 2 names above, unaffected by this branch.
+     rule 2 names above, unaffected by this branch. That obligation holds for
+     auto-mode caches, whose [CK v3 frame](wire-format.md#python-ck-v3-frame) header
+     marks each encrypted entry. An [interop](interop-mode.md#interop-value-format)
+     cache has no legacy-decrypt: its entries carry no header, so a reader that is not
+     encrypting decodes stored ciphertext as one plain MessagePack document. Most such
+     entries fail to decode and are recomputed, but a rare small one decodes and is
+     served as a wrong value. So turning encryption off in an interop cache means
+     moving the operation to a new `namespace` in every SDK that binds it, at the same
+     time: old and new writers then use different keys, and no reader meets the other
+     side's entries. The procedure is cachekit-py's
+     [Turning Encryption Off in an Interop Cache](https://github.com/cachekit-io/cachekit-py/blob/main/docs/features/zero-knowledge-encryption.md#turning-encryption-off-in-an-interop-cache).
    - `CACHEKIT_MASTER_KEY` present with **neither** an explicit `encryption=` nor
      `@cache.secure(...)` → construction **MUST** fail, naming both explicit spellings.
      Presence alone is no longer read as intent to activate, and a variable the
      deployment set for encryption **MUST NOT** be silently interpreted as "don't
      encrypt" either — ambiguous intent is an error, not a default.
 
-   Every branch is decidable at construction; none strands the legacy-decrypt migration.
+   Every branch is decidable at construction; none strands the legacy-decrypt migration
+   of an auto-mode cache. An interop cache has no legacy-decrypt to strand, and its
+   `encryption=False` branch is safe only with the namespace move in the second branch.
    This is the one release where alternative *(B)* from
    [Design Decisions](#design-decisions) (presence on a non-encrypting preset is an
    error) applies, on the third branch only; it is rejected as a *permanent* rule but is
