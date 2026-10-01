@@ -13,7 +13,10 @@ Modes:
               independent minimal parser (no cachekit import) and checks the
               expected header/payload (the header must be UTF-8 RFC 8259
               JSON, so malformed JSON, non-UTF-8 bytes and NaN/Infinity
-              tokens FAIL, and must record the serializer
+              tokens FAIL; so does JSON this interpreter's json module
+              refuses, an integer past its digit limit or nesting past
+              its depth limit, as the Python SDK's reader cannot read it
+              either; and it must record the serializer
               name as a non-empty string in `s`) and the ByteStorage envelope down
               to the LZ4-decompressed inner msgpack (inner_msgpack_hex);
               checks every error vector is rejected. Runs in CI. It does not
@@ -150,6 +153,12 @@ def parse_frame(frame: bytes) -> tuple[dict, bytes]:
         raise FrameError(f"header is not UTF-8: {exc}") from exc
     except json.JSONDecodeError as exc:
         raise FrameError(f"header is not valid JSON: {exc}") from exc
+    except FrameError:
+        raise  # _reject_constant's own error; FrameError is a ValueError, so it must not be re-wrapped below
+    except ValueError as exc:  # an integer past sys.get_int_max_str_digits(); it has no class of its own
+        raise FrameError(f"header exceeds this interpreter's JSON limits: {exc}") from exc
+    except RecursionError as exc:  # its text names the interpreter's depth or stack size, so it is not echoed
+        raise FrameError("header exceeds this interpreter's JSON limits: nested too deeply") from exc
     return header, frame[header_end:]
 
 

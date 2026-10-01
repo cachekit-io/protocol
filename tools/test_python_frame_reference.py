@@ -282,6 +282,61 @@ for hdr, cause in (
         and "ok   bad_header (rejected)" in out.splitlines(),
     )
 
+# --- a NaN header raises _reject_constant's own FrameError, not a re-wrap of it ---
+raw = next(v for v in COMMITTED["frame_vectors"] if v["name"] == "raw_payload_frame")
+header, payload = pfr.parse_frame(bytes.fromhex(raw["frame_hex"]))
+hdr = json.dumps({**header, "v": float("nan")}).encode()
+try:
+    pfr.parse_frame(pfr.MAGIC + bytes([pfr.FRAME_VERSION]) + len(hdr).to_bytes(4, "big") + hdr + payload)
+except pfr.FrameError as exc:
+    nan_error: BaseException | None = exc
+else:
+    nan_error = None
+check(
+    "header 'v' NaN: parse_frame raises _reject_constant's FrameError unchanged",
+    nan_error is not None
+    and str(nan_error) == "header is not RFC 8259 JSON: non-standard token NaN"
+    and nan_error.__cause__ is None,
+)
+
+
+# --- JSON this interpreter's json module refuses FAILs as a parse error, not a traceback ---
+def deep_nesting_depth() -> int:
+    """A nesting depth that json.loads refuses in this interpreter; the limit varies by version and stack size."""
+    depth = 100_000
+    while depth <= 12_800_000:
+        try:
+            json.loads("[" * depth + "]" * depth)
+        except RecursionError:
+            return depth
+        depth *= 2
+    raise RuntimeError(f"json.loads parsed {depth // 2}-deep nesting; no RecursionError trigger found, test is broken")
+
+
+max_digits = sys.get_int_max_str_digits()
+if max_digits == 0:
+    raise RuntimeError("integer-digit limit is disabled in this interpreter; no ValueError trigger, test is broken")
+too_long = "1" * (max_digits + 1)
+depth = deep_nesting_depth()
+LIMITS = "header exceeds this interpreter's JSON limits"
+int_cause = f"{LIMITS}: {stdlib_error(lambda: json.loads(too_long))}"
+for label, hdr, cause in (
+    (f"{max_digits + 1}-digit integer", f'{{"v":{too_long}}}'.encode(), int_cause),
+    (f"{depth}-deep nesting", ("[" * depth + "]" * depth).encode(), f"{LIMITS}: nested too deeply"),
+):
+    doc = copy.deepcopy(COMMITTED)
+    raw = next(v for v in doc["frame_vectors"] if v["name"] == "raw_payload_frame")
+    _, payload = pfr.parse_frame(bytes.fromhex(raw["frame_hex"]))
+    raw["frame_hex"] = (pfr.MAGIC + bytes([pfr.FRAME_VERSION]) + len(hdr).to_bytes(4, "big") + hdr + payload).hex()
+    doc["error_vectors"].append({"name": "bad_header", "frame_hex": raw["frame_hex"]})
+    rc, out = run_verify(doc)
+    check(
+        f"header {label}: verify exits 1 on a parse error only",
+        rc == 1
+        and [line for line in out.splitlines() if line.startswith("FAIL")] == [f"FAIL raw_payload_frame: parse error: {cause}"]
+        and "ok   bad_header (rejected)" in out.splitlines(),
+    )
+
 # --- inner_msgpack_hex is checked against the decompressed bytes, not only twin against twin ---
 INNER_FAIL = "decompressed payload does not match payload_envelope.inner_msgpack_hex"
 doc, twin = mutated(env_mutation("inner_msgpack_hex", flip_last_nibble))
