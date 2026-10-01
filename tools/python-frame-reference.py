@@ -11,9 +11,12 @@ implementation.
 Modes:
     verify    (default) stdlib-only. Re-parses every frame vector with an
               independent minimal parser (no cachekit import) and checks the
-              expected header/payload, including the ByteStorage envelope down
+              expected header/payload (the header must record the serializer
+              name as a non-empty string in `s`) and the ByteStorage envelope down
               to the LZ4-decompressed inner msgpack (inner_msgpack_hex);
-              checks every error vector is rejected. Runs in CI.
+              checks every error vector is rejected. Runs in CI. It does not
+              decode the inner msgpack, so value_json is checked against the
+              decoded value only by tools/frame-crosscheck.mjs (Node).
     generate  Upserts the vector file by vector name (LAB-1203): every vector
               the installed wheel can reproduce is rebuilt, and rewritten only
               if its content actually changed; every other committed vector is
@@ -196,8 +199,11 @@ def _twin_divergence(twin: dict, by_name: dict[str, dict]) -> str | None:
         mismatches.append("value_json")
     if _frame_prefix_hex(twin) != _frame_prefix_hex(base):
         mismatches.append("frame prefix (magic/version/header bytes)")
+    # Type-strict for the same reason: 32.0 == 32 would hide a divergent original_size.
     mismatches += [
-        f"payload_envelope.{field}" for field in _TWIN_ENVELOPE_FIELDS if twin_env[field] != base_env[field]
+        f"payload_envelope.{field}"
+        for field in _TWIN_ENVELOPE_FIELDS
+        if type(twin_env[field]) is not type(base_env[field]) or twin_env[field] != base_env[field]
     ]
     if not mismatches:
         return None
@@ -225,8 +231,16 @@ def verify() -> int:
             print(f"FAIL {name}: parse error: {e}")
             failures += 1
             continue
-        if header != vec["expected_header"]:
+        # Compared as canonical JSON, not with !=: 0 == False and 1.0 == 1 in Python,
+        # so a loose compare would let expected_header vouch for header bytes it misstates.
+        if json.dumps(header, sort_keys=True) != json.dumps(vec["expected_header"], sort_keys=True):
             print(f"FAIL {name}: header mismatch\n  got      {header}\n  expected {vec['expected_header']}")
+            vec_failed += 1
+        # spec/cache-key-format.md: an entry that records no serializer name is a
+        # mismatch. Same rule as cachekit-py's reader: a non-empty str, nothing else.
+        ser = header.get("s") if isinstance(header, dict) else None
+        if type(ser) is not str or not ser:
+            print(f"FAIL {name}: frame header must record the serializer name as a non-empty string in 's', got {ser!r}")
             vec_failed += 1
         if "expected_payload_hex" in vec and payload.hex() != vec["expected_payload_hex"]:
             print(f"FAIL {name}: payload mismatch")
@@ -274,7 +288,9 @@ def verify() -> int:
                                 ("original_size", size),
                                 ("format", fmt),
                             )
-                            if env.get(fname) != got
+                            # Type-strict: 32.0 == 32 (and True == 1) in Python,
+                            # but a typed reader rejects a non-integer size.
+                            if type(env.get(fname)) is not type(got) or env.get(fname) != got
                         ]
                         if drifted:
                             print(f"FAIL {name}: payload_envelope field(s) disagree with the envelope bytes: {', '.join(drifted)}")
