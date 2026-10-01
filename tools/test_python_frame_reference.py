@@ -193,6 +193,35 @@ check(
     rc == 1 and len(bin_fails) == 1 and bin_fails[0].startswith(f"FAIL {BIN_NAME}: LZ4 decompress:"),
 )
 
+# --- a header that records no serializer name (s) FAILs; expected_header cannot vouch for it ---
+# Applied to both twins, rebuilding header bytes, HDR_LEN and expected_header, so only the s check can fire.
+_DROP = object()
+S_FAIL = "frame header must record the serializer name as a non-empty string in 's'"
+for bad_s in (_DROP, "", 1):
+    doc = copy.deepcopy(COMMITTED)
+    pair = [v for v in doc["frame_vectors"] if v["name"] in (LEGACY_NAME, BIN_NAME)]
+    for v in pair:
+        header, payload = pfr.parse_frame(bytes.fromhex(v["frame_hex"]))
+        if bad_s is _DROP:
+            del header["s"]
+        else:
+            header["s"] = bad_s
+        hdr = json.dumps(header).encode()
+        v["frame_hex"] = (pfr.MAGIC + bytes([pfr.FRAME_VERSION]) + len(hdr).to_bytes(4, "big") + hdr + payload).hex()
+        v["expected_header"] = header
+    label = "missing" if bad_s is _DROP else repr(bad_s)
+    try:
+        rc, out = run_verify(doc)
+    except Exception:  # noqa: BLE001 - any traceback is the failure under test
+        traceback.print_exc(file=sys.stdout)
+        rc, out = None, ""
+    got = None if bad_s is _DROP else bad_s
+    want = [f"FAIL {v['name']}: {S_FAIL}, got {got!r}" for v in pair]
+    check(
+        f"header s {label} on both twins: verify exits 1, FAILing both vectors on the s check only",
+        rc == 1 and [line for line in out.splitlines() if line.startswith("FAIL")] == want,
+    )
+
 # --- inner_msgpack_hex is checked against the decompressed bytes, not only twin against twin ---
 INNER_FAIL = "decompressed payload does not match payload_envelope.inner_msgpack_hex"
 doc, twin = mutated(env_mutation("inner_msgpack_hex", flip_last_nibble))
