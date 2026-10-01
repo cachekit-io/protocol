@@ -854,7 +854,7 @@ Verify:
 ```bash
 python3 tools/test_python_frame_reference.py      # mutation suite for the stdlib verify
 python3 tools/python-frame-reference.py           # stdlib-only verify (frame, envelope, LZ4 -> inner msgpack)
-node tools/frame-crosscheck.mjs                   # independent zero-dep JS reader (full round-trip)
+node tools/frame-crosscheck.mjs                   # independent zero-dep JS reader (full round-trip; the only leg that checks value_json against the decoded value)
 ```
 
 ---

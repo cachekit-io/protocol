@@ -135,8 +135,62 @@ for field, mutate in MUTATIONS.items():
 # --- value_json compares type-strictly: Python's True == 1 must not pass the twin claim ---
 doc, _ = mutated(lambda t: t["value_json"].__setitem__("active", 1))
 rc, out = run_verify(doc)
+twin_lines = [line for line in out.splitlines() if line.startswith(f"FAIL {BIN_NAME}") and TWIN_FAIL in line]
 check("value_json true -> 1 in the twin: verify exits 1", rc == 1)
-check("value_json true -> 1 in the twin: twin gate names value_json", f"FAIL {BIN_NAME}" in out and "value_json" in out)
+check("value_json true -> 1 in the twin: twin gate names value_json", len(twin_lines) == 1 and "value_json" in twin_lines[0])
+check(
+    "value_json true -> 1 in the twin: twin gate is the ONLY check that fires",
+    [line for line in out.splitlines() if line.startswith("FAIL")] == twin_lines,
+)
+
+# --- original_size compares type-strictly against the envelope bytes ---
+def reencode(vec: dict, *, data: bytes | None = None, size: int | None = None) -> None:
+    """Rebuild vec's envelope bytes with `data`/`size` swapped in, keeping frame_hex,
+    expected_payload_hex and payload_envelope consistent with them."""
+    penv = vec["payload_envelope"]
+    data = bytes.fromhex(penv["compressed_data_hex"]) if data is None else data
+    size = penv["original_size"] if size is None else size
+    payload = pfr._wire.encode_envelope(
+        data, bytes.fromhex(penv["checksum_hex"]), size, penv["format"], encoding=penv["envelope_encoding"]
+    )
+    vec["frame_hex"] = pfr._frame_prefix_hex(vec) + payload.hex()
+    vec["expected_payload_hex"] = payload.hex()
+    penv["compressed_data_hex"], penv["original_size"] = data.hex(), size
+
+
+# Set on BOTH twins, so the twin gate stays quiet and only the drift check can catch it.
+# Each bad value is value-equal to the size in the bytes (32.0 == 32, True == 1): that
+# equality is the trap. For True the pair is re-encoded at size 1 first.
+for bad_size in (32.0, True):
+    doc = copy.deepcopy(COMMITTED)
+    pair = [v for v in doc["frame_vectors"] if v["name"] in (LEGACY_NAME, BIN_NAME)]
+    for v in pair:
+        if v["payload_envelope"]["original_size"] != int(bad_size):
+            reencode(v, size=int(bad_size))
+        v["payload_envelope"]["original_size"] = bad_size
+    try:
+        rc, out = run_verify(doc)
+    except Exception:  # noqa: BLE001 - any traceback is the failure under test
+        traceback.print_exc(file=sys.stdout)
+        rc, out = None, ""
+    drift = "payload_envelope field(s) disagree with the envelope bytes: original_size"
+    # The encoding-coverage floor also fires once both twins fail; that is expected.
+    vector_fails = [line for line in out.splitlines() if line.startswith("FAIL") and "envelope-encoding coverage" not in line]
+    check(
+        f"original_size {bad_size!r} on both twins: verify exits 1, FAILing both vectors on the drift check only",
+        rc == 1 and vector_fails == [f"FAIL {v['name']}: {drift}" for v in pair],
+    )
+
+# --- a truncated LZ4 block, consistent everywhere else, reaches the decompress FAIL ---
+doc = copy.deepcopy(COMMITTED)
+twin = next(v for v in doc["frame_vectors"] if v["name"] == BIN_NAME)
+del twin["twin_of"]  # the twin claim is not under test; keep its gate out of the output
+reencode(twin, data=bytes.fromhex(twin["payload_envelope"]["compressed_data_hex"])[:-4])
+rc, out = run_verify(doc)
+check(
+    "truncated LZ4 block, consistent elsewhere: verify exits 1 with an LZ4 decompress FAIL",
+    rc == 1 and f"FAIL {BIN_NAME}: LZ4 decompress:" in out,
+)
 
 # --- inner_msgpack_hex is checked against the decompressed bytes, not only twin against twin ---
 INNER_FAIL = "decompressed payload does not match payload_envelope.inner_msgpack_hex"

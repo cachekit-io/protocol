@@ -13,7 +13,9 @@ Modes:
               independent minimal parser (no cachekit import) and checks the
               expected header/payload, including the ByteStorage envelope down
               to the LZ4-decompressed inner msgpack (inner_msgpack_hex);
-              checks every error vector is rejected. Runs in CI.
+              checks every error vector is rejected. Runs in CI. It does not
+              decode the inner msgpack, so value_json is checked against the
+              decoded value only by tools/frame-crosscheck.mjs (Node).
     generate  Upserts the vector file by vector name (LAB-1203): every vector
               the installed wheel can reproduce is rebuilt, and rewritten only
               if its content actually changed; every other committed vector is
@@ -274,7 +276,9 @@ def verify() -> int:
                                 ("original_size", size),
                                 ("format", fmt),
                             )
-                            if env.get(fname) != got
+                            # Type-strict: 32.0 == 32 (and True == 1) in Python,
+                            # but a typed reader rejects a non-integer size.
+                            if type(env.get(fname)) is not type(got) or env.get(fname) != got
                         ]
                         if drifted:
                             print(f"FAIL {name}: payload_envelope field(s) disagree with the envelope bytes: {', '.join(drifted)}")
