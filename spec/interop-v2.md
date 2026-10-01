@@ -388,11 +388,14 @@ Given stored bytes for an interop/v2-configured cache:
 before it decompresses that container's payload, and before it allocates or grows any
 output buffer for it, however that buffer is sized (for example from `original_size`,
 from the length of the payload, from a multiple of either, or from a constant). An
-output buffer is one that holds step 5's output: the decompressed bytes for `method 1`,
-or a copy of the payload for `method 0`. A reader that copies a `method 0` payload into a
-separate output buffer does so only after step 4. Neither the step 1 AES-GCM plaintext
-nor the step 3 `bin` decode, which the header-vs-remaining-input rule already bounds,
-is an output buffer.
+output buffer is any buffer allocated to hold step 5's output: the decompressed bytes
+for `method 1`, or a copy of the payload for `method 0`. Two earlier buffers are
+allowed before step 4, because each is sized by bytes already present in the input:
+the step 1 AES-GCM plaintext, and the buffer a copying MessagePack decoder fills for
+the payload `bin` at step 3, sized by its length header under the
+header-vs-remaining-input rule. A `method 0` reader MAY return that step 3 buffer as
+its output once step 4 passes; it MUST NOT allocate or grow any other buffer for the
+output before then.
 
 Step order is normative. In the encrypted path the AES-GCM tag is verified (step 1)
 before any container parsing or decompression — hostile bytes never reach the LZ4 decoder
