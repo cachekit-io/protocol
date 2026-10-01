@@ -17,6 +17,8 @@ fast path passes it), and checks the coverage guard in _self_check fires on all 
 Last, it checks the seam's own comparison directly, one byte either side of 1000:1. No
 real-bytes vector can do that (LZ4 expands at most about 255:1), so without it a reader
 with no ratio check, or a strict `<`, would pass every vector here.
+It also feeds the LZ4 block decoder two blocks that each break one LZ4 end-of-block rule,
+and checks both are rejected by name while a short literals-only block still decodes.
 Same doctrine as test_check_spec_duplication.py: a guard not shown to fail is no guard.
 Nothing here touches test-vectors/interop-v2.json.
 
@@ -84,6 +86,39 @@ SEAM_MUTANTS: dict[str, Callable[[int, int], bool]] = {
     "no ratio check": lambda _original, _n: True,
     "strict < at exactly 1000:1": lambda original, n: original < iv2.MAX_RATIO * n,
 }
+
+
+# LZ4 end-of-block rules. Each block is valid LZ4 except for the one rule it names, so a
+# decoder that skips that rule decodes it to `original` (liblz4 rejects both).
+# A: 14 literals, a 10-byte match at offset 10 ending at byte 24, 2 literals (26 bytes).
+EOB_A = bytes([0xE6]) + bytes(range(14)) + b"\x0a\x00" + bytes([0x20]) + b"\xfe\xff"
+EOB_A_ORIGINAL = bytes(range(14)) + bytes(range(4, 14)) + b"\xfe\xff"
+# B: 11 literals, a 4-byte match at offset 1 starting at byte 11, 7 literals (22 bytes).
+EOB_B = bytes([0xB0]) + b"A" * 11 + b"\x01\x00" + bytes([0x70]) + b"BCDEFGH"
+EOB_B_ORIGINAL = b"A" * 15 + b"BCDEFGH"
+EOB_CASES = [
+    ("block A (last 5 bytes must be literals)", EOB_A, EOB_A_ORIGINAL, "last 5 bytes"),
+    ("block B (last match starts >= 12 bytes before the end)", EOB_B, EOB_B_ORIGINAL, "within 12 bytes"),
+]
+
+
+def end_of_block_failures() -> list[str]:
+    """Both rule-breaking blocks are rejected by name; a short literals-only block still decodes."""
+    failures = []
+    for name, block, original, needle in EOB_CASES:
+        try:
+            iv2.lz4_block_decompress(block, len(original))
+            failures.append(f"{name}: decoded, but it breaks an LZ4 end-of-block rule")
+        except iv2.V2Error as e:
+            if needle not in str(e):
+                failures.append(f"{name}: raised, but message lacks {needle!r}: {e}")
+    short = b"twelve bytes"  # under 13 bytes: too short for any match, still valid as literals
+    try:
+        if iv2.lz4_block_decompress(iv2.lz4_block_compress(short), len(short)) != short:
+            failures.append("short literals-only block: decoded to the wrong bytes")
+    except iv2.V2Error as e:
+        failures.append(f"short literals-only block: rejected: {e}")
+    return failures
 
 
 def assert_hex_vectors_pass(built: dict) -> None:
@@ -187,6 +222,7 @@ def main() -> int:
     if failure := self_check_fails(literals_only, "no constructed vector fails every 32-bit ratio reader"):
         results.append(f"literals-only block at the threshold: {failure}")
 
+    results.extend(end_of_block_failures())
     results.extend(f"conforming reader at the 1000:1 edge: {f}" for f in ratio_edge_failures(built))
     for name, mutant in SEAM_MUTANTS.items():
         with patch.object(iv2, "within_ratio", mutant):
@@ -197,9 +233,11 @@ def main() -> int:
     if failures:
         sys.exit("\n".join(f"FAIL {f}" for f in failures))
     logging.info(
-        "interop-v2 mutation suite: %d 32-bit readers and %d seam mutants caught, coverage guard fires",
+        "interop-v2 mutation suite: %d 32-bit readers and %d seam mutants caught, coverage guard fires, "
+        "%d LZ4 end-of-block breaks rejected",
         len(MUTANTS),
         len(SEAM_MUTANTS),
+        len(EOB_CASES),
     )
     return 0
 

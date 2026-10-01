@@ -106,7 +106,8 @@ def _require(cond: object, msg: str) -> None:
 # LZ4 (verified against lz4.block when importable) but deliberately NOT
 # canonical — the spec pins read-side conformance only; compressed bytes are
 # writer-dependent. The decompressor is strict: invalid offsets, truncation,
-# and any output-size disagreement with original_size are hard errors.
+# any output-size disagreement with original_size, and any match that breaks
+# the two end-of-block rules below are hard errors, as they are in liblz4.
 # ---------------------------------------------------------------------------
 
 # LZ4 end-of-block restrictions: the last 5 bytes are always literals, and the
@@ -181,7 +182,11 @@ def lz4_block_compress(data: bytes) -> bytes:
 
 
 def lz4_block_decompress(block: bytes, original_size: int) -> bytes:
-    """Strict LZ4 block decoder; output MUST be exactly original_size bytes."""
+    """Strict LZ4 block decoder; output MUST be exactly original_size bytes.
+
+    Enforces both end-of-block rules: no match starts within _MFLIMIT bytes of the
+    end, and no match reaches into the last _LAST_LITERALS bytes.
+    """
     out = bytearray()
     i = 0
     n = len(block)
@@ -230,6 +235,10 @@ def lz4_block_decompress(block: bytes, original_size: int) -> bytes:
                     break
         if len(out) + match_len > original_size:
             raise V2Error("LZ4 output exceeds original_size")
+        if len(out) > original_size - _MFLIMIT:
+            raise V2Error(f"LZ4 match starts within {_MFLIMIT} bytes of the block end")
+        if len(out) + match_len > original_size - _LAST_LITERALS:
+            raise V2Error(f"LZ4 match reaches into the last {_LAST_LITERALS} bytes, which must be literals")
         for _ in range(match_len):  # byte-wise: overlapping matches are legal
             out.append(out[-offset])
     if len(out) != original_size:
