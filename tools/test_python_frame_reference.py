@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Mutation suite for the `twin_of` machinery in python-frame-reference.py (LAB-3967).
+"""Mutation suite for python-frame-reference.py verify: `twin_of` machinery (LAB-3967) and envelope checks.
 
 Design and rationale: python-frame-reference.py, "Twin declarations". This
 suite mutates a copy of the COMMITTED fixture and proves verify() fails on
@@ -20,6 +20,7 @@ import io
 import json
 import sys
 import tempfile
+import traceback
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -119,7 +120,7 @@ MUTATIONS = {
     "payload_envelope.inner_msgpack_hex": env_mutation("inner_msgpack_hex", flip_last_nibble),
 }
 # Fields NO other verify check covers: here the twin gate is the only thing standing.
-ONLY_TWIN_GATE = {"value_json", "frame prefix (magic/version/header bytes)", "payload_envelope.inner_msgpack_hex"}
+ONLY_TWIN_GATE = {"value_json", "frame prefix (magic/version/header bytes)"}
 
 for field, mutate in MUTATIONS.items():
     doc, _ = mutated(mutate)
@@ -130,6 +131,49 @@ for field, mutate in MUTATIONS.items():
     if field in ONLY_TWIN_GATE:
         fail_lines = [line for line in out.splitlines() if line.startswith("FAIL")]
         check(f"mutate {field}: twin gate is the ONLY check that fires", fail_lines == twin_lines)
+
+# --- value_json compares type-strictly: Python's True == 1 must not pass the twin claim ---
+doc, _ = mutated(lambda t: t["value_json"].__setitem__("active", 1))
+rc, out = run_verify(doc)
+check("value_json true -> 1 in the twin: verify exits 1", rc == 1)
+check("value_json true -> 1 in the twin: twin gate names value_json", f"FAIL {BIN_NAME}" in out and "value_json" in out)
+
+# --- inner_msgpack_hex is checked against the decompressed bytes, not only twin against twin ---
+INNER_FAIL = "decompressed payload does not match payload_envelope.inner_msgpack_hex"
+doc, twin = mutated(env_mutation("inner_msgpack_hex", flip_last_nibble))
+legacy = next(v for v in doc["frame_vectors"] if v["name"] == LEGACY_NAME)
+legacy["payload_envelope"]["inner_msgpack_hex"] = twin["payload_envelope"]["inner_msgpack_hex"]
+rc, out = run_verify(doc)
+check("same wrong inner_msgpack_hex on both twins: verify exits 1", rc == 1)
+check(
+    "same wrong inner_msgpack_hex on both twins: both vectors FAIL on the bytes",
+    f"FAIL {BIN_NAME}: {INNER_FAIL}" in out and f"FAIL {LEGACY_NAME}: {INNER_FAIL}" in out,
+)
+doc, twin = mutated(env_mutation("inner_msgpack_hex", flip_last_nibble))
+del twin["twin_of"]
+rc, out = run_verify(doc)
+check("wrong inner_msgpack_hex with twin_of dropped: verify exits 1", rc == 1 and f"FAIL {BIN_NAME}: {INNER_FAIL}" in out)
+
+# --- a non-object payload_envelope is a FAIL line, never an AttributeError traceback ---
+for bad in (["not", "an", "object"], "not an object"):
+    kind = type(bad).__name__
+    doc, _ = mutated(lambda t, bad=bad: t.__setitem__("payload_envelope", bad))
+    try:
+        rc, out = run_verify(doc)
+    except Exception:  # noqa: BLE001 - any traceback is the failure under test
+        traceback.print_exc(file=sys.stdout)  # shows where it raised: verify() or this harness
+        rc, out = None, ""
+    check(f"{kind} payload_envelope: verify exits 1 with a FAIL line", rc == 1 and "payload_envelope must be an object" in out)
+# A present null is a non-object too, not "absent". On a vector outside the twin
+# pair nothing else fires and the encoding coverage floor still holds.
+doc = copy.deepcopy(COMMITTED)
+next(v for v in doc["frame_vectors"] if v["name"] == "raw_payload_frame")["payload_envelope"] = None
+rc, out = run_verify(doc)
+fail_lines = [line for line in out.splitlines() if line.startswith("FAIL")]
+check(
+    "null payload_envelope on a non-twin vector: verify exits 1, and its FAIL line is the only one",
+    rc == 1 and fail_lines == ["FAIL raw_payload_frame: payload_envelope must be an object, got NoneType"],
+)
 
 # --- a dangling declaration is a failure, not a silent skip ---
 doc, _ = mutated(lambda t: t.__setitem__("twin_of", "no_such_vector"))
@@ -168,6 +212,16 @@ doc, twin = mutated(lambda t: t["payload_envelope"].__setitem__("inner_msgpack_h
 next(v for v in doc["frame_vectors"] if v["name"] == LEGACY_NAME)["payload_envelope"]["inner_msgpack_hex"] = None
 rc, out = run_verify(doc)
 check("null envelope subfield on both sides: verify exits 1", rc == 1 and "lacks payload_envelope.inner_msgpack_hex" in out)
+
+# A missing envelope_encoding is "lacking", not a distinct encoding that satisfies "differs in encoding".
+doc = copy.deepcopy(COMMITTED)
+next(v for v in doc["frame_vectors"] if v["name"] == LEGACY_NAME)["payload_envelope"].pop("envelope_encoding")
+rc, out = run_verify(doc)
+check(
+    "base lacking envelope_encoding: the twin FAILs too, naming it",
+    rc == 1 and f"FAIL {BIN_NAME}: twin_of requires envelope vectors on both sides; "
+    f"{LEGACY_NAME!r} lacks payload_envelope.envelope_encoding" in out,
+)
 
 doc, _ = mutated(lambda t: t.__setitem__("twin_of", [LEGACY_NAME]))
 rc, out = run_verify(doc)
@@ -219,7 +273,8 @@ def warn_output(vectors: list[dict]) -> tuple[bool, str]:
     try:
         with contextlib.redirect_stderr(buf):
             pfr._warn_twin_divergence(vectors)
-    except ValueError:
+    except Exception:  # noqa: BLE001 - generate must never raise here, whatever the type
+        traceback.print_exc(file=sys.stdout)
         raised = True
     return raised, buf.getvalue()
 
@@ -238,6 +293,20 @@ check("generate: dangling twin_of -> warns, does not raise", not raised and "unk
 # Reachable only via generate: verify() indexes frame_hex for every vector before the twin gate runs.
 raised, err = warn_output([{k: v for k, v in SYNTH_LEGACY.items() if k != "frame_hex"}, SYNTH_TWIN])
 check("generate: base lacking frame_hex -> warns, does not raise", not raised and "lacks frame_hex" in err)
+for bad in (["not", "an", "object"], "not an object"):
+    raised, err = warn_output([SYNTH_LEGACY, {**SYNTH_TWIN, "payload_envelope": bad}])
+    check(
+        f"generate: {type(bad).__name__} payload_envelope -> warns, does not raise",
+        not raised and "lacks payload_envelope (object)" in err,
+    )
+raised, err = warn_output([SYNTH_LEGACY, {**SYNTH_TWIN, "value_json": {"a": True}}])
+check("generate: value_json 1 vs true -> warns (type-strict compare)", not raised and "value_json" in err)
+no_encoding = {k: v for k, v in SYNTH_LEGACY["payload_envelope"].items() if k != "envelope_encoding"}
+raised, err = warn_output([{**SYNTH_LEGACY, "payload_envelope": no_encoding}, SYNTH_TWIN])
+check(
+    "generate: base lacking envelope_encoding -> warns, does not raise",
+    not raised and "lacks payload_envelope.envelope_encoding" in err,
+)
 
 # --- _upsert: the declaration survives a rebuild and never causes churn ---
 committed = [copy.deepcopy(SYNTH_TWIN) | {"generator": "old wheel"}]
