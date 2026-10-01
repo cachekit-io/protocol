@@ -329,15 +329,16 @@ transitional minor release Python:
    - `encryption=False` → construct **not** encrypting new writes, and **MUST** still
      retain legacy-decrypt from `CACHEKIT_MASTER_KEY` if present — the read-side role
      rule 2 names above, unaffected by this branch. That obligation holds for
-     auto-mode caches, whose [CK v3 frame](wire-format.md#python-ck-v3-frame) header
-     marks each encrypted entry. An [interop](interop-mode.md#interop-value-format)
-     cache has no legacy-decrypt: its entries carry no header, so a reader that is not
-     encrypting decodes stored ciphertext as one plain MessagePack document. Most such
-     entries fail to decode and are recomputed, but a rare small one decodes and is
-     served as a wrong value. So turning encryption off in an interop cache means
-     moving the operation to a new `namespace` in every SDK that binds it, at the same
-     time: old and new writers then use different keys, and no reader meets the other
-     side's entries. The procedure is cachekit-py's
+     cachekit-py's auto-mode caches, whose [CK v3 frame](wire-format.md#python-ck-v3-frame)
+     header marks each encrypted entry. An [interop](interop-mode.md#interop-value-format)
+     cache has no legacy-decrypt: its entries carry no header to mark them as
+     encrypted, and a reader that is not encrypting decodes stored bytes as one plain
+     MessagePack document, so stale ciphertext is never decrypted. Most such entries
+     fail to decode and are recomputed, but a rare small one decodes and is served as a
+     wrong value. So turning encryption off in an interop cache means moving the
+     operation to a new `namespace` in every SDK that binds it, in the same change: old
+     and new writers then use different keys, and no reader meets the other side's
+     entries. The procedure is cachekit-py's
      [Turning Encryption Off in an Interop Cache](https://github.com/cachekit-io/cachekit-py/blob/main/docs/features/zero-knowledge-encryption.md#turning-encryption-off-in-an-interop-cache).
    - `CACHEKIT_MASTER_KEY` present with **neither** an explicit `encryption=` nor
      `@cache.secure(...)` → construction **MUST** fail, naming both explicit spellings.
