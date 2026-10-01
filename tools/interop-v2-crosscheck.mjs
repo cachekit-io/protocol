@@ -299,8 +299,9 @@ for (const v of doc.container_vectors) {
 // The only vectors that fail a reader computing the ratio product in 32 bits, so
 // the group is required, and at least one vector must actually do that, measured
 // from the parsed bytes (method 1 — method 0 never evaluates the bound — with a
-// payload at or above ceil(2^32/1000) whose original_size exceeds the wrapped
-// bound). A file without one must not pass.
+// payload at or above ceil(2^32/1000) whose original_size exceeds both the wrapped
+// bound and the payload length, so a reader that skips the product when
+// original_size <= payload_len still fails it). A file without one must not pass.
 const U32_WRAP_THRESHOLD = Math.ceil(2 ** 32 / 1000);
 let discriminating = 0;
 for (const v of doc.constructed_container_vectors ?? []) {
@@ -315,7 +316,7 @@ for (const v of doc.constructed_container_vectors ?? []) {
     check(v.name, "payload_len", v.payload_len, parsed.payload.length);
     const len = parsed.payload.length;
     const wrapped = (MAX_RATIO * BigInt(len)) % 2n ** 32n;
-    if (parsed.method === 1n && len >= U32_WRAP_THRESHOLD && parsed.originalSize > wrapped) discriminating++;
+    if (parsed.method === 1n && len >= U32_WRAP_THRESHOLD && parsed.originalSize > wrapped && parsed.originalSize > BigInt(len)) discriminating++;
   } catch (err) {
     failures++;
     console.error(`FAIL ${v.name} (constructed container): ${err.message ?? err}`);
@@ -323,7 +324,7 @@ for (const v of doc.constructed_container_vectors ?? []) {
 }
 if (discriminating === 0) {
   failures++;
-  console.error("FAIL constructed_container_vectors: no vector fails a reader computing the ratio product in 32 bits");
+  console.error("FAIL constructed_container_vectors: no vector fails every 32-bit ratio reader, including the original <= payload fast path");
 }
 
 for (const v of doc.aad_vectors) {
