@@ -230,7 +230,7 @@ Authorization: Bearer ck_live_xxx
 | :---: | :--- | :--- |
 | `200 OK` | Delete processed | Return `true` |
 
-Delete is **idempotent and unconditional with respect to key existence**: once authentication and authorisation succeed, the server performs no existence check and returns `200` with body `{"success": true}` whether or not the key existed. The ordinary request-level errors still apply before that point — `401` (invalid/missing key), `403` (write-space violation), `400` (invalid key format) — see [Error Handling](#error-handling).
+Delete is **idempotent and unconditional with respect to key existence**: once authentication and authorisation succeed, the server performs no existence check and returns `200` with body `{"success": true}` whether or not the key existed. The ordinary request-level errors still apply before that point — `401` (invalid/missing key), `403` (write-space or namespace-grant violation), `400` (invalid key format) — see [Error Handling](#error-handling).
 
 ---
 
