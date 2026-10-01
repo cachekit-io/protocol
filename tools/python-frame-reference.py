@@ -198,8 +198,11 @@ def _twin_divergence(twin: dict, by_name: dict[str, dict]) -> str | None:
         mismatches.append("value_json")
     if _frame_prefix_hex(twin) != _frame_prefix_hex(base):
         mismatches.append("frame prefix (magic/version/header bytes)")
+    # Type-strict for the same reason: 32.0 == 32 would hide a divergent original_size.
     mismatches += [
-        f"payload_envelope.{field}" for field in _TWIN_ENVELOPE_FIELDS if twin_env[field] != base_env[field]
+        f"payload_envelope.{field}"
+        for field in _TWIN_ENVELOPE_FIELDS
+        if type(twin_env[field]) is not type(base_env[field]) or twin_env[field] != base_env[field]
     ]
     if not mismatches:
         return None

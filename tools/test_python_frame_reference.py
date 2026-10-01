@@ -187,9 +187,10 @@ twin = next(v for v in doc["frame_vectors"] if v["name"] == BIN_NAME)
 del twin["twin_of"]  # the twin claim is not under test; keep its gate out of the output
 reencode(twin, data=bytes.fromhex(twin["payload_envelope"]["compressed_data_hex"])[:-4])
 rc, out = run_verify(doc)
+bin_fails = [line for line in out.splitlines() if line.startswith(f"FAIL {BIN_NAME}:")]
 check(
-    "truncated LZ4 block, consistent elsewhere: verify exits 1 with an LZ4 decompress FAIL",
-    rc == 1 and f"FAIL {BIN_NAME}: LZ4 decompress:" in out,
+    "truncated LZ4 block, consistent elsewhere: verify exits 1, and LZ4 decompress is the vector's only FAIL",
+    rc == 1 and len(bin_fails) == 1 and bin_fails[0].startswith(f"FAIL {BIN_NAME}: LZ4 decompress:"),
 )
 
 # --- inner_msgpack_hex is checked against the decompressed bytes, not only twin against twin ---
@@ -355,6 +356,9 @@ for bad in (["not", "an", "object"], "not an object"):
     )
 raised, err = warn_output([SYNTH_LEGACY, {**SYNTH_TWIN, "value_json": {"a": True}}])
 check("generate: value_json 1 vs true -> warns (type-strict compare)", not raised and "value_json" in err)
+float_size = {**SYNTH_TWIN["payload_envelope"], "original_size": 3.0}
+raised, err = warn_output([SYNTH_LEGACY, {**SYNTH_TWIN, "payload_envelope": float_size}])
+check("generate: original_size 3 vs 3.0 -> warns (type-strict compare)", not raised and "original_size" in err)
 no_encoding = {k: v for k, v in SYNTH_LEGACY["payload_envelope"].items() if k != "envelope_encoding"}
 raised, err = warn_output([{**SYNTH_LEGACY, "payload_envelope": no_encoding}, SYNTH_TWIN])
 check(
