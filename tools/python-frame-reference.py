@@ -11,7 +11,8 @@ implementation.
 Modes:
     verify    (default) stdlib-only. Re-parses every frame vector with an
               independent minimal parser (no cachekit import) and checks the
-              expected header/payload (the header must record the serializer
+              expected header/payload (the header must be RFC 8259 JSON, so
+              NaN/Infinity tokens FAIL, and must record the serializer
               name as a non-empty string in `s`) and the ByteStorage envelope down
               to the LZ4-decompressed inner msgpack (inner_msgpack_hex);
               checks every error vector is rejected. Runs in CI. It does not
@@ -68,6 +69,7 @@ import json
 import sys
 from pathlib import Path
 from types import ModuleType
+from typing import NoReturn
 
 VECTOR_PATH = Path(__file__).resolve().parent.parent / "test-vectors" / "python-frame.json"
 
@@ -141,8 +143,13 @@ def parse_frame(frame: bytes) -> tuple[dict, bytes]:
     header_end = PREFIX_LEN + hdr_len
     if header_end > len(frame):
         raise FrameError(f"declared header length {hdr_len} exceeds frame ({len(frame)} bytes)")
-    header = json.loads(frame[PREFIX_LEN:header_end].decode("utf-8"))
+    header = json.loads(frame[PREFIX_LEN:header_end].decode("utf-8"), parse_constant=_reject_constant)
     return header, frame[header_end:]
+
+
+def _reject_constant(token: str) -> NoReturn:
+    """json.loads accepts NaN/Infinity/-Infinity; RFC 8259 has no such tokens, and the Node leg rejects them."""
+    raise FrameError(f"header is not RFC 8259 JSON: non-standard token {token}")
 
 
 # Fields a twin must share with its base. envelope_encoding must DIFFER, so it is

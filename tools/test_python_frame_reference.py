@@ -238,6 +238,24 @@ check(
     == ["FAIL raw_payload_frame: header mismatch"],
 )
 
+# --- header bytes must be RFC 8259 JSON: NaN/Infinity/-Infinity FAIL as a parse error ---
+for token, value in (("NaN", float("nan")), ("Infinity", float("inf")), ("-Infinity", float("-inf"))):
+    doc = copy.deepcopy(COMMITTED)
+    raw = next(v for v in doc["frame_vectors"] if v["name"] == "raw_payload_frame")
+    header, payload = pfr.parse_frame(bytes.fromhex(raw["frame_hex"]))
+    hdr = json.dumps({**header, "v": value}).encode()
+    if token.encode() not in hdr:
+        raise RuntimeError(f"json.dumps no longer writes {token}; test is broken")
+    raw["frame_hex"] = (pfr.MAGIC + bytes([pfr.FRAME_VERSION]) + len(hdr).to_bytes(4, "big") + hdr + payload).hex()
+    raw["expected_header"] = json.loads(hdr)
+    rc, out = run_verify(doc)
+    check(
+        f"header 'v' {token}: verify exits 1 on a parse error only",
+        rc == 1
+        and [line for line in out.splitlines() if line.startswith("FAIL")]
+        == [f"FAIL raw_payload_frame: parse error: header is not RFC 8259 JSON: non-standard token {token}"],
+    )
+
 # --- inner_msgpack_hex is checked against the decompressed bytes, not only twin against twin ---
 INNER_FAIL = "decompressed payload does not match payload_envelope.inner_msgpack_hex"
 doc, twin = mutated(env_mutation("inner_msgpack_hex", flip_last_nibble))
