@@ -254,6 +254,31 @@ for token in ("NaN", "Infinity", "-Infinity"):
         == [f"FAIL raw_payload_frame: parse error: header is not RFC 8259 JSON: non-standard token {token}"],
     )
 
+# --- header bytes that are not UTF-8, or not JSON at all, FAIL as a parse error, not a traceback ---
+def stdlib_error(fn) -> str:
+    """The message the stdlib raises for `fn`, so the expected line tracks the running Python."""
+    try:
+        fn()
+    except ValueError as exc:
+        return str(exc)
+    raise RuntimeError("expected the stdlib to reject this header; test is broken")
+
+
+for hdr, cause in (
+    (b"{", f"header is not valid JSON: {stdlib_error(lambda: json.loads('{'))}"),
+    (b"\xff\xfe", f"header is not UTF-8: {stdlib_error(lambda: b'\xff\xfe'.decode('utf-8'))}"),
+):
+    doc = copy.deepcopy(COMMITTED)
+    raw = next(v for v in doc["frame_vectors"] if v["name"] == "raw_payload_frame")
+    _, payload = pfr.parse_frame(bytes.fromhex(raw["frame_hex"]))
+    raw["frame_hex"] = (pfr.MAGIC + bytes([pfr.FRAME_VERSION]) + len(hdr).to_bytes(4, "big") + hdr + payload).hex()
+    rc, out = run_verify(doc)
+    check(
+        f"header bytes {hdr.hex()}: verify exits 1 on a parse error only",
+        rc == 1
+        and [line for line in out.splitlines() if line.startswith("FAIL")] == [f"FAIL raw_payload_frame: parse error: {cause}"],
+    )
+
 # --- inner_msgpack_hex is checked against the decompressed bytes, not only twin against twin ---
 INNER_FAIL = "decompressed payload does not match payload_envelope.inner_msgpack_hex"
 doc, twin = mutated(env_mutation("inner_msgpack_hex", flip_last_nibble))

@@ -11,8 +11,9 @@ implementation.
 Modes:
     verify    (default) stdlib-only. Re-parses every frame vector with an
               independent minimal parser (no cachekit import) and checks the
-              expected header/payload (the header must be RFC 8259 JSON, so
-              NaN/Infinity tokens FAIL, and must record the serializer
+              expected header/payload (the header must be UTF-8 RFC 8259
+              JSON, so malformed JSON, non-UTF-8 bytes and NaN/Infinity
+              tokens FAIL, and must record the serializer
               name as a non-empty string in `s`) and the ByteStorage envelope down
               to the LZ4-decompressed inner msgpack (inner_msgpack_hex);
               checks every error vector is rejected. Runs in CI. It does not
@@ -143,7 +144,12 @@ def parse_frame(frame: bytes) -> tuple[dict, bytes]:
     header_end = PREFIX_LEN + hdr_len
     if header_end > len(frame):
         raise FrameError(f"declared header length {hdr_len} exceeds frame ({len(frame)} bytes)")
-    header = json.loads(frame[PREFIX_LEN:header_end].decode("utf-8"), parse_constant=_reject_constant)
+    try:
+        header = json.loads(frame[PREFIX_LEN:header_end].decode("utf-8"), parse_constant=_reject_constant)
+    except UnicodeDecodeError as exc:
+        raise FrameError(f"header is not UTF-8: {exc}") from exc
+    except json.JSONDecodeError as exc:
+        raise FrameError(f"header is not valid JSON: {exc}") from exc
     return header, frame[header_end:]
 
 
