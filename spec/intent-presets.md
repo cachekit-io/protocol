@@ -311,9 +311,9 @@ variable is set, and the same auto-detect path is also how a config-drift deploy
 transparently decrypts stale ciphertext left behind after encryption is turned off
 (**legacy-decrypt**) — rule 2's constructor list above governs *activation*, not this
 read-side role, and removing auto-activation **MUST NOT** remove the ability to decrypt
-what a still-encrypting peer already wrote into an auto-mode cache. An interop cache
-never had that ability on a non-encrypting client (step 3's second branch). For one
-transitional minor release Python:
+what a still-encrypting peer already wrote into a CK-framed (cachekit-py auto-mode)
+cache. An interop cache never had that ability on a non-encrypting client (step 3's
+`encryption=False` branch). For one transitional minor release Python:
 
 1. **MUST** keep decrypting existing ciphertext on the legacy-decrypt path.
 2. **MUST** keep the current auto-*activation* of new writes, but **MUST** emit a
@@ -334,11 +334,12 @@ transitional minor release Python:
      cache has no legacy-decrypt: its entries carry no header to mark them as
      encrypted, and a reader that is not encrypting decodes stored bytes as one plain
      MessagePack document, so stale ciphertext is never decrypted. Most such entries
-     fail to decode and are recomputed, but a rare small one decodes and is served as a
-     wrong value. So turning encryption off in an interop cache means moving the
-     operation to a new `namespace` in every SDK that binds it, in the same change: old
-     and new writers then use different keys, and no reader meets the other side's
-     entries. The procedure is cachekit-py's
+     fail to decode and are recomputed, but a rare one, most often a small one, decodes
+     and is served as a wrong value. So turning encryption off in an interop cache means
+     moving the operation to a new `namespace` in every SDK that binds it, each of which
+     also turns encryption off, in the same change: old and new writers then use
+     different cache keys, and no reader meets the other side's entries. The procedure
+     is cachekit-py's
      [Turning Encryption Off in an Interop Cache](https://github.com/cachekit-io/cachekit-py/blob/main/docs/features/zero-knowledge-encryption.md#turning-encryption-off-in-an-interop-cache).
    - `CACHEKIT_MASTER_KEY` present with **neither** an explicit `encryption=` nor
      `@cache.secure(...)` → construction **MUST** fail, naming both explicit spellings.
@@ -347,12 +348,11 @@ transitional minor release Python:
      encrypt" either — ambiguous intent is an error, not a default.
 
    Every branch is decidable at construction; none strands the legacy-decrypt migration
-   of an auto-mode cache. An interop cache has no legacy-decrypt to strand, and its
-   `encryption=False` branch is safe only with the namespace move in the second branch.
-   This is the one release where alternative *(B)* from
-   [Design Decisions](#design-decisions) (presence on a non-encrypting preset is an
-   error) applies, on the third branch only; it is rejected as a *permanent* rule but is
-   the correct transitional gate against a silent confidentiality downgrade.
+   of a CK-framed (cachekit-py auto-mode) cache. This is the one release where
+   alternative *(B)* from [Design Decisions](#design-decisions) (presence on a
+   non-encrypting preset is an error) applies, on the third branch only; it is rejected
+   as a *permanent* rule but is the correct transitional gate against a silent
+   confidentiality downgrade.
 
 The fleet-convenience guidance shipped under LAB-749 is rewritten in the same release.
 The rejected alternatives are in [Design Decisions](#design-decisions).
