@@ -264,19 +264,22 @@ def stdlib_error(fn) -> str:
     raise RuntimeError("expected the stdlib to reject this header; test is broken")
 
 
+NOT_UTF8 = b"\xff\xfe"
 for hdr, cause in (
     (b"{", f"header is not valid JSON: {stdlib_error(lambda: json.loads('{'))}"),
-    (b"\xff\xfe", f"header is not UTF-8: {stdlib_error(lambda: b'\xff\xfe'.decode('utf-8'))}"),
+    (NOT_UTF8, f"header is not UTF-8: {stdlib_error(lambda: NOT_UTF8.decode('utf-8'))}"),
 ):
     doc = copy.deepcopy(COMMITTED)
     raw = next(v for v in doc["frame_vectors"] if v["name"] == "raw_payload_frame")
     _, payload = pfr.parse_frame(bytes.fromhex(raw["frame_hex"]))
     raw["frame_hex"] = (pfr.MAGIC + bytes([pfr.FRAME_VERSION]) + len(hdr).to_bytes(4, "big") + hdr + payload).hex()
+    doc["error_vectors"].append({"name": "bad_header", "frame_hex": raw["frame_hex"]})
     rc, out = run_verify(doc)
     check(
         f"header bytes {hdr.hex()}: verify exits 1 on a parse error only",
         rc == 1
-        and [line for line in out.splitlines() if line.startswith("FAIL")] == [f"FAIL raw_payload_frame: parse error: {cause}"],
+        and [line for line in out.splitlines() if line.startswith("FAIL")] == [f"FAIL raw_payload_frame: parse error: {cause}"]
+        and "ok   bad_header (rejected)" in out.splitlines(),
     )
 
 # --- inner_msgpack_hex is checked against the decompressed bytes, not only twin against twin ---
