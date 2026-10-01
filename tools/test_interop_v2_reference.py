@@ -89,7 +89,7 @@ SEAM_MUTANTS: dict[str, Callable[[int, int], bool]] = {
 
 
 # LZ4 end-of-block rules. Each block is valid LZ4 except for the one rule it names, so a
-# decoder that skips that rule decodes it to `original` (liblz4 rejects both).
+# decoder that skips that rule decodes it to `original`. liblz4 rejects both blocks.
 # A: 14 literals, a 10-byte match at offset 10 ending at byte 24, 2 literals (26 bytes).
 EOB_A = bytes([0xE6]) + bytes(range(14)) + b"\x0a\x00" + bytes([0x20]) + b"\xfe\xff"
 EOB_A_ORIGINAL = bytes(range(14)) + bytes(range(4, 14)) + b"\xfe\xff"
@@ -98,7 +98,7 @@ EOB_B = bytes([0xB0]) + b"A" * 11 + b"\x01\x00" + bytes([0x70]) + b"BCDEFGH"
 EOB_B_ORIGINAL = b"A" * 15 + b"BCDEFGH"
 EOB_CASES = [
     ("block A (last 5 bytes must be literals)", EOB_A, EOB_A_ORIGINAL, "last 5 bytes"),
-    ("block B (last match starts >= 12 bytes before the end)", EOB_B, EOB_B_ORIGINAL, "within 12 bytes"),
+    ("block B (last match must start >= 12 bytes before the end)", EOB_B, EOB_B_ORIGINAL, "within 12 bytes"),
 ]
 
 

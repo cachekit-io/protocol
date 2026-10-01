@@ -107,7 +107,9 @@ def _require(cond: object, msg: str) -> None:
 # canonical — the spec pins read-side conformance only; compressed bytes are
 # writer-dependent. The decompressor is strict: invalid offsets, truncation,
 # any output-size disagreement with original_size, and any match that breaks
-# the two end-of-block rules below are hard errors, as they are in liblz4.
+# one of the two LZ4 block-format end-of-block rules below are hard errors.
+# The 12-byte rule matches liblz4 decoding into an original_size buffer; the
+# 5-byte rule is stricter than liblz4, which skips it on its fast path.
 # ---------------------------------------------------------------------------
 
 # LZ4 end-of-block restrictions: the last 5 bytes are always literals, and the
@@ -184,8 +186,10 @@ def lz4_block_compress(data: bytes) -> bytes:
 def lz4_block_decompress(block: bytes, original_size: int) -> bytes:
     """Strict LZ4 block decoder; output MUST be exactly original_size bytes.
 
-    Enforces both end-of-block rules: no match starts within _MFLIMIT bytes of the
-    end, and no match reaches into the last _LAST_LITERALS bytes.
+    Enforces both LZ4 block-format end-of-block rules: no match starts within
+    _MFLIMIT bytes of the end, and no match reaches into the last _LAST_LITERALS
+    bytes. liblz4 enforces the first but skips the second on its fast path, so
+    this decoder rejects some blocks liblz4 accepts.
     """
     out = bytearray()
     i = 0
