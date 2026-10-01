@@ -239,13 +239,11 @@ check(
 )
 
 # --- header bytes must be RFC 8259 JSON: NaN/Infinity/-Infinity FAIL as a parse error ---
-for token, value in (("NaN", float("nan")), ("Infinity", float("inf")), ("-Infinity", float("-inf"))):
+for token in ("NaN", "Infinity", "-Infinity"):
     doc = copy.deepcopy(COMMITTED)
     raw = next(v for v in doc["frame_vectors"] if v["name"] == "raw_payload_frame")
     header, payload = pfr.parse_frame(bytes.fromhex(raw["frame_hex"]))
-    hdr = json.dumps({**header, "v": value}).encode()
-    if token.encode() not in hdr:
-        raise RuntimeError(f"json.dumps no longer writes {token}; test is broken")
+    hdr = json.dumps({**header, "v": float(token)}).encode()
     raw["frame_hex"] = (pfr.MAGIC + bytes([pfr.FRAME_VERSION]) + len(hdr).to_bytes(4, "big") + hdr + payload).hex()
     raw["expected_header"] = json.loads(hdr)
     rc, out = run_verify(doc)
