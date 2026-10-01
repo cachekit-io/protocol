@@ -109,7 +109,9 @@ def _require(cond: object, msg: str) -> None:
 # any output-size disagreement with original_size, and any match that breaks
 # one of the two LZ4 block-format end-of-block rules below are hard errors.
 # The 12-byte rule matches liblz4 decoding into an original_size buffer; the
-# 5-byte rule is stricter than liblz4, which skips it on its fast path.
+# 5-byte rule is stricter than liblz4, which skips it on its fast path. At
+# original_size 0 the block must be the single byte 00, as liblz4 requires
+# when it decodes into a 0-byte buffer; it rejects 01..0f there.
 # ---------------------------------------------------------------------------
 
 # LZ4 end-of-block restrictions: the last 5 bytes are always literals, and the
@@ -189,13 +191,17 @@ def lz4_block_decompress(block: bytes, original_size: int) -> bytes:
     Enforces both LZ4 block-format end-of-block rules: no match starts within
     _MFLIMIT bytes of the end, and no match reaches into the last _LAST_LITERALS
     bytes. liblz4 enforces the first but skips the second on its fast path, so
-    this decoder rejects some blocks liblz4 accepts.
+    this decoder rejects some blocks liblz4 accepts. A 0-byte output must come
+    from the single byte 00, as in liblz4; 01..0f declare no literals and are
+    rejected there.
     """
     out = bytearray()
     i = 0
     n = len(block)
     if n == 0:
         raise V2Error("empty LZ4 block")
+    if original_size == 0 and block != b"\x00":
+        raise V2Error("LZ4 block for a 0-byte output must be the single byte 00")
     while True:
         if i >= n:
             raise V2Error("truncated LZ4 block: missing token")

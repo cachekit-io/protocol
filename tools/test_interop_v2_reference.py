@@ -19,6 +19,7 @@ real-bytes vector can do that (LZ4 expands at most about 255:1), so without it a
 with no ratio check, or a strict `<`, would pass every vector here.
 It also feeds the LZ4 block decoder two blocks that each break one LZ4 end-of-block rule,
 and checks both are rejected by name while a short literals-only block still decodes.
+At original_size 0 it checks the decoder accepts only the one-byte block 00, as liblz4 does.
 Same doctrine as test_check_spec_duplication.py: a guard not shown to fail is no guard.
 Nothing here touches test-vectors/interop-v2.json.
 
@@ -118,6 +119,24 @@ def end_of_block_failures() -> list[str]:
             failures.append("short literals-only block: decoded to the wrong bytes")
     except iv2.V2Error as e:
         failures.append(f"short literals-only block: rejected: {e}")
+    return failures
+
+
+def empty_output_failures() -> list[str]:
+    """At original_size 0 only the block 00 decodes; 01..0f (0 literals, a match nibble) are rejected by name."""
+    failures = []
+    for token in range(0x01, 0x10):
+        try:
+            iv2.lz4_block_decompress(bytes([token]), 0)
+            failures.append(f"block {token:02x} at original_size 0: decoded, but liblz4 accepts only 00")
+        except iv2.V2Error as e:
+            if "single byte 00" not in str(e):
+                failures.append(f"block {token:02x} at original_size 0: raised, but not for the size-0 rule: {e}")
+    try:
+        if iv2.lz4_block_decompress(b"\x00", 0) != b"":
+            failures.append("block 00 at original_size 0: decoded to non-empty bytes")
+    except iv2.V2Error as e:
+        failures.append(f"block 00 at original_size 0: rejected: {e}")
     return failures
 
 
@@ -223,6 +242,7 @@ def main() -> int:
         results.append(f"literals-only block at the threshold: {failure}")
 
     results.extend(end_of_block_failures())
+    results.extend(empty_output_failures())
     results.extend(f"conforming reader at the 1000:1 edge: {f}" for f in ratio_edge_failures(built))
     for name, mutant in SEAM_MUTANTS.items():
         with patch.object(iv2, "within_ratio", mutant):
@@ -234,7 +254,7 @@ def main() -> int:
         sys.exit("\n".join(f"FAIL {f}" for f in failures))
     logging.info(
         "interop-v2 mutation suite: %d 32-bit readers and %d seam mutants caught, coverage guard fires, "
-        "%d LZ4 end-of-block breaks rejected",
+        "%d LZ4 end-of-block breaks rejected, size-0 rule holds",
         len(MUTANTS),
         len(SEAM_MUTANTS),
         len(EOB_CASES),
