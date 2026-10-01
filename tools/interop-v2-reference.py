@@ -404,7 +404,7 @@ def decode_container(data: bytes, reader: type[_Reader] = _Reader) -> bytes:
     method, original_size, payload = parse_container(data, reader)
     if method not in (METHOD_NONE, METHOD_LZ4_BLOCK):
         raise V2Error(f"unknown compression method {method}")
-    # Security Limits — all BEFORE any decompression, integer arithmetic only.
+    # Security Limits, integer arithmetic only, in spec/interop-v2.md#check-order order.
     if original_size > MAX_UNCOMPRESSED:
         raise V2Error(f"original_size {original_size} exceeds max uncompressed size")
     if len(payload) > MAX_COMPRESSED:

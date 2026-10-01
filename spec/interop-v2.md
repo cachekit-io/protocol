@@ -231,9 +231,9 @@ A compressed container introduces a byte-level DoS axis — the decompression
 bomb — that bare-MessagePack v1 does not have. These bounds reuse the
 ByteStorage constants from
 [wire-format.md → Security Limits](wire-format.md#security-limits) so the fleet
-carries **one** set of numbers, and all of them MUST be enforced **before**
-decompressing, and before allocating any output buffer
-([Reader Algorithm](#check-order)). Use integer-valued arithmetic only, with no
+carries **one** set of numbers, and all of them MUST be enforced
+[before any decompression or output allocation](#check-order). Use integer-valued
+arithmetic only, with no
 floating-point *ratio*; the ratio product's exactness requirement, and the rule that
 `original_size` is compared at its full wire value, are stated below:
 
@@ -246,6 +246,7 @@ floating-point *ratio*; the ratio product's exactness requirement, and the rule 
 ```text
 // original_size and method are unsigned by construction — signed-family
 // markers were already rejected at parse time (see The v2 Value Container).
+reject if method not in {0, 1}                      // unregistered method
 reject if original_size > MAX_UNCOMPRESSED          // 512 MiB
 reject if payload.length > MAX_COMPRESSED           // 512 MiB
 if method == 1:
@@ -373,8 +374,8 @@ Given stored bytes for an interop/v2-configured cache:
    trailing bytes; enforce element types (int, int, bin) and the
    header-vs-remaining-input rule; decode original_size at its full wire
    value (see Security Limits).
-4. Enforce every Security Limit above — before any decompression, and
-   before allocating or growing any output buffer for the container.
+4. Enforce every Security Limit above, before any decompression or output
+   allocation (see check order below).
 5. method 1: LZ4-block-decompress the payload with original_size as the
    exact output size; reject on any LZ4 error or output-length mismatch.
    method 0: the payload IS the value bytes.
@@ -383,13 +384,18 @@ Given stored bytes for an interop/v2-configured cache:
    rejected, sentinel-map temporal convention).
 ```
 
-Step order is normative: bounds run before decompression (step 4 before 5).
 <a id="check-order"></a>For each container, a reader MUST complete every step 4 check
 before it decompresses that container's payload, and before it allocates or grows any
 output buffer for it, however that buffer is sized (for example from `original_size`,
-from the length of the payload, from a multiple of either, or from a constant). This
-applies to `method 0` as well, where no decompression runs. In the encrypted path the
-AES-GCM tag is verified (step 1) before any container parsing or decompression — hostile bytes never reach the LZ4 decoder
+from the length of the payload, from a multiple of either, or from a constant). An
+output buffer is one that holds step 5's output: the decompressed bytes for `method 1`,
+or a copy of the payload for `method 0`. A reader that copies a `method 0` payload into a
+separate output buffer does so only after step 4. Neither the step 1 AES-GCM plaintext
+nor the step 3 `bin` decode, which the header-vs-remaining-input rule already bounds,
+is an output buffer.
+
+Step order is normative. In the encrypted path the AES-GCM tag is verified (step 1)
+before any container parsing or decompression — hostile bytes never reach the LZ4 decoder
 unauthenticated when encryption is on. In the **unencrypted** path the LZ4
 decoder does face untrusted bytes directly; that asymmetry is inherent (v1's
 unencrypted values have no integrity protection either), and it is why the
