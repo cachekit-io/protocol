@@ -46,8 +46,13 @@ def check(name: str, cond: bool) -> None:
         FAILURES += 1
 
 
-def run_verify(doc: dict) -> tuple[int, str]:
-    """Run pfr.verify() against `doc` written to a temp file; returns (exit code, stdout)."""
+def run_verify(doc: dict) -> tuple[int | None, str]:
+    """Run pfr.verify() against `doc` written to a temp file; returns (exit code, stdout).
+
+    verify must report bad input as FAIL lines and never raise, whatever the type, so
+    any exception is caught here: its traceback is printed and rc is None, which fails
+    every check that expects rc == 1.
+    """
     with tempfile.TemporaryDirectory() as tmp:
         path = Path(tmp) / "python-frame.json"
         path.write_text(json.dumps(doc))
@@ -56,6 +61,9 @@ def run_verify(doc: dict) -> tuple[int, str]:
         try:
             with contextlib.redirect_stdout(out):
                 rc = pfr.verify()
+        except Exception:  # noqa: BLE001 - any traceback is the failure under test
+            traceback.print_exc(file=sys.stdout)  # shows where it raised: verify() or this harness
+            return None, ""
         finally:
             pfr.VECTOR_PATH = saved
     return rc, out.getvalue()
@@ -145,8 +153,12 @@ check(
 
 # --- original_size compares type-strictly against the envelope bytes ---
 def reencode(vec: dict, *, data: bytes | None = None, size: int | None = None) -> None:
-    """Rebuild vec's envelope bytes with `data`/`size` swapped in, keeping frame_hex,
-    expected_payload_hex and payload_envelope consistent with them."""
+    """Rebuild vec's envelope bytes with `data`/`size` swapped in, and keep frame_hex,
+    expected_payload_hex and payload_envelope's compressed_data_hex/original_size in step.
+
+    Checksum and LZ4 output length are NOT recomputed: after a size swap the block no
+    longer decompresses to original_size bytes. A test that swaps size relies on verify
+    running LZ4 only after the drift check passes."""
     penv = vec["payload_envelope"]
     data = bytes.fromhex(penv["compressed_data_hex"]) if data is None else data
     size = penv["original_size"] if size is None else size
@@ -165,14 +177,9 @@ for bad_size in (32.0, True):
     doc = copy.deepcopy(COMMITTED)
     pair = [v for v in doc["frame_vectors"] if v["name"] in (LEGACY_NAME, BIN_NAME)]
     for v in pair:
-        if v["payload_envelope"]["original_size"] != int(bad_size):
-            reencode(v, size=int(bad_size))
+        reencode(v, size=int(bad_size))  # a no-op at the committed size
         v["payload_envelope"]["original_size"] = bad_size
-    try:
-        rc, out = run_verify(doc)
-    except Exception:  # noqa: BLE001 - any traceback is the failure under test
-        traceback.print_exc(file=sys.stdout)
-        rc, out = None, ""
+    rc, out = run_verify(doc)
     drift = "payload_envelope field(s) disagree with the envelope bytes: original_size"
     # The encoding-coverage floor also fires once both twins fail; that is expected.
     vector_fails = [line for line in out.splitlines() if line.startswith("FAIL") and "envelope-encoding coverage" not in line]
@@ -195,32 +202,41 @@ check(
 
 # --- a header that records no serializer name (s) FAILs; expected_header cannot vouch for it ---
 # Applied to both twins, rebuilding header bytes, HDR_LEN and expected_header, so only the s check can fire.
-_DROP = object()
 S_FAIL = "frame header must record the serializer name as a non-empty string in 's'"
-for bad_s in (_DROP, "", 1):
+# label -> (header rewrite, the `got` verify reports)
+S_CASES = {
+    "s missing": (lambda h: {k: v for k, v in h.items() if k != "s"}, None),
+    "s ''": (lambda h: {**h, "s": ""}, ""),
+    "s 1": (lambda h: {**h, "s": 1}, 1),
+    "header a JSON list": (lambda h: list(h.items()), None),
+}
+for label, (rewrite, got) in S_CASES.items():
     doc = copy.deepcopy(COMMITTED)
     pair = [v for v in doc["frame_vectors"] if v["name"] in (LEGACY_NAME, BIN_NAME)]
     for v in pair:
         header, payload = pfr.parse_frame(bytes.fromhex(v["frame_hex"]))
-        if bad_s is _DROP:
-            del header["s"]
-        else:
-            header["s"] = bad_s
-        hdr = json.dumps(header).encode()
+        hdr = json.dumps(rewrite(header)).encode()
         v["frame_hex"] = (pfr.MAGIC + bytes([pfr.FRAME_VERSION]) + len(hdr).to_bytes(4, "big") + hdr + payload).hex()
-        v["expected_header"] = header
-    label = "missing" if bad_s is _DROP else repr(bad_s)
-    try:
-        rc, out = run_verify(doc)
-    except Exception:  # noqa: BLE001 - any traceback is the failure under test
-        traceback.print_exc(file=sys.stdout)
-        rc, out = None, ""
-    got = None if bad_s is _DROP else bad_s
+        v["expected_header"] = json.loads(hdr)
+    rc, out = run_verify(doc)
     want = [f"FAIL {v['name']}: {S_FAIL}, got {got!r}" for v in pair]
     check(
-        f"header s {label} on both twins: verify exits 1, FAILing both vectors on the s check only",
+        f"{label} on both twins: verify exits 1, FAILing both vectors on the s check only",
         rc == 1 and [line for line in out.splitlines() if line.startswith("FAIL")] == want,
     )
+
+# --- expected_header compares type-strictly: 0 must not vouch for a header carrying false ---
+doc = copy.deepcopy(COMMITTED)
+raw = next(v for v in doc["frame_vectors"] if v["name"] == "raw_payload_frame")
+if raw["expected_header"]["m"]["compressed"] is not False:
+    raise RuntimeError("raw_payload_frame header no longer carries compressed: false; test is broken")
+raw["expected_header"]["m"]["compressed"] = 0
+rc, out = run_verify(doc)
+check(
+    "expected_header compressed 0 vs false in the header bytes: verify exits 1 on a header mismatch only",
+    rc == 1 and [line for line in out.splitlines() if line.startswith("FAIL")]
+    == ["FAIL raw_payload_frame: header mismatch"],
+)
 
 # --- inner_msgpack_hex is checked against the decompressed bytes, not only twin against twin ---
 INNER_FAIL = "decompressed payload does not match payload_envelope.inner_msgpack_hex"
@@ -242,11 +258,7 @@ check("wrong inner_msgpack_hex with twin_of dropped: verify exits 1", rc == 1 an
 for bad in (["not", "an", "object"], "not an object"):
     kind = type(bad).__name__
     doc, _ = mutated(lambda t, bad=bad: t.__setitem__("payload_envelope", bad))
-    try:
-        rc, out = run_verify(doc)
-    except Exception:  # noqa: BLE001 - any traceback is the failure under test
-        traceback.print_exc(file=sys.stdout)  # shows where it raised: verify() or this harness
-        rc, out = None, ""
+    rc, out = run_verify(doc)
     check(f"{kind} payload_envelope: verify exits 1 with a FAIL line", rc == 1 and "payload_envelope must be an object" in out)
 # A present null is a non-object too, not "absent". On a vector outside the twin
 # pair nothing else fires and the encoding coverage floor still holds.

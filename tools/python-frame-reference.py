@@ -231,7 +231,9 @@ def verify() -> int:
             print(f"FAIL {name}: parse error: {e}")
             failures += 1
             continue
-        if header != vec["expected_header"]:
+        # Compared as canonical JSON, not with !=: 0 == False and 1.0 == 1 in Python,
+        # so a loose compare would let expected_header vouch for header bytes it misstates.
+        if json.dumps(header, sort_keys=True) != json.dumps(vec["expected_header"], sort_keys=True):
             print(f"FAIL {name}: header mismatch\n  got      {header}\n  expected {vec['expected_header']}")
             vec_failed += 1
         # spec/cache-key-format.md: an entry that records no serializer name is a
