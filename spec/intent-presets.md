@@ -106,8 +106,8 @@ The sections below give the normative rule and the rationale for each column.
 "never expire" bounds neither memory nor staleness, and under metered-misses pricing it
 also hides cost: a cache-forever `production` entry is a stale-data incident waiting for
 its first schema change, with no expiry to end it. Presets exist so the same name gives
-the same freshness window everywhere; today a Python `@cache.production` entry outlives
-its Rust twin by an unbounded margin.
+the same freshness window everywhere; through `cachekit` 0.19.0 a Python
+`@cache.production` entry outlived its Rust twin by an unbounded margin.
 
 ---
 
