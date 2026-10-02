@@ -382,6 +382,10 @@ for label, bad in (
     ("string ipc_magic_offset", {**committed_det, "ipc_magic_offset": "8"}),
     ("boolean checksum_len", {**committed_det, "checksum_len": True}),
     ("non-ASCII ipc_magic", {**committed_det, "ipc_magic": "ARROWé"}),
+    # Vacuous byte declarations: an empty slice equals an empty declaration.
+    ("empty ipc_magic at an out-of-range offset", {**committed_det, "ipc_magic": "", "ipc_magic_offset": 999999999}),
+    ("zero checksum_len with empty checksum_hex", {**committed_det, "checksum_len": 0, "checksum_hex": ""}),
+    ("checksum_hex shorter than checksum_len", {**committed_det, "checksum_hex": committed_det["checksum_hex"][:-2]}),
 ):
     doc = copy.deepcopy(COMMITTED)
     next(v for v in doc["frame_vectors"] if v["name"] == ARROW_NAME)["arrow_detection"] = bad

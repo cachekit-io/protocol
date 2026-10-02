@@ -296,18 +296,30 @@ def _arrow_detection_failures(det: object, payload: bytes) -> list[str]:
         return [f"arrow_detection must be an object, got {type(det).__name__}"]
     # `type(...) is int`, not isinstance: bool is an int subclass, and JSON true
     # is not an offset. Non-negative, because a negative slice reads from the end.
+    # Non-empty magic and a positive checksum length: an empty slice compares
+    # equal to an empty declaration, so either would verify green unchecked.
     shape = {
-        "checksum_len": lambda v: type(v) is int and v >= 0,
+        "checksum_len": lambda v: type(v) is int and v > 0,
         "checksum_hex": lambda v: type(v) is str,
         "ipc_magic_offset": lambda v: type(v) is int and v >= 0,
-        "ipc_magic": lambda v: type(v) is str and v.isascii(),
+        "ipc_magic": lambda v: type(v) is str and v != "" and v.isascii(),
     }
     bad = [field for field, ok in shape.items() if field not in det or not ok(det[field])]
     if bad:
         return [
             (
-                "arrow_detection needs checksum_len and ipc_magic_offset as non-negative integers and "
-                f"checksum_hex and ipc_magic as (ASCII) strings; missing or wrong type: {', '.join(bad)}"
+                "arrow_detection needs checksum_len as a positive integer, ipc_magic_offset as a non-negative "
+                f"integer, checksum_hex as a string and ipc_magic as a non-empty ASCII string; "
+                f"missing or wrong type: {', '.join(bad)}"
+            )
+        ]
+    # Else a payload shorter than checksum_len slices short and a short
+    # checksum_hex could still match it.
+    if len(det["checksum_hex"]) != 2 * det["checksum_len"]:
+        return [
+            (
+                f"arrow_detection checksum_hex has {len(det['checksum_hex'])} hex digits, "
+                f"checksum_len {det['checksum_len']} needs {2 * det['checksum_len']}"
             )
         ]
     failures = []
