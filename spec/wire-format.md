@@ -348,7 +348,7 @@ fails CI rather than quietly making this paragraph wrong.
 | Property | Value |
 | :--- | :--- |
 | Algorithm | xxHash3-64 |
-| Input | Original **uncompressed** data |
+| Input | Original **uncompressed** payload only — `format` and `original_size` are not hashed |
 | Output | 8 bytes, big-endian |
 
 ```rust
@@ -377,6 +377,18 @@ let checksum: [u8; 8] = xxh3_64(&original_data).to_be_bytes();
 7. If mismatch → reject (integrity failure)
 8. Verify decompressed_data.length == original_size
 ```
+
+The checksum covers the uncompressed payload bytes only. `original_size` sits
+outside the digest but is cross-checked against the decompressed length at
+step 8. `format` sits outside the digest and no step of this flow checks it.
+
+> [!NOTE]
+> **Non-normative — known limit.** A rotted `format` passes the checksum, so the
+> checksum gives a reader that routes on `format` no protection for that field.
+> This section places no obligation on readers; how an SDK treats an unexpected
+> `format` is its own behaviour. The checksum is unkeyed and detects accidental
+> corruption only: anyone who can write cache bytes can recompute it, and tamper
+> resistance comes from AES-256-GCM, never from this checksum.
 
 ---
 
