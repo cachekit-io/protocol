@@ -9,8 +9,9 @@ Usage:
     verify    (default) stdlib-only. Checks the file equals the recipes below,
               derives each vector's depth and declared slots with a header-only
               structural walk (never trusting the hand-entered tags), checks the
-              reject reasons against them, and checks the set still holds a vector
-              each named near-miss structural guard would pass. When `msgpack`
+              reject reasons against them, checks the set still holds a vector
+              each named near-miss structural guard would pass, and checks it holds
+              accept vectors at exactly the depth floor. When `msgpack`
               (msgpack-python) is importable, additionally checks the real decoder
               rejects every reject vector and accepts every accept vector.
               A verdict says nothing about WHEN a reader rejected: a stock decoder
@@ -204,14 +205,18 @@ def walk(data: bytes) -> dict:
     root item or of the input. `complete` is framing only (one root item, nothing owed, no
     trailing bytes): it does not check str UTF-8 or ext contents, so `a1ff` is complete.
 
-    Also reports what four near-miss structural guards conclude, for the coverage checks:
+    Also reports what seven near-miss structural guards conclude, for the coverage checks:
     `per_header_fits` (every claim <= the bytes after its header), `u32_add_fits` (a 32-bit
     running sum checked after every add; a term past 2^32 - 1 does not fit it), `u32_mul_fits`
-    (the map term 2 x pairs computed in 32 bits, summed exactly) and `array_depth` (depth
-    counted on array headers only).
+    (the map term 2 x pairs computed in 32 bits, summed exactly), `array_depth` (depth
+    counted on array headers only), and three exact whole-document sums that each mis-count
+    one kind of header: `pair_as_one_fits` (a map pair counted as one slot),
+    `ext_uncounted_fits` (ext lengths not counted) and `str_bin_uncounted_fits` (str and bin
+    lengths not counted).
     """
     budget = len(data) - 1
     pos = depth = array_depth = arrays_open = slots = sum_add32 = sum_mul = 0
+    sum_pair_as_one = sum_no_ext = sum_no_str_bin = 0
     per_header_fits = u32_add_fits = u32_mul_fits = True
     complete = False
     owed: list[list[int]] = []  # [children still owed, 1 if array] per open collection
@@ -249,6 +254,9 @@ def walk(data: bytes) -> dict:
                 u32_add_fits = False
             sum_mul += claim % 2**32
             u32_mul_fits &= sum_mul <= budget
+            sum_pair_as_one += n
+            sum_no_ext += 0 if kind == "ext" else claim
+            sum_no_str_bin += 0 if kind == "bytes" else claim
             if kind in ("array", "map"):
                 is_array = int(kind == "array")
                 depth = max(depth, len(owed) + 1)
@@ -268,7 +276,9 @@ def walk(data: bytes) -> dict:
             complete = pos == len(data)
             break
     return {"nesting_depth": depth, "declared_slots": slots, "complete": complete, "array_depth": array_depth,
-            "per_header_fits": per_header_fits, "u32_add_fits": u32_add_fits, "u32_mul_fits": u32_mul_fits}
+            "per_header_fits": per_header_fits, "u32_add_fits": u32_add_fits, "u32_mul_fits": u32_mul_fits,
+            "pair_as_one_fits": sum_pair_as_one <= budget, "ext_uncounted_fits": sum_no_ext <= budget,
+            "str_bin_uncounted_fits": sum_no_str_bin <= budget}
 
 
 def check(condition: bool, name: str, detail: str) -> None:  # noqa: FBT001
@@ -314,15 +324,31 @@ def verify(document: dict, *, require_extras: bool = False) -> tuple[int, str]:
           "coverage", "no reject vector passes a 32-bit running sum checked after every add")
     check(some_reject(lambda v, w: v["reject_reasons"] == ["overclaim"] and w["u32_mul_fits"]),
           "coverage", "no reject vector passes a map term computed in 32 bits")
+    check(some_reject(lambda v, w: v["reject_reasons"] == ["overclaim"] and w["pair_as_one_fits"]),
+          "coverage", "no reject vector passes a sum counting a map pair as one slot")
+    check(some_reject(lambda v, w: v["reject_reasons"] == ["overclaim"] and w["ext_uncounted_fits"]),
+          "coverage", "no reject vector passes a sum that does not count ext lengths")
+    check(some_reject(lambda v, w: v["reject_reasons"] == ["overclaim"] and w["str_bin_uncounted_fits"]),
+          "coverage", "no reject vector passes a sum that does not count str/bin lengths")
     check(some_reject(lambda v, w: v["reject_reasons"] == ["depth"] and w["complete"]
                       and w["array_depth"] == MAX_DEPTH_CEILING + 1),
           "coverage", "no complete array spine one level past the depth ceiling")
     check(some_reject(lambda v, w: v["reject_reasons"] == ["depth"] and w["complete"]
                       and v["nesting_depth"] == MAX_DEPTH_CEILING + 1 and w["array_depth"] <= MAX_DEPTH_CEILING),
           "coverage", "no complete map spine one level past the depth ceiling")
+    # Accept side: a bound tighter than the floor rejects a spine exactly at the floor, for arrays and maps alike.
+    # (Every accept vector is already checked complete and no deeper than the floor.)
+    def some_accept(test: Callable[[dict], bool]) -> bool:
+        return any(v["nesting_depth"] == MIN_DEPTH_FLOOR and test(walked[v["name"]]) for v in document["accept_vectors"])
+    check(some_accept(lambda w: w["array_depth"] == MIN_DEPTH_FLOOR),
+          "coverage", "no accept vector is an array spine exactly at the depth floor")
+    check(some_accept(lambda w: w["array_depth"] == 0),
+          "coverage", "no accept vector is a map spine exactly at the depth floor")
     # Negative controls: each near-miss model must also reject something, or the guards above are vacuous.
     for name, flag in (("array16_overclaim_shallow", "per_header_fits"), ("array32_sum_wraps_u32", "u32_add_fits"),
-                       ("array32_sum_wraps_u32", "u32_mul_fits")):
+                       ("array32_sum_wraps_u32", "u32_mul_fits"), ("map32_max_claim_alone", "pair_as_one_fits"),
+                       ("array16_overclaim_shallow", "ext_uncounted_fits"),
+                       ("array16_overclaim_shallow", "str_bin_uncounted_fits")):
         check(name in walked and not walked[name][flag], "coverage", f"{flag} passes {name}: the model is vacuous")
 
     total = len(document["reject_vectors"]) + len(document["accept_vectors"])
