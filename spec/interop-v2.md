@@ -179,20 +179,24 @@ Encoding rules:
   reader in a new language would need *extra* code to accept both shapes — the
   opposite of interop's lowest-implementation-bar goal. Exactly one payload
   encoding is legal: `bin`. Pinned by the `reject_payload_array_of_ints` vector.
-- A reader MUST decode the body under the depth and allocation rules of
-  [interop-mode.md → Decode bounds](interop-mode.md#decode-bounds) (rules 1 and
-  2), the same rules [wire-format.md → Security Limits](wire-format.md#security-limits)
-  applies to the envelope. Every length or count header the reader decodes from
-  the body counts toward that rule's **declared-length budget**: `bin`, `str` and
-  `ext` lengths, and `array` and `map` counts. A body that exceeds the budget MUST
-  be rejected before the reader allocates for any of its headers. Checking each
-  header only against the input that remains after it does not satisfy this. So a
-  5-byte forged `bin32` header must not cause a 4 GiB allocation, and neither may
-  the 7-byte container `c1 02 dd ff ff ff ff`, whose `array32` header declares
-  4,294,967,295 elements. A hand-written parser of the three-field grammar meets
-  the budget without a separate walk, provided it rejects any array count other
-  than 3, and any `bin` length longer than the remaining input, before allocating
-  for either.
+- A reader MUST decode the body under rules 1 and 2 of
+  [interop-mode.md → Decode bounds](interop-mode.md#decode-bounds), the same rules
+  [wire-format.md → Security Limits](wire-format.md#security-limits) applies to the
+  envelope. Rule 3's cache-miss mapping does not apply: a v2 rejection is a hard error.
+  Every length or count header the reader decodes from the body counts toward rule 2's
+  **declared-length budget**: `bin`, `str` and `ext` lengths, and `array` and `map`
+  counts. Checking each header only against the input that remains after it does not
+  satisfy this. For example, a 5-byte forged `bin32` header must not cause a 4 GiB
+  allocation, and neither may the 7-byte container `c1 02 dd ff ff ff ff`, whose
+  `array32` header declares 4,294,967,295 elements. The body's only legal depth is 1,
+  so a reader that enforces element types at the marker level meets rule 1. A
+  hand-written parser of the three-field grammar meets the budget without a separate
+  walk, provided it reads every element itself and, before allocating for anything,
+  rejects any array count other than 3, any marker other than an unsigned-family int at
+  `[0]` and `[1]` or `bin` at `[2]`, and any `bin` length longer than the remaining
+  input. The per-header `bin` check is enough here only because the grammar fixes the
+  count at 3 and admits exactly one length header. A parser that hands any element to a
+  generic MessagePack decoder does not qualify.
 
 The container is deliberately **not** the ByteStorage envelope: no xxHash3-64
 checksum field (integrity comes from the AES-GCM tag when encrypted, and is
@@ -530,7 +534,8 @@ An SDK implementation of interop/v2 MUST:
 2. Write every value as exactly one v2 container; emit canonical MessagePack
    body encoding with a `bin` payload; support `method 0`.
 3. Reject, on read: bad magic/version, wrong element types (including non-`bin`
-   payloads — the array-of-ints shape included), trailing bytes, every
+   payloads — the array-of-ints shape included), a body over the
+   declared-length budget, trailing bytes, every
    Security-Limits violation, unknown methods included (in the
    [check order](#check-order)), LZ4 errors,
    and output-length mismatches.
