@@ -27,7 +27,7 @@
 ## Key Format
 
 > [!IMPORTANT]
-> **Cross-SDK limitation**: The default key format includes a language-specific `func:` segment (Python module path, Rust crate path, Go package path). This means **auto-generated keys are NOT compatible across different language SDKs**. For cross-SDK cache sharing, use [Interop Mode](interop-mode.md) which uses explicit, language-neutral operation names.
+> **Cross-SDK limitation**: cachekit-py's default key format includes a language-specific `func:` segment (the Python module path). This means **auto-generated keys are NOT compatible across different language SDKs**. For cross-SDK cache sharing, use [Interop Mode](interop-mode.md) which uses explicit, language-neutral operation names.
 >
 > Within a single SDK, the same function call with the same arguments will always produce the same key.
 
@@ -37,8 +37,8 @@
 > This 7-segment structure is the **Python SDK's internal convention**, not a
 > server requirement. The CachekitIO backend validates keys security-only (see
 > [Server-Side Requirements](#server-side-requirements)) and otherwise treats
-> them as opaque strings — TypeScript/Rust `{ns}:{hash}` keys and
-> [Interop Mode](interop-mode.md) keys are equally valid on the wire.
+> them as opaque strings — TypeScript `{ns}:{hash}` keys, Rust caller-supplied
+> keys and [Interop Mode](interop-mode.md) keys are equally valid on the wire.
 
 ```
 ns:{namespace}:func:{module}.{qualname}:args:{blake2b_hash}:{ic_flag}{serializer_code}
@@ -191,7 +191,7 @@ enforces is security-relevant (per `saas` issue #91 / SRP refactor):
 | Traversal | `..` is rejected anywhere in the key, and so is a key of exactly `.`. |
 | Namespace | A key starting `ns:` or `nsapi:` must be `{prefix}:{namespace}:{rest}`, with a namespace of 1–64 chars of `[a-zA-Z0-9_-]` and a non-empty `{rest}`; any other key with either prefix is rejected. Keys without either prefix scope to the `default` namespace. |
 | Write spaces | `ns:` keys are mutable only by SDK (`ck_sdk_`) API keys; `nsapi:` keys only by direct (`ck_api_`) API keys. Reads are open to both. Legacy `ck_live_` keys predate the split and are exempt from it — they may write either class. No server-side retirement date is set for `ck_live_`. |
-| Default namespace | Keys with neither prefix (TypeScript/Rust `{ns}:{hash}`, [Interop Mode](interop-mode.md) keys, bare hashes) are an **open** write space: any key class may write them, so the intra-tenant write-space isolation above does not protect them. Per-key namespace grants still apply — an API key restricted to named namespaces must include `default` to read or write unprefixed keys. |
+| Default namespace | Keys with neither prefix (TypeScript `{ns}:{hash}`, Rust caller-supplied keys, [Interop Mode](interop-mode.md) keys, bare hashes) are an **open** write space: any key class may write them, so the intra-tenant write-space isolation above does not protect them. Per-key namespace grants still apply — an API key restricted to named namespaces must include `default` to read or write unprefixed keys. |
 
 Everything else in this document — segment count, `func:`/`args:` literals,
 hash length, metadata flags — is SDK convention for deterministic key
