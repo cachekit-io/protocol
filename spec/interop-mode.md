@@ -51,7 +51,6 @@ The default (auto-mode) key format includes language-specific function identity:
 ```diff
 - Python: ns:users:func:myapp.services.get_user:args:{hash}:1s
 - Rust:   (no auto keygen — caller-supplied key)
-- Go:     ns:users:func:services.GetUser:args:{hash}:1s
 ```
 
 Different function paths produce different keys, so two SDKs write to different cache
