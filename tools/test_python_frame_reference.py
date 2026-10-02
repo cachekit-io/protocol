@@ -370,6 +370,47 @@ check(
     rc == 1 and fail_lines == ["FAIL raw_payload_frame: payload_envelope must be an object, got NoneType"],
 )
 
+# --- arrow_detection is keyed on presence: a malformed one is a FAIL line, never a skip or a traceback ---
+ARROW_NAME = "arrow_dataframe_write"
+committed_det = next(v for v in COMMITTED["frame_vectors"] if v["name"] == ARROW_NAME)["arrow_detection"]
+for label, bad in (
+    ("null", None),
+    ("{}", {}),
+    ("[]", []),
+    ("non-empty list", [1]),
+    ("object missing ipc_magic", {k: v for k, v in committed_det.items() if k != "ipc_magic"}),
+    ("string ipc_magic_offset", {**committed_det, "ipc_magic_offset": "8"}),
+    ("boolean checksum_len", {**committed_det, "checksum_len": True}),
+    ("non-ASCII ipc_magic", {**committed_det, "ipc_magic": "ARROWé"}),
+    # Vacuous byte declarations: an empty slice equals an empty declaration.
+    ("empty ipc_magic at an out-of-range offset", {**committed_det, "ipc_magic": "", "ipc_magic_offset": 999999999}),
+    ("zero checksum_len with empty checksum_hex", {**committed_det, "checksum_len": 0, "checksum_hex": ""}),
+    ("checksum_hex shorter than checksum_len", {**committed_det, "checksum_hex": committed_det["checksum_hex"][:-2]}),
+):
+    doc = copy.deepcopy(COMMITTED)
+    next(v for v in doc["frame_vectors"] if v["name"] == ARROW_NAME)["arrow_detection"] = bad
+    rc, out = run_verify(doc)
+    fail_lines = [line for line in out.splitlines() if line.startswith("FAIL")]
+    check(
+        f"{label} arrow_detection: verify exits 1, and its FAIL line is the only one",
+        rc == 1 and len(fail_lines) == 1 and fail_lines[0].startswith(f"FAIL {ARROW_NAME}: arrow_detection "),
+    )
+# A well-formed declaration that misstates the bytes still reports both byte checks.
+doc = copy.deepcopy(COMMITTED)
+det = next(v for v in doc["frame_vectors"] if v["name"] == ARROW_NAME)["arrow_detection"]
+det["ipc_magic_offset"] += 1
+det["checksum_hex"] = flip_last_nibble(det["checksum_hex"])
+rc, out = run_verify(doc)
+check(
+    "well-formed arrow_detection misstating the bytes: both byte checks FAIL",
+    rc == 1
+    and [line for line in out.splitlines() if line.startswith("FAIL")]
+    == [
+        f"FAIL {ARROW_NAME}: Arrow IPC magic not found at payload offset {det['ipc_magic_offset']}",
+        f"FAIL {ARROW_NAME}: Arrow envelope checksum prefix mismatch",
+    ],
+)
+
 # --- a dangling declaration is a failure, not a silent skip ---
 doc, _ = mutated(lambda t: t.__setitem__("twin_of", "no_such_vector"))
 rc, out = run_verify(doc)
