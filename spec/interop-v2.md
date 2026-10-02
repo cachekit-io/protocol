@@ -188,16 +188,9 @@ Encoding rules:
   `array` and `map` counts. Checking each header only against the input that remains
   after it does not satisfy this. For example, a 5-byte forged `bin32` header must not
   cause a 4 GiB allocation, and neither may the 7-byte container `c1 02 dd ff ff ff ff`,
-  whose `array32` header declares 4,294,967,295 elements. A hand-written parser of the
-  three-field grammar meets rules 1 and 2 without a separate walk, provided it reads
-  every element itself, never through a generic MessagePack decoder, and, before it
-  decodes into an element or allocates anything sized from a header it has read,
-  rejects a first header that is not an `array` of count 3, a marker at `[0]` or `[1]`
-  that is not an unsigned-family int, a marker at `[2]` that is not `bin`, and a `bin`
-  length longer than the remaining input. Such a parser never descends past depth 1,
-  and together with the count and marker checks its `bin` check against the remaining
-  input is enough, because the grammar fixes the count at 3 and admits exactly one
-  length header.
+  whose `array32` header declares 4,294,967,295 elements. The reference parser
+  (`parse_container` in `tools/interop-v2-reference.py`) shows a three-field hand parser
+  that meets both rules without a separate walk.
 
 The container is deliberately **not** the ByteStorage envelope: no xxHash3-64
 checksum field (integrity comes from the AES-GCM tag when encrypted, and is
@@ -386,9 +379,9 @@ Given stored bytes for an interop/v2-configured cache:
 2. Check container[0] == 0xC1 and container[1] == 0x02; else hard error
    (mode-mismatch diagnostics per Mode Discrimination).
 3. Decode exactly one MessagePack document from container[2..]; reject
-   trailing bytes; enforce element types (int, int, bin) and the
-   declared-length budget (see Encoding rules); decode original_size at its
-   full wire value (see Security Limits).
+   trailing bytes; enforce element types (int, int, bin) and Decode bounds
+   rules 1 and 2 (see Encoding rules); decode original_size at its full wire
+   value (see Security Limits).
 4. Enforce every Security Limit above, before any decompression or output
    allocation (see check order below).
 5. method 1: LZ4-block-decompress the payload with original_size as the
@@ -535,8 +528,8 @@ An SDK implementation of interop/v2 MUST:
 2. Write every value as exactly one v2 container; emit canonical MessagePack
    body encoding with a `bin` payload; support `method 0`.
 3. Reject, on read: bad magic/version, wrong element types (including non-`bin`
-   payloads — the array-of-ints shape included), a body over the
-   declared-length budget, trailing bytes, every
+   payloads — the array-of-ints shape included), a truncated body, a body
+   over the depth bound or the declared-length budget, trailing bytes, every
    Security-Limits violation, unknown methods included (in the
    [check order](#check-order)), LZ4 errors,
    and output-length mismatches.
