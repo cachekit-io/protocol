@@ -182,21 +182,22 @@ Encoding rules:
 - A reader MUST decode the body under rules 1 and 2 of
   [interop-mode.md → Decode bounds](interop-mode.md#decode-bounds), the same rules
   [wire-format.md → Security Limits](wire-format.md#security-limits) applies to the
-  envelope. Rule 3's cache-miss mapping does not apply: a v2 rejection is a hard error.
-  Every length or count header the reader decodes from the body counts toward rule 2's
-  **declared-length budget**: `bin`, `str` and `ext` lengths, and `array` and `map`
-  counts. Checking each header only against the input that remains after it does not
-  satisfy this. For example, a 5-byte forged `bin32` header must not cause a 4 GiB
-  allocation, and neither may the 7-byte container `c1 02 dd ff ff ff ff`, whose
-  `array32` header declares 4,294,967,295 elements. The body's only legal depth is 1,
-  so a reader that enforces element types at the marker level meets rule 1. A
-  hand-written parser of the three-field grammar meets the budget without a separate
-  walk, provided it reads every element itself and, before allocating for anything,
-  rejects any array count other than 3, any marker other than an unsigned-family int at
-  `[0]` and `[1]` or `bin` at `[2]`, and any `bin` length longer than the remaining
-  input. The per-header `bin` check is enough here only because the grammar fixes the
-  count at 3 and admits exactly one length header. A parser that hands any element to a
-  generic MessagePack decoder does not qualify.
+  envelope. Rule 3's cache-miss mapping does not apply to the body: rejecting it is a
+  hard error. Every length or count header the reader decodes from the body counts
+  toward rule 2's **declared-length budget**: `bin`, `str` and `ext` lengths, and
+  `array` and `map` counts. Checking each header only against the input that remains
+  after it does not satisfy this. For example, a 5-byte forged `bin32` header must not
+  cause a 4 GiB allocation, and neither may the 7-byte container `c1 02 dd ff ff ff ff`,
+  whose `array32` header declares 4,294,967,295 elements. A hand-written parser of the
+  three-field grammar meets rules 1 and 2 without a separate walk, provided it reads
+  every element itself, never through a generic MessagePack decoder, and, before it
+  decodes into an element or allocates anything sized from a header it has read,
+  rejects a first header that is not an `array` of count 3, a marker at `[0]` or `[1]`
+  that is not an unsigned-family int, a marker at `[2]` that is not `bin`, and a `bin`
+  length longer than the remaining input. Such a parser never descends past depth 1,
+  and together with the count and marker checks its `bin` check against the remaining
+  input is enough, because the grammar fixes the count at 3 and admits exactly one
+  length header.
 
 The container is deliberately **not** the ByteStorage envelope: no xxHash3-64
 checksum field (integrity comes from the AES-GCM tag when encrypted, and is
