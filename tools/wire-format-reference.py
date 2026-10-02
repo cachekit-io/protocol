@@ -832,7 +832,7 @@ def _verify_reject(vec: dict, bases: dict[str, dict], xxh3_64, msgpack, lz4_bloc
         try:
             got = lz4_block.decompress(data, uncompressed_size=vec["original_size"])
         except (lz4_block.LZ4BlockError, OverflowError) as e:
-            raise AssertionError(f"liblz4 no longer returns a short output for this vector: {e}") from e
+            raise AssertionError(f"liblz4 raises on this vector instead of returning a short output: {e!r}") from e
         assert len(got) < vec["original_size"], "liblz4 no longer returns a short output for this vector"
         lz4_note = f"; liblz4 returns {len(got)} B without error"
     elif lz4_block is not None and vec["name"] in (ZERO_LENGTH_REJECT, RATIO_REJECT):

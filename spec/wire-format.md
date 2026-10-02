@@ -565,15 +565,16 @@ the tests detect, and miss, for a reader that runs steps 4 and 5 late:
 
 - A reader that decompresses first with a strict decoder, and lets its error
   propagate, never raises the expected error, so it fails the error assertion.
-- A reader that allocates an output sized from `original_size` before steps 4 and 5,
-  itself or by passing it to a decoder as a size hint, fails the allocation bound,
-  whatever it does with that output.
-- These vectors do not detect three readers that size no buffer from
-  `original_size`. One decompresses first with a growing decoder. One holds a strict
-  decoder's error until after steps 4 and 5. One sizes its output below
-  `original_size`, for example from the length of `compressed_data` or a constant,
-  whether it decompresses into it first with a fixed-output decoder or only reserves
-  it. Each raises exactly the expected error inside the allocation bound. The
+- A reader that allocates an output of `original_size` bytes or more before steps 4
+  and 5, itself or through a decoder it gives `original_size` as a size hint, fails
+  the allocation bound whatever it does with that output, provided the probe counts
+  the allocator that buffer comes from.
+- These vectors do not detect three readers that allocate less than `original_size`.
+  One decompresses first with a growing decoder. One holds a strict decoder's error
+  until after steps 4 and 5. One sizes its output below `original_size`, for example
+  from the length of `compressed_data`, a constant, or `original_size` clamped below
+  itself, whether it decompresses into it first with a fixed-output decoder or only
+  reserves it. Each raises exactly the expected error inside the allocation bound. The
   [ordering rule](#check-order) forbids all three.
 
 The zero-length vector declares `original_size` 0 on purpose. With a non-zero size,

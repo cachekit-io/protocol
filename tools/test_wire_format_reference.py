@@ -58,7 +58,7 @@ Every class below is proven reachable by execution rather than argued from readi
      reader that decompresses first must miss the size-cap and ratio vectors' named
      steps. An allocation probe must catch a reader that allocates and frees
      original_size before its checks, which no error assertion can. A liblz4 call
-     that raises inside a reject vector's verification must fail that vector by name,
+     that raises anything but the refusal a vector pins must fail that vector by name,
      not escape verify as a traceback.
 
 A guard with no mutation test is one refactor away from being deleted by someone
@@ -780,10 +780,10 @@ def check_reject_liblz4_raises() -> list[str]:
     length vector may fail on it; OverflowError is never a refusal.
     """
     failures = []
-    for error, named in (
-        ("LZ4BlockError", ("reject_decompressed_length_mismatch",)),
-        ("OverflowError", ("reject_decompressed_length_mismatch", "reject_zero_length_compressed_data",
-                           "reject_ratio_bomb")),
+    refusing = ("reject_zero_length_compressed_data", "reject_ratio_bomb")
+    for error, named, refused in (
+        ("LZ4BlockError", ("reject_decompressed_length_mismatch",), refusing),
+        ("OverflowError", ("reject_decompressed_length_mismatch", *refusing), ()),
     ):
         out, err = io.StringIO(), io.StringIO()
         with (
@@ -795,8 +795,19 @@ def check_reject_liblz4_raises() -> list[str]:
                 code = _load_tool().verify()
             except Exception as e:  # noqa: BLE001 - an escape here is the regression under test
                 code = f"escaped verify: {e!r}"
-        missing = [name for name in named if f"FAIL {name}: AssertionError(" not in err.getvalue()]
-        label = f"liblz4 decompress raising {error}: exit {code}, missing named FAIL {missing}"
+        # The stand-in's own message on the FAIL line, so a builder or msgpack
+        # AssertionError on the same vector cannot satisfy the case.
+        missing = [
+            name for name in named
+            if not re.search(rf"FAIL {name}: AssertionError\(.*stand-in liblz4 raises", err.getvalue())
+        ]
+        # A pinned refusal must still pass, or a branch that fails on it would go unseen
+        # on the stdlib leg.
+        missing += [
+            f"ok {name}" for name in refused
+            if not re.search(rf"ok {name}: .*liblz4 refuses the block", out.getvalue())
+        ]
+        label = f"liblz4 decompress raising {error}: exit {code}, missing {missing}"
         _report(failures, code == 1 and not missing, label)
     return failures
 
