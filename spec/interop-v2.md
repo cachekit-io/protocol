@@ -407,11 +407,11 @@ of the payload for `method 0`, or a value buffer sized from `original_size`. The
 ordering rule above restricts only output buffers. Before step 4 passes, a reader MAY
 also copy input bytes, for example into the step 1 AES-GCM plaintext, a copy of the
 container body, or the buffer a copying MessagePack decoder fills for the payload `bin`
-once its length has passed the remaining-bytes check in Encoding rules. Each such copy
-MUST be no larger than the bytes it is copied or decrypted from, and MUST NOT grow
-before step 4 passes. A
-`method 0` reader MAY return its payload copy, or a view into the step 1 plaintext or the
-stored bytes, as its output once step 4 passes.
+once its length has passed the remaining-bytes check in Encoding rules and the body is
+within the declared-length budget. Each such copy MUST be no larger than the bytes it is
+copied or decrypted from, and MUST NOT grow before step 4 passes. A `method 0` reader MAY
+return its payload copy, or a view into the step 1 plaintext or the stored bytes, as its
+output once step 4 passes.
 
 Step order is normative. In the encrypted path the AES-GCM tag is verified (step 1)
 before any container parsing or decompression — hostile bytes never reach the LZ4 decoder
