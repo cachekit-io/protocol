@@ -232,6 +232,94 @@ def _twin_divergence(twin: dict, by_name: dict[str, dict]) -> str | None:
     return f"declared twin_of {base['name']!r} but differs beyond envelope encoding: " + ", ".join(mismatches)
 
 
+def _envelope_failure(env: object, payload: bytes) -> tuple[str | None, str | None]:
+    """Why `payload` fails its `payload_envelope` declaration, else (None, the observed encoding).
+
+    Guard clauses, one per check, in the order a reader depends on them: each
+    later check assumes the earlier ones held. Returns the reason instead of
+    printing, like _twin_divergence, and never raises on a malformed vector.
+    Explicit returns, not `assert`: `python -O` strips asserts.
+    """
+    if not isinstance(env, dict):
+        return f"payload_envelope must be an object, got {type(env).__name__}", None
+    declared = env.get("envelope_encoding")
+    if declared is None:
+        return "payload_envelope must declare envelope_encoding ('bin' or 'int-array')", None
+    # Shared, stdlib-only codec (wire-format-reference.py), so the no-dependency
+    # CI leg proves the protocol 1.1 dual-read property on its own instead of
+    # delegating it to the Node cross-check. decode_envelope also enforces the
+    # exclusions from the 1.1 flip: checksum stays an array of 8 integers and
+    # format stays a fixstr, in BOTH encodings.
+    try:
+        data, checksum, size, fmt, actual = _wire.decode_envelope(payload)
+    except ValueError as e:
+        return f"envelope decode: {e}", None
+    if actual != declared:
+        return f"compressed_data is {actual}, vector declares {declared}", None
+    # decode_envelope tolerates reader-lenient forms no rmp_serde writer emits
+    # (array16/array32 outer header, non-shortest uints); re-encode byte-fidelity
+    # pins the canonical writer form, incl. the fixarray(4) marker.
+    if _wire.encode_envelope(data, checksum, size, fmt, encoding=actual) != payload:
+        return "envelope is not in canonical shortest-form encoding (re-encode differs)", None
+    drifted = [
+        fname
+        for fname, got in (
+            ("compressed_data_hex", data.hex()),
+            ("checksum_hex", checksum.hex()),
+            ("original_size", size),
+            ("format", fmt),
+        )
+        # Type-strict: 32.0 == 32 (and True == 1) in Python, but a typed reader
+        # rejects a non-integer size.
+        if type(env.get(fname)) is not type(got) or env.get(fname) != got
+    ]
+    if drifted:
+        return f"payload_envelope field(s) disagree with the envelope bytes: {', '.join(drifted)}", None
+    # Checked against the bytes, not only twin against twin: two twins carrying
+    # the same wrong value (or one vector with no twin) must still fail here.
+    try:
+        inner = _lz4_block_decompress(data, size)
+    except ValueError as e:
+        return f"LZ4 decompress: {e}", None
+    if env.get("inner_msgpack_hex") != inner.hex():
+        return "decompressed payload does not match payload_envelope.inner_msgpack_hex", None
+    return None, actual
+
+
+def _arrow_detection_failures(det: object, payload: bytes) -> list[str]:
+    """Why `payload` fails its `arrow_detection` declaration; empty when it holds.
+
+    A malformed declaration is one reason, never a traceback. The two byte
+    checks are independent, so both are reported when both fail.
+    """
+    if not isinstance(det, dict):
+        return [f"arrow_detection must be an object, got {type(det).__name__}"]
+    # `type(...) is int`, not isinstance: bool is an int subclass, and JSON true
+    # is not an offset. Non-negative, because a negative slice reads from the end.
+    shape = {
+        "checksum_len": lambda v: type(v) is int and v >= 0,
+        "checksum_hex": lambda v: type(v) is str,
+        "ipc_magic_offset": lambda v: type(v) is int and v >= 0,
+        "ipc_magic": lambda v: type(v) is str and v.isascii(),
+    }
+    bad = [field for field, ok in shape.items() if field not in det or not ok(det[field])]
+    if bad:
+        return [
+            (
+                "arrow_detection needs checksum_len and ipc_magic_offset as non-negative integers and "
+                f"checksum_hex and ipc_magic as (ASCII) strings; missing or wrong type: {', '.join(bad)}"
+            )
+        ]
+    failures = []
+    off = det["ipc_magic_offset"]
+    magic = det["ipc_magic"].encode("ascii")
+    if payload[off : off + len(magic)] != magic:
+        failures.append(f"Arrow IPC magic not found at payload offset {off}")
+    if payload[: det["checksum_len"]].hex() != det["checksum_hex"]:
+        failures.append("Arrow envelope checksum prefix mismatch")
+    return failures
+
+
 def verify() -> int:
     doc = _load_fixture()
     failures = 0
@@ -267,80 +355,19 @@ def verify() -> int:
         if "expected_payload_hex" in vec and payload.hex() != vec["expected_payload_hex"]:
             print(f"FAIL {name}: payload mismatch")
             vec_failed += 1
-        # Keyed on presence, not on None: a present JSON null is a non-object,
-        # not "absent", so it cannot skip every envelope check below.
-        env = vec.get("payload_envelope")
-        if "payload_envelope" in vec and not isinstance(env, dict):
-            print(f"FAIL {name}: payload_envelope must be an object, got {type(env).__name__}")
-            vec_failed += 1
-        elif "payload_envelope" in vec:
-            declared = env.get("envelope_encoding")
-            if declared is None:
-                print(f"FAIL {name}: payload_envelope must declare envelope_encoding ('bin' or 'int-array')")
+        # Keyed on presence, not on None or truthiness: a present null, {} or []
+        # is malformed, not "absent", so it cannot skip the checks below.
+        if "payload_envelope" in vec:
+            why, encoding = _envelope_failure(vec["payload_envelope"], payload)
+            if why:
+                print(f"FAIL {name}: {why}")
                 vec_failed += 1
             else:
-                # Shared, stdlib-only codec (wire-format-reference.py), so the
-                # no-dependency CI leg proves the protocol 1.1 dual-read
-                # property on its own instead of delegating it to the Node
-                # cross-check. decode_envelope also enforces the exclusions
-                # from the 1.1 flip: checksum stays an array of 8 integers and
-                # format stays a fixstr, in BOTH encodings.
-                try:
-                    data, checksum, size, fmt, actual = _wire.decode_envelope(payload)
-                except ValueError as e:
-                    print(f"FAIL {name}: envelope decode: {e}")
-                    vec_failed += 1
-                else:
-                    if actual != declared:
-                        print(f"FAIL {name}: compressed_data is {actual}, vector declares {declared}")
-                        vec_failed += 1
-                    elif _wire.encode_envelope(data, checksum, size, fmt, encoding=actual) != payload:
-                        # decode_envelope tolerates reader-lenient forms no
-                        # rmp_serde writer emits (array16/array32 outer header,
-                        # non-shortest uints); re-encode byte-fidelity pins the
-                        # canonical writer form, incl. the fixarray(4) marker.
-                        print(f"FAIL {name}: envelope is not in canonical shortest-form encoding (re-encode differs)")
-                        vec_failed += 1
-                    else:
-                        drifted = [
-                            fname
-                            for fname, got in (
-                                ("compressed_data_hex", data.hex()),
-                                ("checksum_hex", checksum.hex()),
-                                ("original_size", size),
-                                ("format", fmt),
-                            )
-                            # Type-strict: 32.0 == 32 (and True == 1) in Python,
-                            # but a typed reader rejects a non-integer size.
-                            if type(env.get(fname)) is not type(got) or env.get(fname) != got
-                        ]
-                        if drifted:
-                            print(f"FAIL {name}: payload_envelope field(s) disagree with the envelope bytes: {', '.join(drifted)}")
-                            vec_failed += 1
-                        else:
-                            # Checked against the bytes, not only twin against
-                            # twin: two twins carrying the same wrong value (or
-                            # one vector with no twin) must still fail here.
-                            try:
-                                inner = _lz4_block_decompress(data, size)
-                            except ValueError as e:
-                                print(f"FAIL {name}: LZ4 decompress: {e}")
-                                vec_failed += 1
-                            else:
-                                if env.get("inner_msgpack_hex") != inner.hex():
-                                    print(f"FAIL {name}: decompressed payload does not match payload_envelope.inner_msgpack_hex")
-                                    vec_failed += 1
-                                else:
-                                    observed_encodings.add(actual)
-        det = vec.get("arrow_detection")
-        if det:
-            off = det["ipc_magic_offset"]
-            magic = det["ipc_magic"].encode("ascii")
-            if payload[off : off + len(magic)] != magic:
-                print(f"FAIL {name}: Arrow IPC magic not found at payload offset {off}")
-                vec_failed += 1
-            if payload[: det["checksum_len"]].hex() != det["checksum_hex"]:
-                print(f"FAIL {name}: Arrow envelope checksum prefix mismatch")
+                # Only a fully verified envelope counts toward the coverage floor.
+                observed_encodings.add(encoding)
+        if "arrow_detection" in vec:
+            for why in _arrow_detection_failures(vec["arrow_detection"], payload):
+                print(f"FAIL {name}: {why}")
                 vec_failed += 1
         if "twin_of" in vec:
             # CI gate for the twin claim (LAB-3967). Hard fail: the operator's
