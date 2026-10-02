@@ -3,7 +3,7 @@
 
 Same doctrine as test_wire_format_reference.py: a conformance gate is proven by
 poisoning the fixture and watching it go red, not by reading it. Every case below
-exited 0 on protocol#60's first revision (LAB-687 expert panel, 2026-09-02) — the
+exited 0 on protocol#60's first revision (2026-09-02) — the
 keyring block sat behind the `cryptography` guard, so the stdlib CI lane verified
 nothing, and a blanked fingerprint selection printed `ok ... None`.
 

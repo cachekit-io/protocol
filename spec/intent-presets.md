@@ -12,8 +12,7 @@
 > This document changes no SDK; it is the target the per-SDK alignment tickets in
 > [SDK Conformance](#sdk-conformance) converge on. Facts re-verified against
 > `cachekit-py@2f7c979`, `cachekit-rs@6587ce9` and `cachekit-ts@379847c` (`main`, 2026-09-22).
-> Revised 2026-09-22 against the expert-panel G3(a) FIX-FIRST verdict and Helly R's
-> cross-family HIGH finding: tenant_id resolution (new rule), the L1/TTL rule
+> Revised 2026-09-22: tenant_id resolution (new rule), the L1/TTL rule
 > contradictions, the false Python `secure`-ciphertext conformance claim, the
 > silent-downgrade migration gap, and the `from_env()` activation exemption are fixed
 > below; each newly-non-conformant SDK cell links its alignment ticket.

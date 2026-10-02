@@ -338,8 +338,7 @@ fails CI rather than quietly making this paragraph wrong.
 > emits five (`… ea 50` + `41`×5). Both are valid LZ4 blocks and both
 > decompress to the input; the divergence is encode-only. A third-party writer
 > following the Library Mapping will therefore produce a different — equally
-> conforming — envelope for this input. (LAB-1751; found by execution during
-> the LAB-868 panel review.)
+> conforming — envelope for this input.
 
 ---
 
