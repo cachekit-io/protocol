@@ -77,11 +77,23 @@ WALK_TABLE = {
     "d801" + "00" * 16: (0, 0, True, 0),         # fixext16
     "cf" + "00" * 8: (0, 0, True, 0),            # uint64
     "ca00000000": (0, 0, True, 0),               # float32
+    "cb" + "00" * 8: (0, 0, True, 0),            # float64
+    "cc00": (0, 0, True, 0),                     # uint8
+    "cd0000": (0, 0, True, 0),                   # uint16
+    "ce00000000": (0, 0, True, 0),               # uint32
+    "d000": (0, 0, True, 0),                     # int8
+    "d10000": (0, 0, True, 0),                   # int16
+    "d200000000": (0, 0, True, 0),               # int32
+    "d3" + "00" * 8: (0, 0, True, 0),            # int64
+    "d5" + "00" * 3: (0, 0, True, 0),            # fixext2: type byte + 2
+    "d6" + "00" * 5: (0, 0, True, 0),            # fixext4
+    "d7" + "00" * 9: (0, 0, True, 0),            # fixext8
     "cf00": (0, 0, False, 0),                    # fixed payload cut short
     "90": (1, 0, True, 1),                       # empty array still counts a level
     "81a0c0": (1, 2, True, 0),                   # fixmap: one level, two slots
     "8f": (1, 30, False, 0),                     # fixmap mask 0x0f
     "9181a0c0": (2, 3, True, 1),                 # map inside array: array_depth counts arrays only
+    "81a091c0": (2, 3, True, 1),                 # array inside map: an open map is not an open array
     "9291c091c0": (2, 4, True, 2),               # sibling arrays: a closed array leaves the count
     "92dc0000": (2, 2, False, 2),                # truncated with the sum inside the budget
     "dc00": (0, 0, False, 0),                    # length field cut short
@@ -159,13 +171,34 @@ def main() -> None:
     del cut_accept["accept_vectors"][at]["reject_reasons"]
     results.append(expect_raises("accept complete", with_recipes(cut_accept), "not one complete document"))
 
+    # A reject vector whose tags name no spec rule must fail the stdlib-only leg too.
+    def stdlib_only(doc: dict) -> Callable[[], object]:
+        def run() -> object:
+            with patch.object(dbr, "build", lambda: copy.deepcopy(doc)):
+                return with_msgpack(None, doc)()
+        return run
+    for case, bad in (("empty reject_reasons", dbr.recipe("t", "", "91", 1, "c0", depth=1, slots=1, reasons=[])),
+                      ("unknown reject reason", dbr.recipe("t", "", "c0", 2, depth=0, slots=0, reasons=["trailing"])),
+                      ("unknown reason beside a known one",
+                       dbr.recipe("t", "", "95", 1, "c0c0c0c0", depth=1, slots=5, reasons=["overclaim", "trailing"])),
+                      ("accept vector filed as reject", copy.deepcopy(good["accept_vectors"][0]))):
+        doc = copy.deepcopy(good)
+        doc["reject_vectors"].append(bad)
+        results.append(expect_raises(case, stdlib_only(doc), "reject_reasons must name"))
+
+    # Two vectors sharing a name: the later walk overwrites the earlier, so the coverage checks would read
+    # an accept vector's walk for a reject vector.
+    dup = copy.deepcopy(good)
+    dup["accept_vectors"][0]["name"] = dup["reject_vectors"][0]["name"]
+    results.append(expect_raises("duplicate vector name", with_recipes(dup), "duplicate vector names"))
+
     # Coverage: dropping exactly one discriminating vector must fire its guard.
-    def without(name: str) -> dict:
+    def without(name: str, *twins: dict) -> dict:
         doc = copy.deepcopy(good)
         kept = [v for v in doc["reject_vectors"] if v["name"] != name]
         if len(kept) != len(doc["reject_vectors"]) - 1:
             sys.exit(f"FAIL coverage test names no vector: {name}")  # a typo must not pass vacuously
-        doc["reject_vectors"] = kept
+        doc["reject_vectors"] = kept + list(twins)
         return doc
     for name, needle in (("nested_array16_each_header_fits_sum_overclaims", "per-header checks pass"),
                          ("array32_sum_wraps_u32_small_first", "32-bit running sum"),
@@ -173,6 +206,30 @@ def main() -> None:
                          ("nested_fixarray_depth_1025_complete", "complete array spine"),
                          ("nested_fixmap_depth_1025_complete", "complete map spine")):
         results.append(expect_raises(f"coverage: drop {name}", with_recipes(without(name)), needle))
+
+    # Each coverage refinement must bind: swap the vector for a twin that breaks only that refinement.
+    a16 = "dc" + dbr.u16(2000)
+    ceil = dbr.MAX_DEPTH_CEILING
+    for name, twin, needle in (
+        ("nested_array16_each_header_fits_sum_overclaims",  # per-header fits, but one level deep
+         dbr.recipe("t", "", "92", 1, "a1c0", depth=1, slots=3, reasons=["overclaim"]), "per-header checks pass"),
+        ("nested_array16_each_header_fits_sum_overclaims",  # per-header fits, but at the depth floor
+         dbr.recipe("t", "", a16, dbr.MIN_DEPTH_FLOOR, "c0" * 2000, depth=dbr.MIN_DEPTH_FLOOR,
+                    slots=dbr.MIN_DEPTH_FLOOR * 2000, reasons=["overclaim"]), "per-header checks pass"),
+        ("nested_fixarray_depth_1025_complete",  # a trailing byte: not one complete document
+         dbr.recipe("t", "", "91", ceil + 1, "c0c0", depth=ceil + 1, slots=ceil + 1, reasons=["depth"]),
+         "complete array spine"),
+        ("nested_fixarray_depth_1025_complete",  # complete, but two levels past the ceiling
+         dbr.recipe("t", "", "91", ceil + 2, "c0", depth=ceil + 2, slots=ceil + 2, reasons=["depth"]),
+         "complete array spine"),
+        ("nested_fixmap_depth_1025_complete",
+         dbr.recipe("t", "", "81a0", ceil + 1, "c0c0", depth=ceil + 1, slots=2 * (ceil + 1), reasons=["depth"]),
+         "complete map spine"),
+        ("nested_fixmap_depth_1025_complete",  # complete, but two levels past the ceiling
+         dbr.recipe("t", "", "81a0", ceil + 2, "c0", depth=ceil + 2, slots=2 * (ceil + 2), reasons=["depth"]),
+         "complete map spine"),
+    ):
+        results.append(expect_raises(f"coverage: twin of {name}", with_recipes(without(name, twin)), needle))
 
     # Negative controls: a near-miss model forced to always pass must be caught.
     real_walk = dbr.walk

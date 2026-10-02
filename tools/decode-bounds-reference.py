@@ -259,8 +259,6 @@ def walk(data: bytes) -> dict:
                     continue
             else:
                 pos += n + (kind == "ext")  # payload (+ the ext type byte)
-        if pos > len(data):
-            break
         while owed:  # one item completed: settle every collection it finishes
             owed[-1][0] -= 1
             if owed[-1][0]:
@@ -284,6 +282,12 @@ def verify(document: dict, *, require_extras: bool = False) -> tuple[int, str]:
     check(document == fresh, "document", "vector file differs from the recipes; run `generate`")
     # input_hex / input_len are derived from `construction` by recipe(), so the equality
     # above already proves them; the hand-entered tags are checked against the walk.
+    for v in document["reject_vectors"]:  # its own loop: a reject vector equal to an accept vector is still checked
+        reasons = v.get("reject_reasons", [])
+        check(bool(reasons) and set(reasons) <= {"depth", "overclaim"}, v["name"],
+              "reject_reasons must name at least one rule, each depth or overclaim")
+    names = [v["name"] for v in document["reject_vectors"] + document["accept_vectors"]]
+    check(len(names) == len(set(names)), "document", "duplicate vector names (the walk index is keyed by name)")
     walked = {}
     for v in document["reject_vectors"] + document["accept_vectors"]:
         w = walked[v["name"]] = walk(bytes.fromhex(v["input_hex"]))
