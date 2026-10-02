@@ -286,6 +286,8 @@ def verify(document: dict, *, require_extras: bool = False) -> tuple[int, str]:
         reasons = v.get("reject_reasons", [])
         check(bool(reasons) and set(reasons) <= {"depth", "overclaim"}, v["name"],
               "reject_reasons must name at least one rule, each depth or overclaim")
+    names = [v["name"] for v in document["reject_vectors"] + document["accept_vectors"]]
+    check(len(names) == len(set(names)), "document", "duplicate vector names (the walk index is keyed by name)")
     walked = {}
     for v in document["reject_vectors"] + document["accept_vectors"]:
         w = walked[v["name"]] = walk(bytes.fromhex(v["input_hex"]))
