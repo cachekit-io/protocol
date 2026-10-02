@@ -8,7 +8,7 @@
     "max_uncompressed_size": 536870912,
     "max_compressed_size": 536870912,
     "max_compression_ratio": 1000,
-    "note": "All enforced BEFORE decompression, integer arithmetic only \u2014 spec/interop-v2.md#security-limits-decompression-bounds"
+    "note": "All enforced before any decompression or output allocation, integer arithmetic only \u2014 spec/interop-v2.md#check-order"
   },
   "compressed_bytes_note": "method-1 payload bytes are NOT canonical: conformant LZ4 encoders legally differ. Vectors pin the reference compressor's output for READ-side conformance; writers may produce different valid LZ4 for the same value.",
   "error_vectors_note": "reject_* vectors MUST be rejected with an error; the 'error' text is a maintainer note, not a normative message.",

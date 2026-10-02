@@ -210,7 +210,7 @@ function parseContainer(data) {
 function decodeContainer(data) {
   const { method, originalSize, payload } = parseContainer(data);
   if (method !== 0n && method !== 1n) throw new Error(`unknown compression method ${method}`);
-  // Security Limits — all BEFORE decompression, integer arithmetic (BigInt).
+  // Security Limits (spec/interop-v2.md#check-order), integer arithmetic (BigInt).
   if (originalSize > MAX_UNCOMPRESSED) throw new Error("original_size exceeds max uncompressed size");
   if (payload.length > MAX_COMPRESSED) throw new Error("payload exceeds max compressed size");
   if (method === 1n) {
