@@ -179,18 +179,19 @@ Encoding rules:
   reader in a new language would need *extra* code to accept both shapes — the
   opposite of interop's lowest-implementation-bar goal. Exactly one payload
   encoding is legal: `bin`. Pinned by the `reject_payload_array_of_ints` vector.
-- A reader MUST decode the body under rules 1 and 2 of
+- A reader MUST decode the body (`container[2..]`) under rules 1 and 2 of
   [interop-mode.md → Decode bounds](interop-mode.md#decode-bounds), the same rules
   [wire-format.md → Security Limits](wire-format.md#security-limits) applies to the
-  envelope. Rule 3's cache-miss mapping does not apply to the body: rejecting it is a
-  hard error. Every length or count header the reader decodes from the body counts
+  envelope. Rule 3's cache-miss mapping does not apply to the body: a rejected body is
+  a hard error. Every length or count header the reader decodes from the body counts
   toward rule 2's **declared-length budget**: `bin`, `str` and `ext` lengths, and
-  `array` and `map` counts. Checking each header only against the input that remains
-  after it does not satisfy this. For example, a 5-byte forged `bin32` header must not
-  cause a 4 GiB allocation, and neither may the 7-byte container `c1 02 dd ff ff ff ff`,
-  whose `array32` header declares 4,294,967,295 elements. The reference parser
-  (`parse_container` in `tools/interop-v2-reference.py`) shows a three-field hand parser
-  that meets both rules without a separate walk.
+  `array` and `map` counts. A reader MUST also reject a `bin`, `str` or `ext` length
+  greater than the body bytes remaining after its header, before it reads or allocates
+  for that data; this check alone does not satisfy rule 2. For example, a 5-byte forged
+  `bin32` header must not cause a 4 GiB allocation, and neither may the 7-byte container
+  `c1 02 dd ff ff ff ff`, whose `array32` header declares 4,294,967,295 elements. The
+  reference parser (`parse_container` in `tools/interop-v2-reference.py`) shows a
+  three-field hand parser that meets both rules without a separate walk.
 
 The container is deliberately **not** the ByteStorage envelope: no xxHash3-64
 checksum field (integrity comes from the AES-GCM tag when encrypted, and is
@@ -402,8 +403,9 @@ of the payload for `method 0`, or a value buffer sized from `original_size`. The
 ordering rule above restricts only output buffers. Before step 4 passes, a reader MAY
 also copy input bytes, for example into the step 1 AES-GCM plaintext, a copy of the
 container body, or the buffer a copying MessagePack decoder fills for the payload `bin`
-within the declared-length budget. Each such copy MUST be no larger than the
-bytes it is copied or decrypted from, and MUST NOT grow before step 4 passes. A
+once its length has passed the remaining-bytes check in Encoding rules. Each such copy
+MUST be no larger than the bytes it is copied or decrypted from, and MUST NOT grow
+before step 4 passes. A
 `method 0` reader MAY return its payload copy, or a view into the step 1 plaintext or the
 stored bytes, as its output once step 4 passes.
 
