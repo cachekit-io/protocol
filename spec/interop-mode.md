@@ -76,8 +76,8 @@ Interop mode fixes both, opt-in, without touching auto-mode behavior.
 
 | | Auto mode (default) | Interop mode (opt-in) |
 | :--- | :--- | :--- |
-| Key format | `ns:{ns}:func:{mod.qualname}:args:{hash}:{flags}` | `{namespace}:{operation}:{args_hash}` |
-| Operation identity | Derived from language function path | **Explicit, user-supplied** |
+| Key format | Python `ns:{ns}:func:{mod.qualname}:args:{hash}:{flags}`; TypeScript `{namespace}:{hash}`; Rust none (caller-supplied key) | `{namespace}:{operation}:{args_hash}` |
+| Operation identity | Python: derived from the function path; TypeScript: the caller's `namespace` string | **Explicit, user-supplied** |
 | Value format | SDK-internal container — differs per SDK ([wire-format.md](wire-format.md#sdk-storage-containers-auto-mode)) | **Plain MessagePack, no envelope** |
 | Argument hashing | Per-SDK normalization | **Canonical, byte-identical across SDKs** |
 | Cross-SDK reads | ❌ | ✅ |
@@ -558,7 +558,7 @@ not re-litigated by accident.
 | **Sort = Unicode code point order** (≡ UTF-8 byte order), stated explicitly | "Lexicographic" (unspecified) | "Lexicographic" is ambiguous: JS default sort (UTF-16 code units) disagrees with UTF-8 byte order on supplementary-plane characters; locale collation would be nondeterministic. Code-point order is total, locale-free, and equals the byte order of the encoded form. |
 | **Sets sorted by encoded bytes** | Sort "naturally" per element type | Natural ordering needs a cross-type comparison function every language must reimplement identically (int vs str vs array…). Encoded-byte order falls out of the encoder for free and is trivially total. |
 | **Datetime = floor-to-µs, one float64 division** | "UTC Unix timestamp" (unspecified arithmetic) | Naive float arithmetic differs across languages in the last bit. Integer µs + a single IEEE 754 division is bit-deterministic everywhere. |
-| **Blake2b-256 retained** | SHA-256 | Python and TypeScript already ship Blake2b (`hashlib`, `@noble/hashes`); Rust adds one small `blake2` crate (it has no in-SDK keygen today). Introducing a second hash algorithm would grow the audit surface for zero benefit and split key generation from auto mode. |
+| **Blake2b-256 retained** | SHA-256 | Python and TypeScript already ship Blake2b (`hashlib`, `@noble/hashes`); Rust adds one small `blake2` crate (its only in-SDK keygen is interop mode). Introducing a second hash algorithm would grow the audit surface for zero benefit and split key generation from auto mode. |
 | **No version segment in the key** | `iv1:` prefix or a 4th segment | The issue pins the 3-segment format. Versioning-by-mode-name (interop/v1 → a new mode) is sufficient: canonicalization changes alter hashes, so old and new writers merely miss each other's entries — a cache-warm cost, not corruption. |
 | **Closed data model, errors on everything else** | Best-effort coercion | A value that hashes on one SDK and throws on another is annoying; a value that silently hashes *differently* on two SDKs is a debugging nightmare. Errors are loud and local. |
 | **Lowercase-only segments** | Free-form segment strings | Cross-language casing conventions guarantee silent key divergence (`get_user` vs `GetUser`). Rejecting uppercase makes the divergence a startup error. |
