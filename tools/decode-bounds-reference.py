@@ -259,8 +259,6 @@ def walk(data: bytes) -> dict:
                     continue
             else:
                 pos += n + (kind == "ext")  # payload (+ the ext type byte)
-        if pos > len(data):
-            break
         while owed:  # one item completed: settle every collection it finishes
             owed[-1][0] -= 1
             if owed[-1][0]:
@@ -290,6 +288,7 @@ def verify(document: dict, *, require_extras: bool = False) -> tuple[int, str]:
         check(w["nesting_depth"] == v["nesting_depth"], v["name"], "nesting_depth differs from the walk")
         check(w["declared_slots"] == v["declared_slots"], v["name"], "declared_slots differs from the walk")
         reasons = v.get("reject_reasons", [])
+        check(bool(reasons) or v in document["accept_vectors"], v["name"], "reject vector has no reject_reasons")
         check(("depth" in reasons) == (v["nesting_depth"] > MAX_DEPTH_CEILING), v["name"], "depth tag mismatch")
         # Slot budget: every declared element (including a nested header) costs >= 1 input
         # byte; only the root header is not itself an element. So sum(declared) <= len - 1.

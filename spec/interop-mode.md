@@ -500,7 +500,8 @@ A reader MUST therefore:
    (`nested_array16_each_header_fits_sum_overclaims`). A map pair counts as two slots
    (key + value). Exceeding the sum is sufficient to reject but does not define an
    incomplete document: `92 dc 00 00` sums to 2 and is still truncated. A reader MUST
-   reject a structurally incomplete document as well. Every per-header term and the running sum MUST be computed in at least
+   reject a structurally incomplete document as well. Every per-header term and the
+   running sum MUST be computed in at least
    64 bits or with checked/saturating arithmetic, and an overflow is itself a
    rejection: two `array32` headers already exceed 2³², and a 32-bit accumulator that
    wraps to a small value passes the budget (`array32_sum_wraps_u32`,
@@ -519,16 +520,17 @@ re-open the amplifier. A verdict cannot show that, because it does not say *when
 reader rejected: a stock decoder's default limits reject every reject vector today,
 and a reader with per-header checks alone rejects the incomplete ones at end of input,
 after it has pre-allocated for them. An SDK's conformance test MUST therefore assert
-that its structural guard rejects each reject vector before anything is materialised,
+that a pre-decode check rejects each reject vector before anything is materialised,
 by driving each reject vector through every untrusted decode entry point (value
 reads, and any other untrusted decode such as invalidation events), below the point
 where the SDK turns the error into a cache miss or drops it, and asserting an error
 that only a pre-decode check produces: the structural guard, or a size cap that entry
-point applies ahead of it. Calling the guard directly as well is fine, but on its own
-does not show that the read path runs it. A run that only asserts that a decode fails
-does not demonstrate conformance.
+point applies ahead of it; where a size cap rejects a vector first, the test MUST
+also call that entry point's structural guard directly with it. Calling the guard
+directly as well is fine, but on its own does not show that each entry point runs
+it. A run that only asserts that a decode fails does not demonstrate conformance.
 [`test-vectors/decode-bounds.json`](../test-vectors/decode-bounds.json) pins the
-bytes every decoder MUST reject (17) and MUST accept (3); the same rules apply to
+bytes every decoder MUST reject and MUST accept; the same rules apply to
 any other untrusted MessagePack decode in an SDK (auto-mode payloads after the
 envelope is unwrapped, invalidation events).
 
