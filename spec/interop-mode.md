@@ -526,10 +526,10 @@ reads, and any other untrusted decode such as invalidation events), below the po
 where the SDK turns the error into a cache miss or drops it, and asserting an error
 that only a pre-decode check produces: the structural guard, or a size cap that entry
 point applies ahead of it; where a size cap rejects a vector first, the test MUST
-also call that entry point's structural guard directly with it. Outside that case,
-calling the guard directly as well is fine, but on its own it does not show that
-each entry point runs it. A run that only asserts that a decode fails does not
-demonstrate conformance.
+also call that entry point's structural guard directly with it and assert the
+guard's own rejection. Outside that case, calling the guard directly as well is
+fine, but on its own it does not show that each entry point runs it. A run that
+only asserts that a decode fails does not demonstrate conformance.
 [`test-vectors/decode-bounds.json`](../test-vectors/decode-bounds.json) pins the
 bytes every decoder MUST reject and MUST accept; the same rules apply to
 any other untrusted MessagePack decode in an SDK (auto-mode payloads after the

@@ -186,7 +186,8 @@ def main() -> None:
         doc["reject_vectors"].append(bad)
         results.append(expect_raises(case, stdlib_only(doc), "reject_reasons must name"))
 
-    # A reject vector renamed onto an accept vector would read the accept's walk in the coverage checks.
+    # Two vectors sharing a name: the later walk overwrites the earlier, so the coverage checks would read
+    # an accept vector's walk for a reject vector.
     dup = copy.deepcopy(good)
     dup["accept_vectors"][0]["name"] = dup["reject_vectors"][0]["name"]
     results.append(expect_raises("duplicate vector name", with_recipes(dup), "duplicate vector names"))
