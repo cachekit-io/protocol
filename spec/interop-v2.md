@@ -179,10 +179,20 @@ Encoding rules:
   reader in a new language would need *extra* code to accept both shapes — the
   opposite of interop's lowest-implementation-bar goal. Exactly one payload
   encoding is legal: `bin`. Pinned by the `reject_payload_array_of_ints` vector.
-- A reader MUST validate any declared `bin` length header against the remaining
-  input **before** allocating for it (a 5-byte forged `bin32` header must not
-  cause a 4 GiB allocation — same rule as
-  [wire-format.md → Security Limits](wire-format.md#security-limits)).
+- A reader MUST decode the body under the depth and allocation rules of
+  [interop-mode.md → Decode bounds](interop-mode.md#decode-bounds) (rules 1 and
+  2), the same rules [wire-format.md → Security Limits](wire-format.md#security-limits)
+  applies to the envelope. Every length or count header the reader decodes from
+  the body counts toward that rule's **declared-length budget**: `bin`, `str` and
+  `ext` lengths, and `array` and `map` counts. A body that exceeds the budget MUST
+  be rejected before the reader allocates for any of its headers. Checking each
+  header only against the input that remains after it does not satisfy this. So a
+  5-byte forged `bin32` header must not cause a 4 GiB allocation, and neither may
+  the 7-byte container `c1 02 dd ff ff ff ff`, whose `array32` header declares
+  4,294,967,295 elements. A hand-written parser of the three-field grammar meets
+  the budget without a separate walk, provided it rejects any array count other
+  than 3, and any `bin` length longer than the remaining input, before allocating
+  for either.
 
 The container is deliberately **not** the ByteStorage envelope: no xxHash3-64
 checksum field (integrity comes from the AES-GCM tag when encrypted, and is
@@ -372,8 +382,8 @@ Given stored bytes for an interop/v2-configured cache:
    (mode-mismatch diagnostics per Mode Discrimination).
 3. Decode exactly one MessagePack document from container[2..]; reject
    trailing bytes; enforce element types (int, int, bin) and the
-   header-vs-remaining-input rule; decode original_size at its full wire
-   value (see Security Limits).
+   declared-length budget (see Encoding rules); decode original_size at its
+   full wire value (see Security Limits).
 4. Enforce every Security Limit above, before any decompression or output
    allocation (see check order below).
 5. method 1: LZ4-block-decompress the payload with original_size as the
@@ -394,7 +404,7 @@ of the payload for `method 0`, or a value buffer sized from `original_size`. The
 ordering rule above restricts only output buffers. Before step 4 passes, a reader MAY
 also copy input bytes, for example into the step 1 AES-GCM plaintext, a copy of the
 container body, or the buffer a copying MessagePack decoder fills for the payload `bin`
-under the header-vs-remaining-input rule. Each such copy MUST be no larger than the
+within the declared-length budget. Each such copy MUST be no larger than the
 bytes it is copied or decrypted from, and MUST NOT grow before step 4 passes. A
 `method 0` reader MAY return its payload copy, or a view into the step 1 plaintext or the
 stored bytes, as its output once step 4 passes.
