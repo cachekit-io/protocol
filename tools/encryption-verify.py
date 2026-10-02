@@ -128,6 +128,35 @@ def aad_v3(tenant_id: str, cache_key: str, *, fmt: str, compressed: bool, origin
     return bytes(aad)
 
 
+def verify_sealed_vector(
+    label: str, vec: dict, tenant_id: str, keys: list[bytes], *, seal: bool, original_type: str | None = None
+) -> tuple[bytes, int | None] | None:
+    """Per-vector conformance body shared by every block: metadata, AAD rebuild, then decrypt + plaintext.
+
+    Prints a FAIL line and returns None on the first mismatch. Otherwise returns the
+    rebuilt AAD and the index of the key in `keys` that decrypted (None when `seal`
+    is off). The caller prints the ok-line, so block-specific guards run first.
+    """
+    if not isinstance(vec["compressed"], bool) or vec["format"] not in FORMAT_REGISTRY:
+        print(f"FAIL {label}: invalid metadata (compressed must be a JSON boolean, format must be in {sorted(FORMAT_REGISTRY)})")
+        return None
+    aad = aad_v3(tenant_id, vec["cache_key"], fmt=vec["format"], compressed=vec["compressed"], original_type=original_type)
+    if aad.hex() != vec["aad_hex"]:
+        print(f"FAIL {label}: AAD mismatch\n  expected {vec['aad_hex']}\n  rebuilt  {aad.hex()}")
+        return None
+    if not seal:
+        return aad, None
+    result = decrypt_with_keyring(keys, bytes.fromhex(vec["ciphertext_hex"]), aad)
+    if result is None:
+        print(f"FAIL {label}: decrypt failed (InvalidTag — AAD/key/ciphertext mismatch)")
+        return None
+    index, plaintext = result
+    if plaintext.hex() != vec["plaintext_hex"]:
+        print(f"FAIL {label}: plaintext mismatch\n  expected {vec['plaintext_hex']}\n  got      {plaintext.hex()}")
+        return None
+    return aad, index
+
+
 def verify_keyring(keyring: dict | None, *, seal: bool) -> int:
     """Return the number of failed keyring checks (spec/encryption.md § Key Rotation).
 
@@ -175,39 +204,26 @@ def verify_keyring(keyring: dict | None, *, seal: bool) -> int:
             )
             failures += 1
             continue
-        if not isinstance(vec["compressed"], bool) or vec["format"] not in FORMAT_REGISTRY:
-            print(
-                f"FAIL keyring {name}: invalid metadata (compressed must be a JSON boolean, format must be in {sorted(FORMAT_REGISTRY)})"
-            )
-            failures += 1
-            continue
-        aad = aad_v3(keyring["tenant_id"], vec["cache_key"], fmt=vec["format"], compressed=vec["compressed"])
-        if aad.hex() != vec["aad_hex"]:
-            print(f"FAIL keyring {name}: AAD mismatch\n  expected {vec['aad_hex']}\n  rebuilt  {aad.hex()}")
-            failures += 1
-            continue
         if derived_fingerprints.get(vec.get("key_fingerprint_hex")) != encrypted_with:
             print(
                 f"FAIL keyring {name}: stored key fingerprint must select the HKDF-derived key of {encrypted_with} (never a master key)"
             )
             failures += 1
             continue
+        checked = verify_sealed_vector(f"keyring {name}", vec, keyring["tenant_id"], full_keyring, seal=seal)
+        if checked is None:
+            failures += 1
+            continue
         if not seal:
             print(f"ok  keyring {name} (AAD + fingerprint selection only)")
             continue
 
+        aad, index = checked
+        if index != KEYRING_ORDER.index(encrypted_with):
+            print(f"FAIL keyring {name}: decrypted with keyring entry {KEYRING_ORDER[index]}, expected {encrypted_with}")
+            failures += 1
+            continue
         ciphertext = bytes.fromhex(vec["ciphertext_hex"])
-        full_result = decrypt_with_keyring(full_keyring, ciphertext, aad)
-        if full_result is None or full_result[1].hex() != vec["plaintext_hex"]:
-            print(f"FAIL keyring {name}: {list(KEYRING_ORDER)} did not decrypt to plaintext_hex")
-            failures += 1
-            continue
-        if full_result[0] != KEYRING_ORDER.index(encrypted_with):
-            print(
-                f"FAIL keyring {name}: decrypted with keyring entry {KEYRING_ORDER[full_result[0]]}, expected {encrypted_with}"
-            )
-            failures += 1
-            continue
         if encrypted_with != KEYRING_ORDER[0] and decrypt_with_keyring(current_only, ciphertext, aad) is not None:
             print(f"FAIL keyring {name}: [{KEYRING_ORDER[0]}] alone accepted the {encrypted_with} entry")
             failures += 1
@@ -242,22 +258,11 @@ def verify_default_tenant(block: dict | None, master_key: bytes, *, seal: bool) 
         failures += 1
     for vec in vectors:
         name = vec["name"]
-        if not isinstance(vec["compressed"], bool) or vec["format"] not in FORMAT_REGISTRY:
-            print(f"FAIL default_tenant {name}: invalid metadata")
-            failures += 1
-            continue
-        aad = aad_v3(DEFAULT_TENANT_ID, vec["cache_key"], fmt=vec["format"], compressed=vec["compressed"])
-        if aad.hex() != vec["aad_hex"]:
-            print(f"FAIL default_tenant {name}: AAD mismatch\n  expected {vec['aad_hex']}\n  rebuilt  {aad.hex()}")
+        if verify_sealed_vector(f"default_tenant {name}", vec, DEFAULT_TENANT_ID, [key], seal=seal) is None:
             failures += 1
             continue
         if not seal:
             print(f"ok  default_tenant {name} (AAD + fingerprint only)")
-            continue
-        result = decrypt_with_keyring([key], bytes.fromhex(vec["ciphertext_hex"]), aad)
-        if result is None or result[1].hex() != vec["plaintext_hex"]:
-            print(f"FAIL default_tenant {name}: did not decrypt to plaintext_hex under tenant {DEFAULT_TENANT_ID!r}")
-            failures += 1
             continue
         print(f"ok  default_tenant {name}")
     return failures
@@ -277,62 +282,33 @@ def verify(doc: dict, *, require_seal: bool) -> int:
         return 1
     print(f"ok  key fingerprint {doc['derived_key_fingerprint_hex']}")
 
-    invalid_tag_exc: type[BaseException] = Exception
     try:
-        from cryptography.exceptions import InvalidTag  # noqa: PLC0415
-        from cryptography.hazmat.primitives.ciphers.aead import AESGCM  # noqa: PLC0415
+        # Probe only: decrypt_with_keyring imports these again where it uses them.
+        from cryptography.exceptions import InvalidTag  # noqa: F401, PLC0415
+        from cryptography.hazmat.primitives.ciphers.aead import AESGCM  # noqa: F401, PLC0415
 
-        aesgcm: AESGCM | None = AESGCM(key)
-        invalid_tag_exc = InvalidTag
+        seal = True
     except ImportError:
         if require_seal:
             print("FAIL --require-seal set but `cryptography` is not installed")
             return 1
-        aesgcm = None
+        seal = False
         print("note: `cryptography` not installed — AAD reconstruction only, AES-GCM seal NOT verified")
 
     for vec in doc["vectors"]:
         name = vec["name"]
-        if not isinstance(vec["compressed"], bool) or vec["format"] not in FORMAT_REGISTRY:
-            print(
-                f"FAIL {name}: invalid metadata (compressed must be a JSON boolean, format must be in {sorted(FORMAT_REGISTRY)})"
-            )
+        if verify_sealed_vector(name, vec, doc["tenant_id"], [key], seal=seal, original_type=vec.get("original_type")) is None:
             failures += 1
             continue
-        aad = aad_v3(
-            doc["tenant_id"],
-            vec["cache_key"],
-            fmt=vec["format"],
-            compressed=vec["compressed"],
-            original_type=vec.get("original_type"),
-        )
-        if aad.hex() != vec["aad_hex"]:
-            print(f"FAIL {name}: AAD mismatch\n  expected {vec['aad_hex']}\n  rebuilt  {aad.hex()}")
-            failures += 1
-            continue
-
-        if aesgcm is not None:
-            ct = bytes.fromhex(vec["ciphertext_hex"])
-            nonce, sealed = ct[:12], ct[12:]
-            try:
-                plaintext = aesgcm.decrypt(nonce, sealed, aad)
-            except invalid_tag_exc:
-                print(f"FAIL {name}: decrypt failed (InvalidTag — AAD/key/ciphertext mismatch)")
-                failures += 1
-                continue
-            if plaintext.hex() != vec["plaintext_hex"]:
-                print(f"FAIL {name}: plaintext mismatch\n  expected {vec['plaintext_hex']}\n  got      {plaintext.hex()}")
-                failures += 1
-                continue
         print(f"ok  {name}")
 
-    failures += verify_keyring(doc.get("keyring"), seal=aesgcm is not None)
-    failures += verify_default_tenant(doc.get("default_tenant"), bytes.fromhex(doc["master_key_hex"]), seal=aesgcm is not None)
+    failures += verify_keyring(doc.get("keyring"), seal=seal)
+    failures += verify_default_tenant(doc.get("default_tenant"), bytes.fromhex(doc["master_key_hex"]), seal=seal)
 
     if failures:
         print(f"{failures} vector(s) FAILED")
         return 1
-    mode = "AAD + AES-GCM seal" if aesgcm is not None else "AAD-only"
+    mode = "AAD + AES-GCM seal" if seal else "AAD-only"
     keyring_count = len(doc.get("keyring", {}).get("vectors", []))
     default_count = len(doc.get("default_tenant", {}).get("vectors", []))
     print(
