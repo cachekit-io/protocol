@@ -185,13 +185,17 @@ Encoding rules:
   envelope. Rule 3's cache-miss mapping does not apply to the body: a rejected body is
   a hard error. Every length or count header the reader decodes from the body counts
   toward rule 2's **declared-length budget**: `bin`, `str` and `ext` lengths, and
-  `array` and `map` counts. A reader MUST also reject a `bin`, `str` or `ext` length
-  greater than the body bytes remaining after its header, before it reads or allocates
-  for that data; this check alone does not satisfy rule 2. For example, a 5-byte forged
+  `array` and `map` counts. A reader MUST NOT read past the end of the body (the
+  **remaining-bytes check**): before it reads any byte, whether a marker, a length or
+  value field, an `ext` type byte, or `bin`, `str` or `ext` data, it MUST check that the
+  body holds that byte, and reject the body otherwise; for `bin`, `str` and `ext` data
+  it makes that check before it allocates for the data. This check alone does not
+  satisfy rule 2. For example, a 5-byte forged
   `bin32` header must not cause a 4 GiB allocation, and neither may the 7-byte container
   `c1 02 dd ff ff ff ff`, whose `array32` header declares 4,294,967,295 elements. The
   reference parser (`parse_container` in `tools/interop-v2-reference.py`) shows a
-  three-field hand parser that meets both rules without a separate walk.
+  three-field hand parser that meets rules 1 and 2 and the remaining-bytes check
+  without a separate walk.
 
 The container is deliberately **not** the ByteStorage envelope: no xxHash3-64
 checksum field (integrity comes from the AES-GCM tag when encrypted, and is
@@ -380,9 +384,9 @@ Given stored bytes for an interop/v2-configured cache:
 2. Check container[0] == 0xC1 and container[1] == 0x02; else hard error
    (mode-mismatch diagnostics per Mode Discrimination).
 3. Decode exactly one MessagePack document from container[2..]; reject
-   trailing bytes; enforce element types (int, int, bin) and Decode bounds
-   rules 1 and 2 (see Encoding rules); decode original_size at its full wire
-   value (see Security Limits).
+   trailing bytes; enforce element types (int, int, bin), Decode bounds
+   rules 1 and 2, and the remaining-bytes check (see Encoding rules); decode
+   original_size at its full wire value (see Security Limits).
 4. Enforce every Security Limit above, before any decompression or output
    allocation (see check order below).
 5. method 1: LZ4-block-decompress the payload with original_size as the
