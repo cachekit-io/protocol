@@ -17,8 +17,8 @@ Every class below is proven reachable by execution rather than argued from readi
      SDKs; a deletion here is invisible until an SDK's coverage has already shrunk.
 
   3. Whole-file properties, which every per-vector check is structurally blind to
-     because they all iterate the fixture's own vector list (LAB-1751 panel round 3;
-     all three exited 0 before the guards existed):
+     because they all iterate the fixture's own vector list
+     (all three exited 0 before the guards existed):
        - the base-vector SET. Dropping a legacy base AND its `_bin` twin together net
          to zero in generate's append-only diff, so `verify` reported "all 6 vector
          pairs verified" and `generate` wrote the shrunken fixture.
