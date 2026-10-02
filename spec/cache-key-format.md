@@ -303,7 +303,7 @@ After key construction, the following characters are replaced:
 
 ## Test Vectors
 
-[`test-vectors/cache-keys.json`](../test-vectors/cache-keys.json) contains 17 auto-mode key vectors (`args` + `kwargs` + metadata → `expected_key`). The first 10 use `serializer_type: "std"` (→ `1s`), cachekit-py's alias for the canonical `default`, and cover primitives, mixed args/kwargs, `null`, booleans, nested dicts, and the no-namespace form. The other 7 reuse the `single_integer` inputs and change only `serializer_type`, so they pin the serializer code for every identity cachekit-py accepts: `default` (→ `1s`), `auto` and its alias `pythonic` (→ `1a`), `orjson` (→ `1o`), `arrow` (→ `1w`), `local` (→ `1l`), and the derived identity `<custom>:ArrowSerializer` (→ `1x2263`). cachekit-py v0.20.0 reproduces all 17 keys. Keys were generated at top level, so the `func:` segment is `__main__.{qualname}`. These vectors are **Python-SDK-only**: the `func:` segment is language-specific, so no other SDK can reproduce these keys or share the cache entries they name. Cross-SDK conformance uses [`test-vectors/interop-mode.json`](../test-vectors/interop-mode.json) (see [Interop Mode](interop-mode.md)).
+[`test-vectors/cache-keys.json`](../test-vectors/cache-keys.json) contains 17 auto-mode key vectors (`args` + `kwargs` + metadata → `expected_key`). The first 10 use `serializer_type: "std"` (→ `1s`), cachekit-py's alias for the canonical `default`, and cover primitives, mixed args/kwargs, `null`, booleans, nested dicts, and the no-namespace form. The other 7 reuse the `single_integer` inputs and change only `serializer_type`, so they pin every table code, the `pythonic` alias (`std` is covered by the first 10) and one example derived identity: `default` (→ `1s`), `auto` and its alias `pythonic` (→ `1a`), `orjson` (→ `1o`), `arrow` (→ `1w`), `local` (→ `1l`), and the derived identity `<custom>:ArrowSerializer` (→ `1x2263`). cachekit-py v0.20.0 reproduces all 17 keys. Keys were generated at top level, so the `func:` segment is `__main__.{qualname}`. These vectors are **Python-SDK-only**: the `func:` segment is language-specific, so no other SDK can reproduce these keys or share the cache entries they name. Cross-SDK conformance uses [`test-vectors/interop-mode.json`](../test-vectors/interop-mode.json) (see [Interop Mode](interop-mode.md)).
 
 Enforcement: the vectors are vendored (sha256-pinned) into cachekit-py and byte-verified against `CacheKeyGenerator` on every default CI run (`tests/unit/protocol/test_cache_key_vectors.py`). A vector failing there is a key-stability break to triage — never silently regenerate: a changed key orphans every existing cache entry and turns the fleet's hits into billed misses.
 
@@ -324,8 +324,8 @@ SERIALIZER_CODES = {"default": "s", "auto": "a", "orjson": "o", "arrow": "w", "l
 // does not accept hands that name a table code instead of the derived `x` code it should
 // get. cachekit-py's accepted aliases are in the Python note above.
 SERIALIZER_ALIASES = {}   // e.g. cachekit-py accepts: {"std": "default", "pythonic": "auto"}
-// test-vectors/cache-keys.json pins one vector per identity cachekit-py accepts: each table
-// code, the "std" and "pythonic" aliases, and one derived "x" identity.
+// test-vectors/cache-keys.json pins each table code, the "std" and "pythonic" aliases, and
+// one example derived "x" identity.
 
 // SDK-SUPPLIED, not fixed by this spec: reduce whatever your API accepts as a serializer to
 // the canonical STRING identity, before any lookup below. An SDK that accepts only names
