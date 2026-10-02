@@ -171,12 +171,18 @@ def main() -> None:
     del cut_accept["accept_vectors"][at]["reject_reasons"]
     results.append(expect_raises("accept complete", with_recipes(cut_accept), "not one complete document"))
 
-    untagged = copy.deepcopy(good)  # a complete document filed as a reject vector with no reason
-    untagged["reject_vectors"].append(dbr.recipe("fixarray_untagged", "", "91", 1, "c0", depth=1, slots=1, reasons=[]))
-    def untagged_stdlib() -> object:
-        with patch.object(dbr, "build", lambda: copy.deepcopy(untagged)):
-            return with_msgpack(None, untagged)()
-    results.append(expect_raises("empty reject_reasons", untagged_stdlib, "no reject_reasons"))
+    # A reject vector whose tags name no spec rule must fail the stdlib-only leg too.
+    def stdlib_only(doc: dict) -> Callable[[], object]:
+        def run() -> object:
+            with patch.object(dbr, "build", lambda: copy.deepcopy(doc)):
+                return with_msgpack(None, doc)()
+        return run
+    for case, bad in (("empty reject_reasons", dbr.recipe("t", "", "91", 1, "c0", depth=1, slots=1, reasons=[])),
+                      ("unknown reject reason", dbr.recipe("t", "", "c0", 2, depth=0, slots=0, reasons=["trailing"])),
+                      ("accept vector filed as reject", copy.deepcopy(good["accept_vectors"][0]))):
+        doc = copy.deepcopy(good)
+        doc["reject_vectors"].append(bad)
+        results.append(expect_raises(case, stdlib_only(doc), "reject_reasons must name"))
 
     # Coverage: dropping exactly one discriminating vector must fire its guard.
     def without(name: str, *twins: dict) -> dict:
@@ -204,6 +210,9 @@ def main() -> None:
                     slots=dbr.MIN_DEPTH_FLOOR * 2000, reasons=["overclaim"]), "per-header checks pass"),
         ("nested_fixarray_depth_1025_complete",  # a trailing byte: not one complete document
          dbr.recipe("t", "", "91", ceil + 1, "c0c0", depth=ceil + 1, slots=ceil + 1, reasons=["depth"]),
+         "complete array spine"),
+        ("nested_fixarray_depth_1025_complete",  # complete, but two levels past the ceiling
+         dbr.recipe("t", "", "91", ceil + 2, "c0", depth=ceil + 2, slots=ceil + 2, reasons=["depth"]),
          "complete array spine"),
         ("nested_fixmap_depth_1025_complete",
          dbr.recipe("t", "", "81a0", ceil + 1, "c0c0", depth=ceil + 1, slots=2 * (ceil + 1), reasons=["depth"]),

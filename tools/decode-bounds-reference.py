@@ -282,13 +282,16 @@ def verify(document: dict, *, require_extras: bool = False) -> tuple[int, str]:
     check(document == fresh, "document", "vector file differs from the recipes; run `generate`")
     # input_hex / input_len are derived from `construction` by recipe(), so the equality
     # above already proves them; the hand-entered tags are checked against the walk.
+    for v in document["reject_vectors"]:  # its own loop: a reject vector equal to an accept vector is still checked
+        reasons = v.get("reject_reasons", [])
+        check(bool(reasons) and set(reasons) <= {"depth", "overclaim"}, v["name"],
+              "reject_reasons must name at least one rule, each depth or overclaim")
     walked = {}
     for v in document["reject_vectors"] + document["accept_vectors"]:
         w = walked[v["name"]] = walk(bytes.fromhex(v["input_hex"]))
         check(w["nesting_depth"] == v["nesting_depth"], v["name"], "nesting_depth differs from the walk")
         check(w["declared_slots"] == v["declared_slots"], v["name"], "declared_slots differs from the walk")
         reasons = v.get("reject_reasons", [])
-        check(bool(reasons) or v in document["accept_vectors"], v["name"], "reject vector has no reject_reasons")
         check(("depth" in reasons) == (v["nesting_depth"] > MAX_DEPTH_CEILING), v["name"], "depth tag mismatch")
         # Slot budget: every declared element (including a nested header) costs >= 1 input
         # byte; only the root header is not itself an element. So sum(declared) <= len - 1.
