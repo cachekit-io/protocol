@@ -827,9 +827,12 @@ def _verify_reject(vec: dict, bases: dict[str, dict], xxh3_64, msgpack, lz4_bloc
         assert msgpack.unpackb(env, raw=False) == [data, list(checksum), size, fmt], "msgpack-python decode mismatch"
     lz4_note = ""
     if lz4_block is not None and vec["name"] == LENGTH_REJECT:
-        # The step-9 bound is not academic: liblz4 returns the short output without error.
+        # The step-9 check is not academic: liblz4 returns the short output without error.
         data = decode_envelope(env)[0]
-        got = lz4_block.decompress(data, uncompressed_size=vec["original_size"])
+        try:
+            got = lz4_block.decompress(data, uncompressed_size=vec["original_size"])
+        except (lz4_block.LZ4BlockError, OverflowError) as e:
+            raise AssertionError(f"liblz4 raises on this vector instead of returning a short output: {e!r}") from e
         assert len(got) < vec["original_size"], "liblz4 no longer returns a short output for this vector"
         lz4_note = f"; liblz4 returns {len(got)} B without error"
     elif lz4_block is not None and vec["name"] in (ZERO_LENGTH_REJECT, RATIO_REJECT):
@@ -841,6 +844,8 @@ def _verify_reject(vec: dict, bases: dict[str, dict], xxh3_64, msgpack, lz4_bloc
             lz4_block.decompress(data, uncompressed_size=vec["original_size"])
         except lz4_block.LZ4BlockError:
             lz4_note = "; liblz4 refuses the block"
+        except OverflowError as e:
+            raise AssertionError(f"liblz4 cannot take this vector's original_size: {e}") from e
         else:
             raise AssertionError("liblz4 now decodes this vector's compressed_data")
     if step == 8 and xxh3_64 is None:
