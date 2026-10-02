@@ -63,7 +63,7 @@ The write-space split applies to mutations only (`PUT`, `DELETE`, lock, TTL refr
 > [!WARNING]
 > **The split covers `ns:`- and `nsapi:`-prefixed cache keys only.** A cache key with neither prefix maps to the tenant's `default` namespace and belongs to a **shared write space**: any key class whose namespace grants include `default` **or are unrestricted** may create, overwrite, delete, or lock it. The split is an intra-tenant guard for namespaced keys, not a general write-isolation guarantee between key classes.
 
-**CORS preflight exception.** `OPTIONS` on any path is answered `204 No Content` before authentication; no `Authorization` or `X-CacheKit-L1-Status` header is required or inspected. Every other `/v1/cache/*` request is authenticated before any other check, and `401` precedes every other error. Browser callers are outside this specification's scope, and **no key class is intended for delivery to browser code** — an API key in client-side JavaScript is a tenant-wide credential exposed to every visitor. The deployed CORS policy returns `Access-Control-*` headers only for a closed allowlist of first-party origins; for every other origin the preflight carries none and the browser blocks the request. Even from an allowlisted origin the policy allows `Authorization` but no `X-CacheKit-*` request header and exposes no `X-CacheKit-*` response header, so `ck_sdk_` keys cannot be used cross-origin and freshness headers are unreadable there. This specification governs `/v1/cache/*` only.
+**CORS preflight exception.** `OPTIONS` on any path is answered `204 No Content` before authentication; no `Authorization` or `X-CacheKit-L1-Status` header is required or inspected. Every other `/v1/cache/*` request is authenticated before any other check, and the authentication outcome — `401`, or `503` for a key-store fault while checking the key — precedes every other error. Browser callers are outside this specification's scope, and **no key class is intended for delivery to browser code** — an API key in client-side JavaScript is a tenant-wide credential exposed to every visitor. The deployed CORS policy returns `Access-Control-*` headers only for a closed allowlist of first-party origins; for every other origin the preflight carries none and the browser blocks the request. Even from an allowlisted origin the policy allows `Authorization` but no `X-CacheKit-*` request header and exposes no `X-CacheKit-*` response header, so `ck_sdk_` keys cannot be used cross-origin and freshness headers are unreadable there. This specification governs `/v1/cache/*` only.
 
 **HTTP intermediary caching is prohibited.** Servers MUST emit `Cache-Control: no-store` and `Vary: Authorization` on every response. The [cache key](cache-key-format.md) carries no tenant component — tenancy rides only in the `Authorization` header — so two tenants using the same namespace, function, and arguments produce byte-identical request paths, and a shared HTTP cache applying heuristic freshness (RFC 9111 §4.2.2) to an unmarked response could serve one tenant's bytes to another. `no-store` forbids storing the response at all; `Vary: Authorization` is the independent second control — a cache that wrongly stores despite `no-store` (or RFC 9111 §3.5's rule for authenticated requests) but honors `Vary` still cannot match tenant A's copy to tenant B's request. Any CacheKit-operated serving tier that caches responses (edge, colo) MUST partition its internal cache by tenant, never by URL alone; such tiers are part of the server, not HTTP intermediaries, and these headers govern what they emit, not what they may store.
 
@@ -123,6 +123,15 @@ Host: api.cachekit.io
 Authorization: Bearer ck_live_xxx
 ```
 
+The same request with a `ck_sdk_` key, which must carry `X-CacheKit-L1-Status` ([Required Headers](#required-headers)):
+
+```http
+GET /v1/cache/{key} HTTP/1.1
+Host: api.cachekit.io
+Authorization: Bearer ck_sdk_xxx
+X-CacheKit-L1-Status: miss
+```
+
 | Status | Meaning | SDK Behavior |
 | :---: | :--- | :--- |
 | `200 OK` | Cache hit | Return raw bytes to caller |
@@ -175,6 +184,19 @@ Host: api.cachekit.io
 Authorization: Bearer ck_live_xxx
 Content-Type: application/octet-stream
 X-CacheKit-TTL: 3600
+
+<raw bytes>
+```
+
+The same request with a `ck_sdk_` key, which must carry `X-CacheKit-L1-Status` ([Required Headers](#required-headers)):
+
+```http
+PUT /v1/cache/{key} HTTP/1.1
+Host: api.cachekit.io
+Authorization: Bearer ck_sdk_xxx
+Content-Type: application/octet-stream
+X-CacheKit-TTL: 3600
+X-CacheKit-L1-Status: miss
 
 <raw bytes>
 ```
@@ -435,7 +457,7 @@ The `ttl` field follows the same validation rules as `X-CacheKit-TTL`: positive 
 | Status | Meaning |
 | :---: | :--- |
 | `200 OK` | TTL updated. Also returned for an absent or evicted key — the request is a no-op; this endpoint never returns `404` |
-| `400 Bad Request` | Invalid TTL (zero, negative, exceeds maximum) |
+| `400 Bad Request` | Invalid TTL (zero, negative, exceeds maximum), or `ttl` plus the entry's stored stale window exceeds 2,592,000 (the 30-day TTL cap). The client cannot pre-validate the second case: the stale window is server-side state. A `PATCH` with a smaller `ttl` can succeed |
 | `409 Conflict` | Entry is past `fresh_until` ([SWR write semantics](#write-semantics)) — refresh requires a `PUT` of recomputed bytes |
 
 ---
@@ -465,7 +487,7 @@ Authorization: Bearer ck_live_xxx
 | :--- | :--- | :--- |
 | `Authorization` | `Bearer {api_key}` | API key for authentication and tenant scoping |
 | `Content-Type` | `application/octet-stream` | Required for PUT requests with binary body |
-| `X-CacheKit-L1-Status` | `hit` \| `miss` \| `disabled` | **Required on every `/v1/cache/*` request authenticated with a `ck_sdk_` key**, reads included; missing or any other value → `400 Bad Request` (evaluated after authentication, so `401` takes precedence). Optional for `ck_api_` / `ck_live_` keys. When no L1 statistics are available (e.g., no in-memory layer), send `disabled` rather than omitting the header. |
+| `X-CacheKit-L1-Status` | `hit` \| `miss` \| `disabled` | **Required on every `/v1/cache/*` request authenticated with a `ck_sdk_` key**, reads included; missing or any other value → `400 Bad Request` (evaluated after authentication, so a `401` or a key-store-fault `503` takes precedence). Optional for `ck_api_` / `ck_live_` keys. When no L1 statistics are available (e.g., no in-memory layer), send `disabled` rather than omitting the header. |
 
 ### Optional Metrics Headers
 
@@ -496,6 +518,7 @@ SDKs SHOULD send cache metrics headers for rate limiting and observability:
 | `401` | Unauthorized | Authoritative denial: the `Authorization` header is missing or malformed, or the key store says the key is unknown or revoked, or its tenant is suspended or soft-deleted. Never emitted for a backend fault while checking the key (that is a `503`) |
 | `403` | Forbidden | API key lacks permission for this operation/namespace |
 | `404` | Not Found | Cache miss (`GET`/`HEAD /v1/cache/{key}`); key absent on `GET /v1/cache/{key}/ttl`. Never emitted by `DELETE /v1/cache/{key}` or `PATCH /v1/cache/{key}/ttl` — both are no-ops on an absent key. |
+| `405` | Method Not Allowed | Method not supported on the route; the response carries `Allow`. Evaluated after authentication. `/v1/cache/{key}`: `GET, HEAD, PUT, DELETE`; `/v1/cache/{key}/ttl`: `GET, PATCH`; `/v1/cache/{key}/lock`: `POST, DELETE`; `/v1/cache/health`: `GET`. Never emitted for `OPTIONS` (answered `204` before authentication) |
 | `409` | Conflict | `PATCH /v1/cache/{key}/ttl` on a stale entry past `fresh_until`; refresh requires a `PUT` of recomputed bytes ([SWR write semantics](#write-semantics)) |
 | `413` | Payload Too Large | Value exceeds max stored value size (25 MB). Permanent — do not retry; surface "value too large" |
 | `429` | Too Many Requests | Rate limited |
@@ -510,7 +533,7 @@ SDKs should classify errors for circuit breaker integration:
 | Class | Status Codes | SDK Action |
 | :--- | :--- | :--- |
 | **Transient** | `429`, `500`, `502`, `503`, network timeouts | Retry with backoff |
-| **Permanent** | `400`, `401`, `403`, `409`, `413` | Do not retry, surface to caller. For `409` (`PATCH /ttl` past `fresh_until`): do not re-`PATCH` — recompute and `PUT` ([write semantics](#write-semantics)) |
+| **Permanent** | `400`, `401`, `403`, `405`, `409`, `413` | Do not retry, surface to caller. For the `PATCH /ttl` `400` where `ttl` plus the stored stale window exceeds the 30-day TTL cap: retry only with a smaller `ttl`. For `409` (`PATCH /ttl` past `fresh_until`): do not re-`PATCH` — recompute and `PUT` ([write semantics](#write-semantics)) |
 | **Cache miss** | `404` on `GET`/`HEAD /v1/cache/{key}` | Not an error — return `None`/`null` (`GET`) or `false` (`HEAD`) |
 | **Key absent** | `404` on `GET /v1/cache/{key}/ttl` | Not an error — return `None`/`null` for the TTL ([GET /v1/cache/{key}/ttl](#get-v1cachekeyttl)) |
 
