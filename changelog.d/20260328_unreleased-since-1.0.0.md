@@ -69,7 +69,8 @@
     bound, not an end-to-end one.
   - **SDK consumption.** The value is a hard local service bound — once it
     elapses the local copy MUST NOT be served in any form, and `0` forbids
-    backfill. It MUST be 1–7 ASCII digits and at most `2,592,000`; anything
+    backfill. An absent header allows fresh service for the configured local
+    TTL only, never local stale service. It MUST be 1–7 ASCII digits and at most `2,592,000`; anything
     else is `0`. Local caches MUST NOT backfill a `stale`-labelled response at
     all. Local deadlines SHOULD use a clock that counts across suspend.
 - **`Cache-Control: no-store` and `Vary: Authorization` on every response.**
@@ -387,7 +388,7 @@
   guarantee; a deployment needing a ceiling provisions a quota. `PATCH /v1/cache/{key}/ttl` never `404`s (no-op on
   an absent key). `404` on `GET /v1/cache/{key}/ttl` is classified "Key
   absent", not a cache miss; a no-expiry entry returns `200 {"ttl": null}`
-  there, not `404` (see the `X-CacheKit-Fresh-For` entries above). Authentication: accepted key prefixes are `ck_sdk_` / `ck_api_` /
+  there, not `404` (see **No-expiry follow-ons** above). Authentication: accepted key prefixes are `ck_sdk_` / `ck_api_` /
   `ck_live_` (`ck_test_` removed — it never authenticated); `X-CacheKit-L1-Status`
   moved to Required Headers as mandatory for `ck_sdk_` keys (`400` otherwise);
   the `ns:`/`nsapi:` write-space split documented — each class may also mutate
