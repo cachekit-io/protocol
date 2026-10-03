@@ -110,7 +110,7 @@ FIXTURE_VERSION = "1.3.0"
 # other integrity check here iterates the fixture's own vector list and therefore
 # cannot see a vector that is simply absent: dropping a legacy base AND its `_bin`
 # twin together left `generate`'s append-only diff empty and `verify` reporting "all 6
-# vector pairs verified", exit 0 (LAB-1751 panel round 3). Same lesson as the
+# vector pairs verified", exit 0. Same lesson as the
 # original_size/input_size drift one level up — a name list derived from the artifact
 # under test pins nothing, so the expected set has to live in code.
 EXPECTED_BASE_VECTORS = frozenset(
@@ -153,8 +153,8 @@ RATIO_WRAP_THRESHOLD = -(-(1 << 32) // MAX_RATIO)
 # so a change to it must fail CI and force the text to be re-read — otherwise the next
 # `lz4==` bump rots the spec silently. The value is load-bearing: asserting only
 # "these bytes differ from liblz4's output" is a one-bit check that ANY other valid
-# LZ4 block satisfies, so a re-pin of the divergent vector to unrelated bytes passed
-# (LAB-1751 panel round 3). Byte-pinning the divergent vector is the only encode-side
+# LZ4 block satisfies, so a re-pin of the divergent vector to unrelated bytes passed.
+# Byte-pinning the divergent vector is the only encode-side
 # enforcement it has anywhere in the fleet.
 # Base names only: twins carry the same compressed_data and are not iterated.
 LZ4_ENCODE_DIVERGENT = {"large_compressible": "1f410100ffffffe960414141414141"}
@@ -716,7 +716,7 @@ def generate() -> int:
     # Refuse before the write if the base set itself has drifted. The `lost` diff below
     # is derived from the fixture on both sides, so dropping a base AND its twin
     # together nets to zero there and `generate` would happily write the shrunken
-    # fixture (LAB-1751 panel round 3).
+    # fixture.
     set_error = _base_set_error(legacy)
     if set_error:
         print(f"REFUSED: {set_error}", file=sys.stderr)
@@ -827,9 +827,12 @@ def _verify_reject(vec: dict, bases: dict[str, dict], xxh3_64, msgpack, lz4_bloc
         assert msgpack.unpackb(env, raw=False) == [data, list(checksum), size, fmt], "msgpack-python decode mismatch"
     lz4_note = ""
     if lz4_block is not None and vec["name"] == LENGTH_REJECT:
-        # The step-9 bound is not academic: liblz4 returns the short output without error.
+        # The step-9 check is not academic: liblz4 returns the short output without error.
         data = decode_envelope(env)[0]
-        got = lz4_block.decompress(data, uncompressed_size=vec["original_size"])
+        try:
+            got = lz4_block.decompress(data, uncompressed_size=vec["original_size"])
+        except (lz4_block.LZ4BlockError, OverflowError) as e:
+            raise AssertionError(f"liblz4 raises on this vector instead of returning a short output: {e!r}") from e
         assert len(got) < vec["original_size"], "liblz4 no longer returns a short output for this vector"
         lz4_note = f"; liblz4 returns {len(got)} B without error"
     elif lz4_block is not None and vec["name"] in (ZERO_LENGTH_REJECT, RATIO_REJECT):
@@ -841,6 +844,8 @@ def _verify_reject(vec: dict, bases: dict[str, dict], xxh3_64, msgpack, lz4_bloc
             lz4_block.decompress(data, uncompressed_size=vec["original_size"])
         except lz4_block.LZ4BlockError:
             lz4_note = "; liblz4 refuses the block"
+        except OverflowError as e:
+            raise AssertionError(f"liblz4 cannot take this vector's original_size: {e}") from e
         else:
             raise AssertionError("liblz4 now decodes this vector's compressed_data")
     if step == 8 and xxh3_64 is None:
@@ -1000,7 +1005,7 @@ def verify(require_extras: bool = False) -> int:
         return 1
     # The fixture declares the bounds SDKs read; the spec table is normative. Neither
     # pinned the other, so a fixture rewriting max_uncompressed_size to 1 verified
-    # green (LAB-1751 panel round 3).
+    # green.
     declared = fixture.get("limits", {})
     drifted = sorted(k for k, v in SPEC_LIMITS.items() if declared.get(k) != v)
     if drifted:

@@ -271,8 +271,8 @@ bytes are therefore
 
 - A conforming reader MUST decompress the `compressed_data` of every vector in
   the `vectors` and `constructed_vectors` groups to its input, **and MUST enforce
-  [Retrieve Flow](#retrieve-flow) steps 2, 4, 5 and 9 while doing so, with steps 4
-  and 5 [before any decompression or output allocation](#check-order).**
+  [Retrieve Flow](#retrieve-flow) steps 2, 4, 5 and 9 while doing so, in the order
+  the [ordering rule](#check-order) requires.**
   Read-side conformance is not "the vectors pass":
   every vector in the `vectors` group is well-formed and declares a truthful
   `original_size`, so those vectors evidence **none** of the bounds, and a reader
@@ -338,8 +338,7 @@ fails CI rather than quietly making this paragraph wrong.
 > emits five (`… ea 50` + `41`×5). Both are valid LZ4 blocks and both
 > decompress to the input; the divergence is encode-only. A third-party writer
 > following the Library Mapping will therefore produce a different — equally
-> conforming — envelope for this input. (LAB-1751; found by execution during
-> the LAB-868 panel review.)
+> conforming — envelope for this input.
 
 ---
 
@@ -348,7 +347,7 @@ fails CI rather than quietly making this paragraph wrong.
 | Property | Value |
 | :--- | :--- |
 | Algorithm | xxHash3-64 |
-| Input | Original **uncompressed** data |
+| Input | Original **uncompressed** payload only — `format` and `original_size` are not hashed |
 | Output | 8 bytes, big-endian |
 
 ```rust
@@ -377,6 +376,18 @@ let checksum: [u8; 8] = xxh3_64(&original_data).to_be_bytes();
 7. If mismatch → reject (integrity failure)
 8. Verify decompressed_data.length == original_size
 ```
+
+The checksum covers the uncompressed payload bytes only. `original_size` sits
+outside the digest but is cross-checked against the decompressed length at
+step 8. `format` sits outside the digest and no step of this flow checks it.
+
+> [!NOTE]
+> **Non-normative — known limit.** A rotted `format` passes the checksum, so the
+> checksum gives a reader that routes on `format` no protection for that field.
+> This section places no obligation on readers; how an SDK treats an unexpected
+> `format` is its own behaviour. The checksum is unkeyed and detects accidental
+> corruption only: anyone who can write cache bytes can recompute it, and tamper
+> resistance comes from AES-256-GCM, never from this checksum.
 
 ---
 
@@ -554,14 +565,16 @@ the tests detect, and miss, for a reader that runs steps 4 and 5 late:
 
 - A reader that decompresses first with a strict decoder, and lets its error
   propagate, never raises the expected error, so it fails the error assertion.
-- A reader that allocates an output sized from `original_size` before steps 4 and 5,
-  whether to decompress into it with a fixed-output decoder or to reserve it, fails
-  the allocation bound.
-- These vectors do not detect three readers. One decompresses first with a growing
-  decoder. One holds a strict decoder's error until after steps 4 and 5. One sizes
-  its output from the length of `compressed_data`, smaller than `original_size`,
-  whether it decompresses into it first or only reserves it. Each raises exactly
-  the expected error inside the allocation bound. The
+- A reader that allocates an output of `original_size` bytes or more before steps 4
+  and 5, itself or through a decoder it gives `original_size` as a size hint, fails
+  the allocation bound whatever it does with that output, provided the probe counts
+  the allocator that buffer comes from.
+- These vectors do not detect three readers that allocate less than `original_size`.
+  One decompresses first with a growing decoder. One holds a strict decoder's error
+  until after steps 4 and 5. One sizes its output below `original_size`, for example
+  from the length of `compressed_data`, a constant, or `original_size` clamped below
+  itself, whether it decompresses into it first with a fixed-output decoder or only
+  reserves it. Each raises exactly the expected error inside the allocation bound. The
   [ordering rule](#check-order) forbids all three.
 
 The zero-length vector declares `original_size` 0 on purpose. With a non-zero size,

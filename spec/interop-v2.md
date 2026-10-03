@@ -179,10 +179,23 @@ Encoding rules:
   reader in a new language would need *extra* code to accept both shapes — the
   opposite of interop's lowest-implementation-bar goal. Exactly one payload
   encoding is legal: `bin`. Pinned by the `reject_payload_array_of_ints` vector.
-- A reader MUST validate any declared `bin` length header against the remaining
-  input **before** allocating for it (a 5-byte forged `bin32` header must not
-  cause a 4 GiB allocation — same rule as
-  [wire-format.md → Security Limits](wire-format.md#security-limits)).
+- A reader MUST decode the body (`container[2..]`) under rules 1 and 2 of
+  [interop-mode.md → Decode bounds](interop-mode.md#decode-bounds), the same rules
+  [wire-format.md → Security Limits](wire-format.md#security-limits) applies to the
+  envelope. Rule 3's cache-miss mapping does not apply to the body: a rejected body is
+  a hard error. Every length or count header the reader decodes from the body counts
+  toward rule 2's **declared-length budget**: `bin`, `str` and `ext` lengths, and
+  `array` and `map` counts. A reader MUST NOT read past the end of the body (the
+  **remaining-bytes check**): before it reads any byte, whether a marker, a length or
+  value field, an `ext` type byte, or `bin`, `str` or `ext` data, it MUST check that the
+  body holds that byte, and reject the body otherwise; for `bin`, `str` and `ext` data
+  it makes that check before it allocates for the data. This check alone does not
+  satisfy rule 2. For example, a 5-byte forged
+  `bin32` header must not cause a 4 GiB allocation, and neither may the 7-byte container
+  `c1 02 dd ff ff ff ff`, whose `array32` header declares 4,294,967,295 elements. The
+  reference parser (`parse_container` in `tools/interop-v2-reference.py`) shows a
+  three-field hand parser that meets rules 1 and 2 and the remaining-bytes check
+  without a separate walk.
 
 The container is deliberately **not** the ByteStorage envelope: no xxHash3-64
 checksum field (integrity comes from the AES-GCM tag when encrypted, and is
@@ -231,10 +244,11 @@ A compressed container introduces a byte-level DoS axis — the decompression
 bomb — that bare-MessagePack v1 does not have. These bounds reuse the
 ByteStorage constants from
 [wire-format.md → Security Limits](wire-format.md#security-limits) so the fleet
-carries **one** set of numbers, and all of them MUST be enforced **before**
-decompressing (integer-valued arithmetic only — no floating-point *ratio*; the ratio
-product's exactness requirement, and the rule that `original_size` is
-compared at its full wire value, are stated below):
+carries **one** set of numbers, and all of them MUST be enforced
+[before any decompression or output allocation](#check-order). Use integer-valued
+arithmetic only, with no floating-point *ratio*; the ratio product's exactness
+requirement, and the rule that `original_size` is compared at its full wire value,
+are stated below:
 
 | Limit | Value | Applies to |
 | :--- | ---: | :--- |
@@ -245,6 +259,7 @@ compared at its full wire value, are stated below):
 ```text
 // original_size and method are unsigned by construction — signed-family
 // markers were already rejected at parse time (see The v2 Value Container).
+reject if method not in {0, 1}                      // unregistered method
 reject if original_size > MAX_UNCOMPRESSED          // 512 MiB
 reject if payload.length > MAX_COMPRESSED           // 512 MiB
 if method == 1:
@@ -369,10 +384,11 @@ Given stored bytes for an interop/v2-configured cache:
 2. Check container[0] == 0xC1 and container[1] == 0x02; else hard error
    (mode-mismatch diagnostics per Mode Discrimination).
 3. Decode exactly one MessagePack document from container[2..]; reject
-   trailing bytes; enforce element types (int, int, bin) and the
-   header-vs-remaining-input rule; decode original_size at its full wire
-   value (see Security Limits).
-4. Enforce every Security Limit above — before any decompression.
+   trailing bytes; enforce element types (int, int, bin), Decode bounds
+   rules 1 and 2, and the remaining-bytes check (see Encoding rules); decode
+   original_size at its full wire value (see Security Limits).
+4. Enforce every Security Limit above, before any decompression or output
+   allocation (see check order below).
 5. method 1: LZ4-block-decompress the payload with original_size as the
    exact output size; reject on any LZ4 error or output-length mismatch.
    method 0: the payload IS the value bytes.
@@ -381,9 +397,24 @@ Given stored bytes for an interop/v2-configured cache:
    rejected, sentinel-map temporal convention).
 ```
 
-Step order is normative: bounds run before decompression (step 4 before 5), and
-in the encrypted path the AES-GCM tag is verified (step 1) before any container
-parsing or decompression — hostile bytes never reach the LZ4 decoder
+<a id="check-order"></a>For each container, a reader MUST complete every step 4 check
+before it decompresses that container's payload, and before it allocates or grows any
+output buffer for it, however that buffer is sized (for example from `original_size`,
+from the length of the payload, from a multiple of either, or from a constant). An
+output buffer is any buffer allocated or grown for step 5 or step 6, to hold their
+output or as working memory: for example the decompressed bytes for `method 1`, a copy
+of the payload for `method 0`, or a value buffer sized from `original_size`. The
+ordering rule above restricts only output buffers. Before step 4 passes, a reader MAY
+also copy input bytes, for example into the step 1 AES-GCM plaintext, a copy of the
+container body, or the buffer a copying MessagePack decoder fills for the payload `bin`
+once its length has passed the remaining-bytes check in Encoding rules and the body is
+within the declared-length budget. Each such copy MUST be no larger than the bytes it is
+copied or decrypted from, and MUST NOT grow before step 4 passes. A `method 0` reader MAY
+return its payload copy, or a view into the step 1 plaintext or the stored bytes, as its
+output once step 4 passes.
+
+Step order is normative. In the encrypted path the AES-GCM tag is verified (step 1)
+before any container parsing or decompression — hostile bytes never reach the LZ4 decoder
 unauthenticated when encryption is on. In the **unencrypted** path the LZ4
 decoder does face untrusted bytes directly; that asymmetry is inherent (v1's
 unencrypted values have no integrity protection either), and it is why the
@@ -503,8 +534,10 @@ An SDK implementation of interop/v2 MUST:
 2. Write every value as exactly one v2 container; emit canonical MessagePack
    body encoding with a `bin` payload; support `method 0`.
 3. Reject, on read: bad magic/version, wrong element types (including non-`bin`
-   payloads — the array-of-ints shape included), unknown methods, trailing
-   bytes, every Security-Limits violation (before decompressing), LZ4 errors,
+   payloads — the array-of-ints shape included), a truncated body, a body
+   over the depth bound or the declared-length budget, trailing bytes, every
+   Security-Limits violation, unknown methods included (in the
+   [check order](#check-order)), LZ4 errors,
    and output-length mismatches.
 4. When encryption is enabled: use exactly the four-component AAD with
    `format = "msgpack"`, `compressed = "True"` (frozen bytes `54 72 75 65`);
@@ -560,7 +593,7 @@ An SDK implementation of interop/v2 MUST:
 | `constructed_container_vectors` | Accept vectors too large to pin as hex. Each vector has `method`, `original_size`, `payload_len`, `container_len`, and two segment lists, `container_construction` and `value_construction`. To build the bytes, repeat each segment's `hex` `count` times and concatenate the segments in order (`construction_note`). This list form generalises `decode-bounds.json`'s `{repeat_hex, count, suffix_hex}`, which is the two-segment case. Readers MUST decode the constructed container to the constructed value. The group holds one vector, `lz4_ratio_product_wraps_32_bits`. It is a `method 1` container with a 4,294,968 B payload: an LZ4 block of a `bin32` of zeros, a literal run followed by an offset-1 match of zeros and then the 5-literal final run, with an `original_size` of 8,523,079 B. It is the file's vector for the ratio product's width: a reader that computes the product in 32 bits rejects it, signed or unsigned, and so does one that rejects on 32-bit overflow, or a 32-bit one that skips the product when `original_size` is at most the payload length (see [Security Limits](#security-limits-decompression-bounds) for why it has this shape). It is also the file's only multi-megabyte decode, so a failure on it alone does not prove a 32-bit product: check the rejection reason. Every other vector in this file is under 300 B. [SDK Implementation Requirements](#sdk-implementation-requirements), item 7, says who runs it, on which targets, and at which limits. |
 | `aad_vectors` | The v2 AAD (`compressed = "True"`) over the same tenant and cache key as v1's `interop_key_aad` — the two AAD hex strings differ only in the final component (`"True"` vs `"False"`), pinned side-by-side. |
 | `encryption_vectors` | Full compressed+encrypted round-trip: HKDF-SHA256 (same master key and tenant as v1 / `encryption.json`, so the derived-key fingerprint `96179a9b…` is the published one), AES-256-GCM over the v2 container with the v2 AAD and a fixed nonce; decrypt-verified on every cross-check run. |
-| `reject_vectors` | Structural must-rejects, including: bad magic (a bare v1 value fed to a v2 reader), bad container version, unknown method, signed-family integer markers (incl. a negative `original_size`), non-`bin` payloads (the array-of-ints leniency decision, pinned, and a `str` payload), forged `bin32` length header (4 GiB declared, input ends), `method 0` size mismatch, trailing bytes, declared-size bomb (1 TiB), `reject_declared_size_wraps_32_bits` and `reject_declared_size_joins_32_bits` (a reader that truncates `original_size` to 32 bits, or joins its halves in 32-bit arithmetic, accepts at least one of them), ratio bomb (1000:1), zero-length compressed payload, malformed LZ4 (zero offset), truncated LZ4, and decompressed-length mismatch. All MUST error before or during step 5 of the reader algorithm; the `error` text is a maintainer note, not normative. |
+| `reject_vectors` | Structural must-rejects, including: bad magic (a bare v1 value fed to a v2 reader), bad container version, unknown method, signed-family integer markers (incl. a negative `original_size`), non-`bin` payloads (the array-of-ints leniency decision, pinned, and a `str` payload), forged `bin32` length header (4 GiB declared, input ends), `method 0` size mismatch, trailing bytes, declared-size bomb (1 TiB), `reject_declared_size_wraps_32_bits` and `reject_declared_size_joins_32_bits` (a reader that truncates `original_size` to 32 bits, or joins its halves in 32-bit arithmetic, accepts at least one of them), ratio bomb (1000:1), zero-length compressed payload, malformed LZ4 (zero offset), truncated LZ4, and decompressed-length mismatch. Each MUST error no later than the step the [Reader Algorithm](#reader-algorithm-normative-order) assigns it ([check order](#check-order)); the `error` text is a maintainer note, not normative. |
 | `crypto_reject_vectors` | `reject_v2_ciphertext_with_v1_aad` and `reject_v1_ciphertext_with_v2_aad` — both cross-mode AAD combinations MUST fail AES-GCM authentication (mode separation), pinned against real ciphertexts from this file and the v1 file. |
 
 Regenerate / verify:

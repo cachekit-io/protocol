@@ -17,8 +17,8 @@ Every class below is proven reachable by execution rather than argued from readi
      SDKs; a deletion here is invisible until an SDK's coverage has already shrunk.
 
   3. Whole-file properties, which every per-vector check is structurally blind to
-     because they all iterate the fixture's own vector list (LAB-1751 panel round 3;
-     all three exited 0 before the guards existed):
+     because they all iterate the fixture's own vector list
+     (all three exited 0 before the guards existed):
        - the base-vector SET. Dropping a legacy base AND its `_bin` twin together net
          to zero in generate's append-only diff, so `verify` reported "all 6 vector
          pairs verified" and `generate` wrote the shrunken fixture.
@@ -44,20 +44,22 @@ Every class below is proven reachable by execution rather than argued from readi
      message. Exactly the size cap must reach the ratio bound, and the exact-1000:1 case
      must fail with anything but the ratio message. So deleting or loosening one branch
      fails this suite even where a later check would also reject. Step 3's
-     compressed_data cap is not covered: compressed_data is a
-     strict slice of the envelope step 1 already bounded, so no input reaches it.
+     compressed_data cap is not covered: compressed_data is a strict slice of the
+     envelope step 1 already bounded, so no input reaches it.
 
   6. The fixture's `reject_vectors`. The conforming reader rejects each at its named
-     step. Then each bound (size cap, zero length, ratio, checksum, output length) is
+     step. Then each check (size cap, zero length, ratio, checksum, output length) is
      dropped from the reader in turn, and across every vector in the file only that
-     bound's vectors may change outcome, to accepted or to a later step. verify must
+     check's vectors may change outcome, to accepted or to a later step. verify must
      fail an altered reject vector by name and a dropped or added one as set drift, and
      generate must refill a missing group byte-identically without dropping a committed
      entry. A truncating original_size decode must accept only the u32-wrap vector,
      and a half-joining one must reject it only on length after decompression. A
      reader that decompresses first must miss the size-cap and ratio vectors' named
      steps. An allocation probe must catch a reader that allocates and frees
-     original_size before its checks, which no error assertion can.
+     original_size before its checks, which no error assertion can. A liblz4 call
+     that raises anything but the refusal a vector pins must fail that vector by name,
+     not escape verify as a traceback.
 
 A guard with no mutation test is one refactor away from being deleted by someone
 who cannot see what it holds up.
@@ -74,6 +76,8 @@ Run: python3 tools/test_wire_format_reference.py     (exit 1 on any failure)
 from __future__ import annotations
 
 import ast
+import contextlib
+import io
 import json
 import re
 import shutil
@@ -754,6 +758,60 @@ def check_reject_group() -> list[str]:
     return failures
 
 
+def _raising_lz4(error: str) -> dict[str, ModuleType]:
+    """A stand-in `lz4.block` whose decompress raises `error`, so the case runs on both CI legs."""
+    block = ModuleType("lz4.block")
+    block.LZ4BlockError = type("LZ4BlockError", (Exception,), {})
+    raised = block.LZ4BlockError if error == "LZ4BlockError" else OverflowError
+
+    def decompress(_data: bytes, uncompressed_size: int) -> bytes:
+        raise raised(f"stand-in liblz4 raises at uncompressed_size={uncompressed_size}")
+
+    block.decompress = decompress
+    pkg = ModuleType("lz4")
+    pkg.block = block
+    return {"lz4": pkg, "lz4.block": block}
+
+
+def check_reject_liblz4_raises() -> list[str]:
+    """A raising liblz4 call in a reject vector's check fails that vector by name, not the run.
+
+    LZ4BlockError is the refusal the zero-length and ratio vectors pin, so only the
+    length vector may fail on it; OverflowError is never a refusal.
+    """
+    failures = []
+    refusing = ("reject_zero_length_compressed_data", "reject_ratio_bomb")
+    for error, named, refused in (
+        ("LZ4BlockError", ("reject_decompressed_length_mismatch",), refusing),
+        ("OverflowError", ("reject_decompressed_length_mismatch", *refusing), ()),
+    ):
+        out, err = io.StringIO(), io.StringIO()
+        with (
+            patch.dict(sys.modules, _raising_lz4(error)),
+            contextlib.redirect_stdout(out),
+            contextlib.redirect_stderr(err),
+        ):
+            try:
+                code = _load_tool().verify()
+            except Exception as e:  # noqa: BLE001 - an escape here is the regression under test
+                code = f"escaped verify: {e!r}"
+        # The stand-in's own message on the FAIL line, so a builder or msgpack
+        # AssertionError on the same vector cannot satisfy the case.
+        missing = [
+            name for name in named
+            if not re.search(rf"FAIL {name}: AssertionError\(.*stand-in liblz4 raises", err.getvalue())
+        ]
+        # A pinned refusal must still pass, or a branch that fails on it would go unseen
+        # on the stdlib leg.
+        missing += [
+            f"ok {name}" for name in refused
+            if not re.search(rf"ok {name}: .*liblz4 refuses the block", out.getvalue())
+        ]
+        label = f"liblz4 decompress raising {error}: exit {code}, missing {missing}"
+        _report(failures, code == 1 and not missing, label)
+    return failures
+
+
 def check_constructed_group() -> list[str]:
     """verify fails a dropped or altered constructed vector, by name."""
     failures = []
@@ -819,6 +877,7 @@ def main() -> int:
         ("reader reject branches", check_reader_rejects),
         ("constructed group", check_constructed_group),
         ("reject group", check_reject_group),
+        ("reject liblz4 errors", check_reject_liblz4_raises),
     ):
         print(f"{label}:")
         failures += check()

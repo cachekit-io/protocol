@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Mutation tests for the lz4BlockDecompress validate-before-allocate guard in
-// frame-crosscheck.mjs (LAB-1202, deferred from the LAB-903 expert panel).
+// frame-crosscheck.mjs.
 // Zero dependencies. Run: node tools/test-frame-crosscheck-guard.mjs
 //
 // Evidence convention (LAB-903 / test_check_version_floors.py): a baseline

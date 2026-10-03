@@ -394,13 +394,10 @@
   unprefixed (`default`) keys, which are a shared write space; `OPTIONS` (any
   path) documented as the CORS-preflight authentication exception. Stale-while-
   revalidate marked shipped; the never-emitted `201` dropped from the status
-  table. **`HEAD` on a missing key stays `404`** (RFC 9110 §9.3.2) — the deployed
-  server's `200` is recorded as a known server deviation, not adopted. SDKs MUST
-  NOT work around it (`exists()` keeps branching on status); callers needing an
-  existence check against the deployed server MAY issue a raw `GET` themselves
-  until it is corrected — its `404` may trail a `PUT` made through another edge
-  instance by up to the ~5 s negative-cache window
-  ([fallback details](spec/saas-api.md#head-v1cachekey)).
+  table. **`HEAD` on a missing or evicted key returns `404`**
+  (RFC 9110 §9.3.2), the status `GET` would return; a present key returns `200`
+  with `X-CacheKit-Freshness`. `exists()` branches on the status code
+  ([details](spec/saas-api.md#head-v1cachekey)).
 
 - StorageEnvelope `compressed_data` canonical encoding flipped from MessagePack
   array-of-ints to `bin` (LAB-783 /

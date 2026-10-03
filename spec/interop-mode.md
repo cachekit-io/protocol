@@ -51,7 +51,6 @@ The default (auto-mode) key format includes language-specific function identity:
 ```diff
 - Python: ns:users:func:myapp.services.get_user:args:{hash}:1s
 - Rust:   (no auto keygen — caller-supplied key)
-- Go:     ns:users:func:services.GetUser:args:{hash}:1s
 ```
 
 Different function paths produce different keys, so two SDKs write to different cache
@@ -77,8 +76,8 @@ Interop mode fixes both, opt-in, without touching auto-mode behavior.
 
 | | Auto mode (default) | Interop mode (opt-in) |
 | :--- | :--- | :--- |
-| Key format | `ns:{ns}:func:{mod.qualname}:args:{hash}:{flags}` | `{namespace}:{operation}:{args_hash}` |
-| Operation identity | Derived from language function path | **Explicit, user-supplied** |
+| Key format | Python `ns:{ns}:func:{mod.qualname}:args:{hash}:{flags}`; TypeScript `{namespace}:{hash}`; Rust none (caller-supplied key) | `{namespace}:{operation}:{args_hash}` |
+| Operation identity | Python: derived from the function path; TypeScript: the caller's `namespace` string | **Explicit, user-supplied** |
 | Value format | SDK-internal container — differs per SDK ([wire-format.md](wire-format.md#sdk-storage-containers-auto-mode)) | **Plain MessagePack, no envelope** |
 | Argument hashing | Per-SDK normalization | **Canonical, byte-identical across SDKs** |
 | Cross-SDK reads | ❌ | ✅ |
@@ -500,7 +499,8 @@ A reader MUST therefore:
    (`nested_array16_each_header_fits_sum_overclaims`). A map pair counts as two slots
    (key + value). Exceeding the sum is sufficient to reject but does not define an
    incomplete document: `92 dc 00 00` sums to 2 and is still truncated. A reader MUST
-   reject a structurally incomplete document as well. Every per-header term and the running sum MUST be computed in at least
+   reject a structurally incomplete document as well. Every per-header term and the
+   running sum MUST be computed in at least
    64 bits or with checked/saturating arithmetic, and an overflow is itself a
    rejection: two `array32` headers already exceed 2³², and a 32-bit accumulator that
    wraps to a small value passes the budget (`array32_sum_wraps_u32`,
@@ -519,16 +519,18 @@ re-open the amplifier. A verdict cannot show that, because it does not say *when
 reader rejected: a stock decoder's default limits reject every reject vector today,
 and a reader with per-header checks alone rejects the incomplete ones at end of input,
 after it has pre-allocated for them. An SDK's conformance test MUST therefore assert
-that its structural guard rejects each reject vector before anything is materialised,
+that a pre-decode check rejects each reject vector before anything is materialised,
 by driving each reject vector through every untrusted decode entry point (value
 reads, and any other untrusted decode such as invalidation events), below the point
 where the SDK turns the error into a cache miss or drops it, and asserting an error
 that only a pre-decode check produces: the structural guard, or a size cap that entry
-point applies ahead of it. Calling the guard directly as well is fine, but on its own
-does not show that the read path runs it. A run that only asserts that a decode fails
-does not demonstrate conformance.
+point applies ahead of it; where a size cap rejects a vector first, the test MUST
+also call that entry point's structural guard directly with it and assert the
+guard's own rejection. Outside that case, calling the guard directly as well is
+fine, but on its own it does not show that each entry point runs it. A run that
+only asserts that a decode fails does not demonstrate conformance.
 [`test-vectors/decode-bounds.json`](../test-vectors/decode-bounds.json) pins the
-bytes every decoder MUST reject (17) and MUST accept (3); the same rules apply to
+bytes every decoder MUST reject and MUST accept; the same rules apply to
 any other untrusted MessagePack decode in an SDK (auto-mode payloads after the
 envelope is unwrapped, invalidation events).
 
@@ -556,7 +558,7 @@ not re-litigated by accident.
 | **Sort = Unicode code point order** (≡ UTF-8 byte order), stated explicitly | "Lexicographic" (unspecified) | "Lexicographic" is ambiguous: JS default sort (UTF-16 code units) disagrees with UTF-8 byte order on supplementary-plane characters; locale collation would be nondeterministic. Code-point order is total, locale-free, and equals the byte order of the encoded form. |
 | **Sets sorted by encoded bytes** | Sort "naturally" per element type | Natural ordering needs a cross-type comparison function every language must reimplement identically (int vs str vs array…). Encoded-byte order falls out of the encoder for free and is trivially total. |
 | **Datetime = floor-to-µs, one float64 division** | "UTC Unix timestamp" (unspecified arithmetic) | Naive float arithmetic differs across languages in the last bit. Integer µs + a single IEEE 754 division is bit-deterministic everywhere. |
-| **Blake2b-256 retained** | SHA-256 | Python and TypeScript already ship Blake2b (`hashlib`, `@noble/hashes`); Rust adds one small `blake2` crate (it has no in-SDK keygen today). Introducing a second hash algorithm would grow the audit surface for zero benefit and split key generation from auto mode. |
+| **Blake2b-256 retained** | SHA-256 | Python and TypeScript already ship Blake2b (`hashlib`, `@noble/hashes`); Rust adds one small `blake2` crate (its only in-SDK keygen is interop mode). Introducing a second hash algorithm would grow the audit surface for zero benefit and split key generation from auto mode. |
 | **No version segment in the key** | `iv1:` prefix or a 4th segment | The issue pins the 3-segment format. Versioning-by-mode-name (interop/v1 → a new mode) is sufficient: canonicalization changes alter hashes, so old and new writers merely miss each other's entries — a cache-warm cost, not corruption. |
 | **Closed data model, errors on everything else** | Best-effort coercion | A value that hashes on one SDK and throws on another is annoying; a value that silently hashes *differently* on two SDKs is a debugging nightmare. Errors are loud and local. |
 | **Lowercase-only segments** | Free-form segment strings | Cross-language casing conventions guarantee silent key divergence (`get_user` vs `GetUser`). Rejecting uppercase makes the divergence a startup error. |

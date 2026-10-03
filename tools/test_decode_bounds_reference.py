@@ -77,11 +77,23 @@ WALK_TABLE = {
     "d801" + "00" * 16: (0, 0, True, 0),         # fixext16
     "cf" + "00" * 8: (0, 0, True, 0),            # uint64
     "ca00000000": (0, 0, True, 0),               # float32
+    "cb" + "00" * 8: (0, 0, True, 0),            # float64
+    "cc00": (0, 0, True, 0),                     # uint8
+    "cd0000": (0, 0, True, 0),                   # uint16
+    "ce00000000": (0, 0, True, 0),               # uint32
+    "d000": (0, 0, True, 0),                     # int8
+    "d10000": (0, 0, True, 0),                   # int16
+    "d200000000": (0, 0, True, 0),               # int32
+    "d3" + "00" * 8: (0, 0, True, 0),            # int64
+    "d5" + "00" * 3: (0, 0, True, 0),            # fixext2: type byte + 2
+    "d6" + "00" * 5: (0, 0, True, 0),            # fixext4
+    "d7" + "00" * 9: (0, 0, True, 0),            # fixext8
     "cf00": (0, 0, False, 0),                    # fixed payload cut short
     "90": (1, 0, True, 1),                       # empty array still counts a level
     "81a0c0": (1, 2, True, 0),                   # fixmap: one level, two slots
     "8f": (1, 30, False, 0),                     # fixmap mask 0x0f
     "9181a0c0": (2, 3, True, 1),                 # map inside array: array_depth counts arrays only
+    "81a091c0": (2, 3, True, 1),                 # array inside map: an open map is not an open array
     "9291c091c0": (2, 4, True, 2),               # sibling arrays: a closed array leaves the count
     "92dc0000": (2, 2, False, 2),                # truncated with the sum inside the budget
     "dc00": (0, 0, False, 0),                    # length field cut short
@@ -89,13 +101,23 @@ WALK_TABLE = {
 }
 
 
-# hex -> (per_header_fits, u32_add_fits, u32_mul_fits): the near-miss models on their boundaries.
+FLAGS = ("per_header_fits", "u32_add_fits", "u32_mul_fits", "pair_as_one_fits", "ext_uncounted_fits",
+         "str_bin_uncounted_fits")
+# hex -> FLAGS: the near-miss models on their boundaries.
 FLAG_TABLE = {
-    "92c0c0": (True, True, True),                # backed: every model passes
-    "93c0c0": (False, False, False),             # claim 3 fits len 3, not the 2 bytes after the header
-    "91ddffffffff": (False, True, False),        # running sum 1 + (2^32 - 1) wraps to 0
-    "df80000000": (False, False, True),          # map term 2 x 2^31 wraps to 0 in 32 bits
-    "ddffffffffdd00000001": (False, False, False),  # the first term alone exceeds the budget
+    "92c0c0": (True, True, True, True, True, True),          # backed: every model passes
+    "93c0c0": (False, False, False, False, False, False),    # claim 3 fits len 3, not the 2 bytes after the header
+    "91ddffffffff": (False, True, False, False, False, False),  # running sum 1 + (2^32 - 1) wraps to 0
+    "df80000000": (False, False, True, False, False, False),  # map term 2 x 2^31 wraps to 0 in 32 bits
+    "ddffffffffdd00000001": (False, False, False, False, False, False),  # the first term alone exceeds the budget
+    "81c0": (False, False, False, True, False, False),        # 1 pair = 1 slot fits the budget of 1; 2 slots do not
+    "82c0c0c0": (False, False, False, True, False, False),    # 2 pairs as 2 slots fit 3; as 4 slots they do not
+    "c702054142": (True, True, True, True, True, True),      # backed ext8: every model passes
+    "c9ffffffff0541": (False, False, False, False, True, False),  # ext length uncounted: 0 slots
+    "92c7ff0541c0": (False, False, False, False, True, False),    # ...also inside a collection
+    "c6ffffffff41": (False, False, False, False, False, True),    # bin length uncounted
+    "dbffffffff41": (False, False, False, False, False, True),    # str length uncounted
+    "a5c0": (False, False, False, False, False, True),            # fixstr length uncounted too
 }
 
 
@@ -107,10 +129,17 @@ def walk_table() -> list[str | None]:
         out.append(None if got == want else f"walk {hx}: {got} != {want}")
     for hx, want in FLAG_TABLE.items():
         w = dbr.walk(bytes.fromhex(hx))
-        got = (w["per_header_fits"], w["u32_add_fits"], w["u32_mul_fits"])
+        got = tuple(w[f] for f in FLAGS)
         out.append(None if got == want else f"walk flags {hx}: {got} != {want}")
     out.append(expect_raises("walk 0xc1", lambda: dbr.walk(b"\xc1"), "never used"))
     return out
+
+
+def accept(*args: object, **kwargs: object) -> dict:
+    """An accept vector: recipe() with no reject reasons, the field build() deletes."""
+    v = dbr.recipe(*args, reasons=[], **kwargs)
+    del v["reject_reasons"]
+    return v
 
 
 def cli_rejects(name: str, *args: str) -> str | None:
@@ -147,36 +176,112 @@ def main() -> None:
     results.append(expect_raises("overclaim tag", with_recipes(complete), "overclaim tag mismatch"))
 
     deep_accept = copy.deepcopy(good)
-    deep_accept["accept_vectors"][0] = dbr.recipe("nested_fixarray_depth_33", "", "91", dbr.MIN_DEPTH_FLOOR + 1, "c0",
-                                                  depth=dbr.MIN_DEPTH_FLOOR + 1, slots=dbr.MIN_DEPTH_FLOOR + 1, reasons=[])
-    del deep_accept["accept_vectors"][0]["reject_reasons"]
+    deep_accept["accept_vectors"][0] = accept("nested_fixarray_depth_33", "", "91", dbr.MIN_DEPTH_FLOOR + 1, "c0",
+                                              depth=dbr.MIN_DEPTH_FLOOR + 1, slots=dbr.MIN_DEPTH_FLOOR + 1)
     results.append(expect_raises("accept floor", with_recipes(deep_accept), "deeper than the floor"))
 
     cut_accept = copy.deepcopy(good)
     at = next(i for i, v in enumerate(cut_accept["accept_vectors"]) if v["name"] == "array16_256_backed_nils")
-    cut_accept["accept_vectors"][at] = dbr.recipe("array16_256_backed_nils", "", "dc" + dbr.u16(256), 1, "c0" * 255,
-                                                 depth=1, slots=256, reasons=[])
-    del cut_accept["accept_vectors"][at]["reject_reasons"]
+    cut_accept["accept_vectors"][at] = accept("array16_256_backed_nils", "", "dc" + dbr.u16(256), 1, "c0" * 255,
+                                             depth=1, slots=256)
     results.append(expect_raises("accept complete", with_recipes(cut_accept), "not one complete document"))
 
-    # Coverage: dropping exactly one discriminating vector must fire its guard.
-    def without(name: str) -> dict:
+    # A reject vector whose tags name no spec rule must fail the stdlib-only leg too.
+    def stdlib_only(doc: dict) -> Callable[[], object]:
+        def run() -> object:
+            with patch.object(dbr, "build", lambda: copy.deepcopy(doc)):
+                return with_msgpack(None, doc)()
+        return run
+    for case, bad in (("empty reject_reasons", dbr.recipe("t", "", "91", 1, "c0", depth=1, slots=1, reasons=[])),
+                      ("unknown reject reason", dbr.recipe("t", "", "c0", 2, depth=0, slots=0, reasons=["trailing"])),
+                      ("unknown reason beside a known one",
+                       dbr.recipe("t", "", "95", 1, "c0c0c0c0", depth=1, slots=5, reasons=["overclaim", "trailing"])),
+                      ("accept vector filed as reject", copy.deepcopy(good["accept_vectors"][0]))):
         doc = copy.deepcopy(good)
-        kept = [v for v in doc["reject_vectors"] if v["name"] != name]
-        if len(kept) != len(doc["reject_vectors"]) - 1:
+        doc["reject_vectors"].append(bad)
+        results.append(expect_raises(case, stdlib_only(doc), "reject_reasons must name"))
+
+    # Two vectors sharing a name: the later walk overwrites the earlier, so the coverage checks would read
+    # an accept vector's walk for a reject vector.
+    dup = copy.deepcopy(good)
+    dup["accept_vectors"][0]["name"] = dup["reject_vectors"][0]["name"]
+    results.append(expect_raises("duplicate vector name", with_recipes(dup), "duplicate vector names"))
+
+    # Coverage: dropping exactly one discriminating vector must fire its guard.
+    def without(name: str, *twins: dict, side: str = "reject_vectors") -> dict:
+        doc = copy.deepcopy(good)
+        kept = [v for v in doc[side] if v["name"] != name]
+        if len(kept) != len(doc[side]) - 1:
             sys.exit(f"FAIL coverage test names no vector: {name}")  # a typo must not pass vacuously
-        doc["reject_vectors"] = kept
+        doc[side] = kept + list(twins)
         return doc
     for name, needle in (("nested_array16_each_header_fits_sum_overclaims", "per-header checks pass"),
                          ("array32_sum_wraps_u32_small_first", "32-bit running sum"),
                          ("map32_half_claim_wraps_u32_mul", "map term computed in 32 bits"),
                          ("nested_fixarray_depth_1025_complete", "complete array spine"),
-                         ("nested_fixmap_depth_1025_complete", "complete map spine")):
+                         ("nested_fixmap_depth_1025_complete", "complete map spine"),
+                         ("fixmap_short_by_one", "map pair as one slot"),
+                         ("ext32_overclaim", "does not count ext lengths")):
         results.append(expect_raises(f"coverage: drop {name}", with_recipes(without(name)), needle))
+    # bin32 and str32 are twins: each alone catches the str/bin model, so only dropping both fires.
+    no_str_bin = without("bin32_overclaim")
+    no_str_bin["reject_vectors"] = [v for v in no_str_bin["reject_vectors"] if v["name"] != "str32_overclaim"]
+    results.append(expect_raises("coverage: drop bin32_overclaim + str32_overclaim", with_recipes(no_str_bin),
+                                 "does not count str/bin lengths"))
+
+    # Accept side: dropping, emptying or shallowing the floor spines must fire.
+    floor = dbr.MIN_DEPTH_FLOOR
+    for name, needle in (("nested_fixarray_depth_32", "array spine exactly at the depth floor"),
+                         ("nested_fixmap_depth_32", "map spine exactly at the depth floor")):
+        results.append(expect_raises(f"coverage: drop {name}", with_recipes(without(name, side="accept_vectors")), needle))
+    no_accept = copy.deepcopy(good)
+    no_accept["accept_vectors"] = []
+    results.append(expect_raises("coverage: no accept vectors", with_recipes(no_accept), "spine exactly at the depth floor"))
+    shallow = copy.deepcopy(good)
+    shallow["accept_vectors"][:2] = [accept("nested_fixarray_depth_8", "", "91", 8, "c0", depth=8, slots=8),
+                                     accept("nested_fixmap_depth_8", "", "81a0", 8, "c0", depth=8, slots=16)]
+    results.append(expect_raises("coverage: floor spines at depth 8", with_recipes(shallow),
+                                 "spine exactly at the depth floor"))
+    for name, twin, needle in (
+        ("nested_fixarray_depth_32",  # an array spine one level short of the floor
+         accept("t", "", "91", floor - 1, "c0", depth=floor - 1, slots=floor - 1), "array spine exactly"),
+        ("nested_fixarray_depth_32",  # at the floor, but one level is a map
+         accept("t", "", "91", floor - 1, "81a0c0", depth=floor, slots=floor + 1), "array spine exactly"),
+        ("nested_fixmap_depth_32",  # a map spine one level short of the floor
+         accept("t", "", "81a0", floor - 1, "c0", depth=floor - 1, slots=2 * (floor - 1)), "map spine exactly"),
+        ("nested_fixmap_depth_32",  # at the floor, but one level is an array
+         accept("t", "", "81a0", floor - 1, "91c0", depth=floor, slots=2 * (floor - 1) + 1), "map spine exactly"),
+    ):
+        results.append(expect_raises(f"coverage: accept twin of {name}",
+                                     with_recipes(without(name, twin, side="accept_vectors")), needle))
+
+    # Each coverage refinement must bind: swap the vector for a twin that breaks only that refinement.
+    a16 = "dc" + dbr.u16(2000)
+    ceil = dbr.MAX_DEPTH_CEILING
+    for name, twin, needle in (
+        ("nested_array16_each_header_fits_sum_overclaims",  # per-header fits, but one level deep
+         dbr.recipe("t", "", "92", 1, "a1c0", depth=1, slots=3, reasons=["overclaim"]), "per-header checks pass"),
+        ("nested_array16_each_header_fits_sum_overclaims",  # per-header fits, but at the depth floor
+         dbr.recipe("t", "", a16, dbr.MIN_DEPTH_FLOOR, "c0" * 2000, depth=dbr.MIN_DEPTH_FLOOR,
+                    slots=dbr.MIN_DEPTH_FLOOR * 2000, reasons=["overclaim"]), "per-header checks pass"),
+        ("nested_fixarray_depth_1025_complete",  # a trailing byte: not one complete document
+         dbr.recipe("t", "", "91", ceil + 1, "c0c0", depth=ceil + 1, slots=ceil + 1, reasons=["depth"]),
+         "complete array spine"),
+        ("nested_fixarray_depth_1025_complete",  # complete, but two levels past the ceiling
+         dbr.recipe("t", "", "91", ceil + 2, "c0", depth=ceil + 2, slots=ceil + 2, reasons=["depth"]),
+         "complete array spine"),
+        ("nested_fixmap_depth_1025_complete",
+         dbr.recipe("t", "", "81a0", ceil + 1, "c0c0", depth=ceil + 1, slots=2 * (ceil + 1), reasons=["depth"]),
+         "complete map spine"),
+        ("nested_fixmap_depth_1025_complete",  # complete, but two levels past the ceiling
+         dbr.recipe("t", "", "81a0", ceil + 2, "c0", depth=ceil + 2, slots=2 * (ceil + 2), reasons=["depth"]),
+         "complete map spine"),
+    ):
+        results.append(expect_raises(f"coverage: twin of {name}", with_recipes(without(name, twin)), needle))
 
     # Negative controls: a near-miss model forced to always pass must be caught.
     real_walk = dbr.walk
-    for flag in ("per_header_fits", "u32_add_fits", "u32_mul_fits"):
+    for flag in FLAGS:
         def forced(data: bytes, flag: str = flag) -> dict:
             return {**real_walk(data), flag: True}
         with patch.object(dbr, "walk", forced):
