@@ -179,10 +179,23 @@ Encoding rules:
   reader in a new language would need *extra* code to accept both shapes — the
   opposite of interop's lowest-implementation-bar goal. Exactly one payload
   encoding is legal: `bin`. Pinned by the `reject_payload_array_of_ints` vector.
-- A reader MUST validate any declared `bin` length header against the remaining
-  input **before** allocating for it (a 5-byte forged `bin32` header must not
-  cause a 4 GiB allocation — same rule as
-  [wire-format.md → Security Limits](wire-format.md#security-limits)).
+- A reader MUST decode the body (`container[2..]`) under rules 1 and 2 of
+  [interop-mode.md → Decode bounds](interop-mode.md#decode-bounds), the same rules
+  [wire-format.md → Security Limits](wire-format.md#security-limits) applies to the
+  envelope. Rule 3's cache-miss mapping does not apply to the body: a rejected body is
+  a hard error. Every length or count header the reader decodes from the body counts
+  toward rule 2's **declared-length budget**: `bin`, `str` and `ext` lengths, and
+  `array` and `map` counts. A reader MUST NOT read past the end of the body (the
+  **remaining-bytes check**): before it reads any byte, whether a marker, a length or
+  value field, an `ext` type byte, or `bin`, `str` or `ext` data, it MUST check that the
+  body holds that byte, and reject the body otherwise; for `bin`, `str` and `ext` data
+  it makes that check before it allocates for the data. This check alone does not
+  satisfy rule 2. For example, a 5-byte forged
+  `bin32` header must not cause a 4 GiB allocation, and neither may the 7-byte container
+  `c1 02 dd ff ff ff ff`, whose `array32` header declares 4,294,967,295 elements. The
+  reference parser (`parse_container` in `tools/interop-v2-reference.py`) shows a
+  three-field hand parser that meets rules 1 and 2 and the remaining-bytes check
+  without a separate walk.
 
 The container is deliberately **not** the ByteStorage envelope: no xxHash3-64
 checksum field (integrity comes from the AES-GCM tag when encrypted, and is
@@ -371,9 +384,9 @@ Given stored bytes for an interop/v2-configured cache:
 2. Check container[0] == 0xC1 and container[1] == 0x02; else hard error
    (mode-mismatch diagnostics per Mode Discrimination).
 3. Decode exactly one MessagePack document from container[2..]; reject
-   trailing bytes; enforce element types (int, int, bin) and the
-   header-vs-remaining-input rule; decode original_size at its full wire
-   value (see Security Limits).
+   trailing bytes; enforce element types (int, int, bin), Decode bounds
+   rules 1 and 2, and the remaining-bytes check (see Encoding rules); decode
+   original_size at its full wire value (see Security Limits).
 4. Enforce every Security Limit above, before any decompression or output
    allocation (see check order below).
 5. method 1: LZ4-block-decompress the payload with original_size as the
@@ -394,10 +407,11 @@ of the payload for `method 0`, or a value buffer sized from `original_size`. The
 ordering rule above restricts only output buffers. Before step 4 passes, a reader MAY
 also copy input bytes, for example into the step 1 AES-GCM plaintext, a copy of the
 container body, or the buffer a copying MessagePack decoder fills for the payload `bin`
-under the header-vs-remaining-input rule. Each such copy MUST be no larger than the
-bytes it is copied or decrypted from, and MUST NOT grow before step 4 passes. A
-`method 0` reader MAY return its payload copy, or a view into the step 1 plaintext or the
-stored bytes, as its output once step 4 passes.
+once its length has passed the remaining-bytes check in Encoding rules and the body is
+within the declared-length budget. Each such copy MUST be no larger than the bytes it is
+copied or decrypted from, and MUST NOT grow before step 4 passes. A `method 0` reader MAY
+return its payload copy, or a view into the step 1 plaintext or the stored bytes, as its
+output once step 4 passes.
 
 Step order is normative. In the encrypted path the AES-GCM tag is verified (step 1)
 before any container parsing or decompression — hostile bytes never reach the LZ4 decoder
@@ -520,7 +534,8 @@ An SDK implementation of interop/v2 MUST:
 2. Write every value as exactly one v2 container; emit canonical MessagePack
    body encoding with a `bin` payload; support `method 0`.
 3. Reject, on read: bad magic/version, wrong element types (including non-`bin`
-   payloads — the array-of-ints shape included), trailing bytes, every
+   payloads — the array-of-ints shape included), a truncated body, a body
+   over the depth bound or the declared-length budget, trailing bytes, every
    Security-Limits violation, unknown methods included (in the
    [check order](#check-order)), LZ4 errors,
    and output-length mismatches.
