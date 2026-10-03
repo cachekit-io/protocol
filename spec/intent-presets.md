@@ -304,27 +304,31 @@ only entry point that did not, and from `cachekit-rs` 0.8.0 it takes hex too.
    per-construction intent is the only boundary that does not reintroduce presence-based
    activation somewhere in the stack.
 
-**Migration story (cachekit-py).** Python's tri-state `encryption=None` auto-detect
-(`cache_handler.py:580-585`) currently enables encryption on every preset when the
-variable is set, and the same auto-detect path is also how a config-drift deployment
+**Migration story (cachekit-py).** Through `cachekit` 0.20.0, Python's tri-state
+`encryption=None` auto-detect enabled encryption, when the variable was set, on every
+serialized preset that stated no intent (no `encryption=`, or an `EncryptionConfig`
+without `enabled=`), unless `master_key=` or `tenant_extractor=` was passed. A
+config-drift deployment
 transparently decrypts stale ciphertext left behind after encryption is turned off
-(**legacy-decrypt**) — rule 2's constructor list above governs *activation*, not this
-read-side role, and removing auto-activation **MUST NOT** remove the ability to decrypt
-what a still-encrypting peer already wrote into a CK-framed (cachekit-py auto-mode)
-cache. An interop cache never had that ability on a non-encrypting client (step 3's
-`encryption=False` branch). For one transitional minor release Python:
+(**legacy-decrypt**) through a separate path — the encryption wrapper resolves
+`CACHEKIT_MASTER_KEY` itself when the handler holds no key. Rule 2's constructor list
+above governs *activation*, not this read-side role, and removing auto-activation
+**MUST NOT** remove the ability to decrypt what a still-encrypting peer already wrote
+into a CK-framed (cachekit-py auto-mode) cache. An interop cache never had that ability
+on a non-encrypting client (step 3's `encryption=False` branch). For one transitional
+minor release (`cachekit` 0.20.0) Python:
 
 1. **MUST** keep decrypting existing ciphertext on the legacy-decrypt path.
-2. **MUST** keep the current auto-*activation* of new writes, but **MUST** emit a
+2. **MUST** keep the auto-*activation* of new writes, but **MUST** emit a
    one-time warning via `logger.warning` (not `DeprecationWarning` alone — Python
    silences `DeprecationWarning` by default outside `__main__`, so on every
    uvicorn/gunicorn/celery deployment the notice would otherwise never surface) naming
    the explicit spellings (`@cache.secure(...)` or `encryption=True`).
-3. The following release **MUST** remove auto-*activation* of new writes. The gate tests
+3. The following release (`cachekit` 0.21.0) **MUST** remove auto-*activation* of new writes. The gate tests
    only inputs known at construction — never "does legacy-decrypt apply", which is a
    property of per-entry backend state discovered on read, not of construction inputs,
    and so cannot gate construction without leaving a branch undefined:
-   - `encryption=True` (or `@cache.secure(...)`) → construct encrypting, as today.
+   - `encryption=True` (or `@cache.secure(...)`) → construct encrypting.
    - `encryption=False` → construct **not** encrypting new writes, and **MUST** still
      retain legacy-decrypt from `CACHEKIT_MASTER_KEY` if present — the read-side role
      rule 2 names above, unaffected by this branch. That obligation holds for
@@ -433,9 +437,10 @@ encryption entirely; it is not a member of this family.
 Code-verified 2026-09-22 against `cachekit-py@2f7c979` (0.18.0), `cachekit-rs@6587ce9`
 (0.7.0) and `cachekit-ts@379847c` (0.1.5) on `main`. ❌ cells link the alignment ticket;
 implementation is out of scope for the specification itself. Python claims carrying the
-floor `cachekit` 0.20.0+ were verified against the published 0.20.0 wheel on 2026-10-03 and
-carry no line cite, because this document's line refs are pinned to `cachekit-py@2f7c979`;
-0.19.0 and earlier fail those rows. Rust claims carrying the floor
+floor `cachekit` 0.20.0+ were verified against the published 0.20.0 wheel on 2026-10-03, and
+those carrying `cachekit` 0.21.0+ against the published 0.21.0 wheel on 2026-10-03; they carry
+no line cite, because this document's line refs are pinned to `cachekit-py@2f7c979`, and
+releases before each floor fail its rows. Rust claims carrying the floor
 `cachekit-rs` 0.8.0+ were verified against the published 0.8.0 `.crate` on 2026-09-30, and
 those carrying `cachekit-rs` 0.9.0+ against the published 0.9.0 `.crate` on 2026-10-03; they
 carry no line cite, because this document's line refs are pinned to `cachekit-rs@6587ce9`.
@@ -451,7 +456,7 @@ carry no line cite, because this document's line refs are pinned to `cachekit-rs
 | Missing master key fails at construction | ✅ `intent.py:212` | ✅ required argument on `::secure`; `::secure_from_env` with `CACHEKIT_MASTER_KEY` unset or empty → `Err` at construction, before any Redis I/O (`cachekit-rs` 0.8.0+); short or non-hex key → `Err` | ✅ `intents-core.ts:257` |
 | `secure` companion env constructor honours `CACHEKIT_PREVIOUS_MASTER_KEYS` ([Explicit Configuration](#explicit-configuration) rule 4) | N/A — no companion constructor; the preset's optional key argument falls back itself | ✅ `::secure_from_env` reads `CACHEKIT_MASTER_KEY` and `CACHEKIT_PREVIOUS_MASTER_KEYS`, validating the previous keys as `CachekitConfig::from_env()` does, before any Redis I/O — `cachekit-rs` 0.9.0+ (0.8.0 reads `CACHEKIT_MASTER_KEY` only and ignores `CACHEKIT_PREVIOUS_MASTER_KEYS` without an error) | N/A — no companion constructor; the preset's optional `masterKey` falls back itself |
 | Default `tenant_id` is `"default"`, identical for HKDF and AAD | ✅ `cachekit` 0.20.0+ — `DEFAULT_TENANT_ID` (LAB-4666); explicit `deployment_uuid` / `CACHEKIT_DEPLOYMENT_UUID` override only, no machine-local fallback | ❌ `"default"` via `::secure` (`::encrypted` through 0.7.0), deployment namespace via `from_env()` — inconsistent by constructor — LAB-4667 | ❌ HKDF `'default'` (`manager-core.ts:206`) but AAD `''` (`manager-core.ts:375`) — mismatched within one SDK — LAB-4668 |
-| `CACHEKIT_MASTER_KEY` does not activate encryption on `minimal` / `production` / `io` | ❌ tri-state auto-detect on every preset (`cache_handler.py:580-585`) — LAB-4642 | ❌ `from_env()` activates from key presence alone (`config.rs:112`) — no constructor is exempt under the revised rule 2 — LAB-4669 | ✅ `secure()` only (`intents-core.ts:255`) |
+| `CACHEKIT_MASTER_KEY` does not activate encryption on `minimal` / `production` / `io` | ✅ `cachekit` 0.21.0+ — the key activates no preset but `secure` (its key fallback), and `local` never encrypts. In `cachekit` 0.21.0, migration step 3's one-release gate also makes `minimal`, `production`, `io` and every other preset except `secure` and `local` fail at construction with `ConfigurationError`, naming the explicit spellings, when a key is present and no intent is stated (no `encryption=`, or an `EncryptionConfig` without `enabled=`), `backend=None` included | ❌ `from_env()` activates from key presence alone (`config.rs:112`) — no constructor is exempt under the revised rule 2 — LAB-4669 | ✅ `secure()` only (`intents-core.ts:255`) |
 | Explicit encryption option encrypts every operation (activation rule 1) | ✅ `cachekit` 0.20.0+ — `encryption=True` wraps the serializer on the backend path, and `backend=None` with encryption raises `ConfigurationError` at decoration | ❌ the builder's `.encryption()` layer is consulted only by the `SecureCache` handle (`client.rs:734`); plain `set`/`get` never read it (`client.rs:537`, `:358`), and with the `encryption` feature off the builder methods return `Ok(self)` (`client.rs:1077`) — LAB-4676 | ✅ `if (this.encryption)` on both paths (`cache-core.ts:558`, `:823`) |
 | Encrypted preset is spelled `secure` | ✅ `@cache.secure` | ✅ `CacheKit::secure(url, key)` — `cachekit-rs` 0.8.0+ (`CacheKit::encrypted` through 0.7.0) | ✅ `createCache.secure()` |
 | `io`: API key by argument **or** `CACHEKIT_API_KEY` | ✅ `cachekit` 0.20.0+ — `@cache.io(api_key=…)` or `CACHEKIT_API_KEY`; `backend=` raises `ConfigurationError` | ✅ `CacheKit::io(api_key)` or `CacheKit::io_from_env()` — `cachekit-rs` 0.8.0+ (argument only through 0.7.0) | ✅ `intents-core.ts:283-288` |
@@ -478,9 +483,11 @@ accessor becomes `secure_cache()`, the constructor becomes `::secure`) costs les
 permanent per-SDK translation and a standing exception in this specification.
 
 **Key source, not switch.** Alternatives considered: *(A)* presence activates
-everywhere (Python today) — fleet convenience, rejected on the three security grounds
-above; *(B)* presence on a non-encrypting preset is an error — rejected as hostile to
-fleets that legitimately run encrypted and plain caches under one environment;
+everywhere (Python through 0.20.0) — fleet convenience, rejected on the three security grounds
+above; *(B)* presence on a non-encrypting preset is an error — rejected as a permanent
+rule, as hostile to fleets that legitimately run encrypted and plain caches under one
+environment, and shipped by `cachekit` 0.21.0 only as the migration story's
+transitional gate;
 *(C)* the rule adopted, which is already what TypeScript does and what Rust does
 outside `from_env()`.
 
