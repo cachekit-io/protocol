@@ -612,3 +612,5 @@ against these vectors in their own test suites before claiming interop support.
 [Protocol](../README.md) · [Cache Key Format](cache-key-format.md) · [Wire Format](wire-format.md) · [Encryption](encryption.md) · [SaaS API](saas-api.md)
 
 </div>
+
+Scratch line, reverted in the next commit: it adds a MUST without an id, so the conformance check fails.
