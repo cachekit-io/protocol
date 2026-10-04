@@ -36,10 +36,20 @@ id for the whole list. A capitalised keyword used as a word rather than as a req
 carries `<!-- not-a-requirement -->` in place of an id. Lowercase "must", SHOULD and MAY carry
 nothing.
 
-Ids are permanent. A new requirement takes the next free number for its file, wherever it
-sits in the text; `check` names that number when it finds a keyword without an id. An id
-is never renumbered or reused. When a requirement leaves the spec, move its entry from
-`requirements` to `retired` with a one-line reason. Rewording a requirement keeps its id.
+Ids are permanent, because an SDK test that cites one must keep meaning the same rule:
+
+- A new requirement takes the number in its file's `next` field, wherever it sits in the
+  text, and `next` goes up by one. `next` never goes down, so a number is never offered twice;
+  `check` names it when it finds a keyword without an id.
+- An editorial rewording keeps the id. A change in what is demanded (raising a bound from 32
+  to 64, say), a split into two requirements, or a merge of two into one retires the old id
+  or ids and mints new ones.
+- When a requirement leaves the spec, move its entry from `requirements` to `retired` with a
+  one-line reason.
+
+`check --base` catches an id that is dropped instead of retired, a retired id brought back, and
+`next` going down. It cannot catch an existing id deliberately moved onto a different rule,
+because that needs the meaning compared; a reviewer has to.
 
 Adding ids changes no normative text. To confirm that for a file:
 
@@ -50,15 +60,23 @@ diff <(git show main:spec/interop-mode.md) <(python3 tools/conformance.py strip 
 `strip` removes only the ids, so the diff still shows every `<!-- not-a-requirement -->` marker
 a change adds. Each one is also listed under its file in `coverage.md`.
 
-Keywords are found the way a Markdown renderer shows them. A keyword in fenced code, inline
-code or an HTML comment needs no id; one in a table, a list, a blockquote or emphasis
-(`**MUST**`, `_MUST_`) does. A fence that closes at a different indent than it opened is an
-error, because a misread fence line would hide the text up to the next fence.
+Keywords are found the way a Markdown renderer shows them. A keyword in a table, a list, a
+blockquote or emphasis (`**MUST**`, `_MUST_`) needs an id; one in inline code or an inline
+comment does not. A keyword inside a code fence or an HTML comment block is an error, so that
+a block the checker misreads fails instead of hiding text:
+
+- A code fence cannot carry an id. If its keywords state no requirement, put
+  `<!-- not-a-requirement -->` on the line before the fence; if they do, state the requirement
+  in prose.
+- An HTML comment can carry neither an id nor an exemption, so reword the keyword.
+
+A fence that closes at a different indent than it opened is an error for the same reason.
 
 ## The index
 
 `requirements.json` lists the indexed spec files. Once a file is listed, every hard keyword
-in it needs an id. Each requirement entry has these fields:
+in it needs an id. Each file has a `prefix`, the `next` number to assign, its `requirements`
+and its `retired` ids. Each requirement entry has these fields:
 
 | Field | Meaning |
 | :--- | :--- |
@@ -66,8 +84,8 @@ in it needs an id. Each requirement entry has these fields:
 | `binds` | Who must comply: `sdk`, `server` (the CachekitIO service) or `caller` (application code that uses an SDK). |
 | `sdks` | Optional. The SDKs a language-specific requirement binds, such as `["cachekit-ts"]`. Omitted, it binds every SDK. |
 | `vectors` | Vectors that exercise the requirement: `<fixture>.json:<name>`, or `<fixture>.json` for every vector in the fixture. A `path-encoding.json` vector is named by its `key`. |
-| `tests` | Tests in this repository's tools that exercise it, as `tools/<file>:<name>`, where `<name>` is the function or self-test label. These run only against the reference implementations. |
-| `gap` | One line naming what no vector or test reaches, and why. Required when there are no vectors and no tests. |
+| `tests` | Tests in this repository's tools that exercise it, as `tools/<file>:<name>`. `<name>` must be defined there: a `def` in a `.py` tool; a function, a `const`, or a `FAIL <name>:` self-test label in a `.mjs` tool. These run only against the reference implementations. |
+| `gap` | One line naming what no vector or test reaches, and why. Required when there are no vectors and no tests. Name what is missing by its content, not its position ("item 5" breaks when a list is reordered); an id the gap names must be an indexed requirement. |
 
 A mapping claims that a plausible wrong implementation fails at least one listed vector.
 `check` verifies that every listed vector and test exists. It cannot verify the claim
@@ -106,7 +124,7 @@ revision of the fixture in this repository's history and fails if none matches, 
 must be byte-identical to a revision committed here. `check` needs the full history: run
 `git fetch --unshallow` in a shallow clone.
 
-CI runs `check --base HEAD^1`, which on a pull request is the tip of the base branch. With a
-base, only fixture revisions reachable from it (plus the working tree's) count, so a copy taken
-from an unmerged commit fails; and every id the base's index holds must still be indexed or
-retired, so an id is never silently dropped or brought back.
+CI runs `check --base` against the tip of the base branch on a pull request, and against the
+commit before the push on `main`. With a base, only fixture revisions reachable from it (plus
+the working tree's) count, so a copy taken from an unmerged commit fails; and every id the
+base's index holds must still be indexed or retired.

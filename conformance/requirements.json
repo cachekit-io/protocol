@@ -3,11 +3,12 @@
   "files": {
     "spec/interop-mode.md": {
       "prefix": "IOP",
+      "next": 37,
       "requirements": {
         "IOP-1": {
           "section": "The Problem",
           "binds": "caller",
-          "gap": "Whether a value is meant for another SDK is the application's choice; the SDK's part, writing interop values as plain MessagePack, is IOP-17 and IOP-21 item 5."
+          "gap": "Whether a value is meant for another SDK is the application's choice; the SDK's part, writing interop values as plain MessagePack, is IOP-17."
         },
         "IOP-2": {
           "section": "Segment grammar",
@@ -40,7 +41,8 @@
             "interop-mode.json:reject_reserved_namespace_ns",
             "interop-mode.json:reject_reserved_namespace_nsapi",
             "interop-mode.json:reservation_scope"
-          ]
+          ],
+          "gap": "The paragraph also requires the rejection at decoration or registration time and on every backend, the SDK API property recorded on IOP-3, which the vectors cannot observe: they drive key derivation only."
         },
         "IOP-5": {
           "section": "Segment grammar",
@@ -49,7 +51,8 @@
             "interop-mode.json:reject_double_dot_namespace",
             "interop-mode.json:reject_double_dot_operation",
             "interop-mode.json:lone_dots_stay_valid"
-          ]
+          ],
+          "gap": "The paragraph also requires the rejection at decoration or registration time and on every backend, the SDK API property recorded on IOP-3, which the vectors cannot observe: they drive key derivation only."
         },
         "IOP-6": {
           "section": "The Canonical Argument Array",
@@ -129,7 +132,7 @@
             "interop-mode.json:map_key_sort_ascii",
             "interop-mode.json:nested_map_recursive_sort"
           ],
-          "gap": "A collator sort with uppercase first (Intl.Collator with caseFirst 'upper') passes all three vectors yet departs from code-point order on punctuation (a-b against a_b), which no vector orders."
+          "gap": "A collator sort with uppercase first (Intl.Collator with caseFirst 'upper') passes all three vectors, yet it departs from code-point order wherever case differs across letters (it puts a before B; code points put B first) or punctuation is involved (a-b against a_b), and no vector holds either."
         },
         "IOP-15": {
           "section": "Number canonicalization",
@@ -199,7 +202,7 @@
           "vectors": [
             "interop-mode.json"
           ],
-          "gap": "Items 1, 3 and 4 share the holes recorded on IOP-2, IOP-8, IOP-10, IOP-13 and IOP-16, no vector reaches the 32-bit length tier (untested by design), and no vector passes a small integer as {\"$int\": ...}, so an encoder that always writes a BigInt at full width passes; item 2 (named and defaulted arguments bind to positions) is an SDK API property no vector observes; item 6 (auto mode unchanged) is pinned only where an SDK vendors cache-keys.json or wire-format.json."
+          "gap": "The list's demands on segment validation, normalization and hashing share the holes recorded on IOP-2, IOP-8, IOP-10, IOP-13 and IOP-16; no vector reaches the 32-bit length tier (untested by design) or passes a small integer as {\"$int\": ...}, so an encoder that always writes a BigInt at full width passes; binding named and defaulted arguments to their positions is an SDK API property no vector observes; leaving auto mode unchanged is pinned only where an SDK vendors cache-keys.json or wire-format.json."
         },
         "IOP-22": {
           "section": "SDK Implementation Requirements",
@@ -231,7 +234,7 @@
           "vectors": [
             "decode-bounds.json"
           ],
-          "gap": "Rule 2 (never pre-allocate beyond the input) cannot fail by verdict, because every overclaim vector is truncated and any decoder rejects it at end of input; rule 3 (a rejection becomes a cache miss, never a crash or an abort) is a property of the SDK read path; and which entry points the vectors reach is SDK test code (IOP-31)."
+          "gap": "The rule against pre-allocating beyond the input cannot fail by verdict, because every overclaim vector is truncated and any decoder rejects it at end of input; the fail-closed rule (a rejection becomes a cache miss, never a crash or an abort) is a property of the SDK read path; and which entry points the vectors reach is SDK test code (IOP-31)."
         },
         "IOP-25": {
           "section": "Decode bounds",
@@ -240,7 +243,7 @@
             "decode-bounds.json:nested_fixarray_depth_32",
             "decode-bounds.json:nested_fixmap_depth_32"
           ],
-          "gap": "The accept vectors reach only the entry points an SDK's test drives them through, while the bound binds every untrusted decode, invalidation events included; IOP-31 asks for every entry point only with reject vectors, so nothing makes a test run the accept vectors beyond value reads."
+          "gap": "The accept vectors reach only the entry points an SDK's test drives them through, while the bound binds every untrusted decode, invalidation events included, and IOP-31 asks for every entry point only with reject vectors. At the commit sdks.json pins, cachekit-ts runs the accept vectors through its invalidation-event decoder and asserts they are rejected there, because that decoder caps depth at 3."
         },
         "IOP-26": {
           "section": "Decode bounds",
@@ -397,7 +400,7 @@
             "decode-bounds.json:nested_fixmap_depth_32",
             "decode-bounds.json:array16_256_backed_nils"
           ],
-          "gap": "The accept vectors reach only the entry points an SDK's test drives them through, while the bound binds every untrusted decode, invalidation events included; IOP-31 asks for every entry point only with reject vectors, so nothing makes a test run the accept vectors beyond value reads."
+          "gap": "The accept vectors reach only the entry points an SDK's test drives them through, while the bound binds every untrusted decode, invalidation events included, and IOP-31 asks for every entry point only with reject vectors. At the commit sdks.json pins, cachekit-ts runs the accept vectors through its invalidation-event decoder and asserts they are rejected there, because that decoder caps depth at 3."
         },
         "IOP-35": {
           "section": "Test Vectors",

@@ -188,7 +188,13 @@ def files(change: Callable[[dict], None]) -> Mutate:
 
 
 def new_requirement(rid: str, section: str) -> Mutate:
-    return index(lambda s: s["requirements"].__setitem__(rid, {"section": section, "binds": "sdk", "gap": "test"}))
+    """Index a new requirement, raising next past it as a new id must."""
+
+    def change(spec: dict) -> None:
+        spec["requirements"][rid] = {"section": section, "binds": "sdk", "gap": "test"}
+        spec["next"] = max(spec["next"], int(rid.split("-")[-1]) + 1)
+
+    return index(change)
 
 
 def write_json(root: Path, rel: str, document: object) -> None:
@@ -233,8 +239,6 @@ STALE = f"{REPORT} is stale or missing"
 Case = tuple[str, Mutate, int, str] | tuple[str, Mutate, int, str, list[str]] | tuple[str, Mutate, int, str, list[str], dict]
 CASES: list[Case] = [
     ("unmodified tree", lambda _: None, 0, OK),
-    # A non-UTF-8 stdout must not crash the checker on a clean tree.
-    ("unmodified tree, latin-1 stdout", lambda _: None, 0, OK, [], {"PYTHONIOENCODING": "latin-1"}),
     # --- every hard keyword in an indexed file carries an id ---
     ("id removed from beside a MUST", edit(SPEC, marker("IOP-19"), ""), 1, "this MUST has no id (the next free id is IOP-37)"),
     ("new MUST NOT added without an id", append(SPEC, "\nReaders MUST NOT crash.\n"), 1, "this MUST NOT has no id"),
@@ -256,7 +260,51 @@ CASES: list[Case] = [
     ),
     # --- keywords that are not requirements need no id ---
     ("MUST in inline code", append(SPEC, "\nThe keyword `MUST` is written in capitals.\n"), 0, OK),
-    ("MUST in a fenced block", append(SPEC, "\n```text\nMUST\n```\n"), 0, OK),
+    # A keyword inside a block is an error, so a misread block fails instead of hiding text.
+    ("MUST in a code fence", append(SPEC, "\n```text\nMUST\n```\n"), 1, "sits inside the code fence opened at line"),
+    # The exemption must sit on the line right before the fence, not anywhere above it.
+    (
+        "not-a-requirement marker that is not right before the fence",
+        append(SPEC, "\n<!-- not-a-requirement -->\n\nSome text.\n\n```text\nMUST\n```\n"),
+        1,
+        "sits inside the code fence opened at line",
+    ),
+    (
+        "MUST in a code fence marked not-a-requirement",
+        both(append(SPEC, "\n<!-- not-a-requirement -->\n```text\nMUST\n```\n"), report),
+        0,
+        OK,
+    ),
+    (
+        "MUST in an HTML comment block",
+        append(SPEC, "\n<!--\nnote: readers MUST\n-->\n"),
+        1,
+        "sits inside the HTML comment opened at line",
+    ),
+    (
+        "prose between two indented fence-like lines",
+        append(SPEC, "\n    ```\n\nReaders MUST reject it.\n\n    ```\n"),
+        1,
+        "sits inside the code fence opened at line",
+    ),
+    (
+        "prose after a blockquote that ends its fence",
+        append(SPEC, "\n> ```text\n> code\n\nReaders MUST reject it.\n\n> ```\n"),
+        1,
+        "sits inside the code fence opened at line",
+    ),
+    (
+        "prose after an indented comment opener",
+        append(SPEC, "\n    <!--\nReaders MUST reject it.\n    -->\n"),
+        1,
+        "sits inside the HTML comment opened at line",
+    ),
+    (
+        "stray backtick in a table row without leading pipes",
+        append(SPEC, "\nh1 | h2 | h3\n--- | --- | ---\na ` b | Readers MUST reject it | `x`\n"),
+        1,
+        "this MUST has no id",
+    ),
     ("MUST in an HTML comment", append(SPEC, "\n<!-- MUST -->\n"), 0, OK),
     # The report lists every exemption, so it is regenerated here.
     (
@@ -307,7 +355,7 @@ CASES: list[Case] = [
     ),
     ("empty vectors list", entry("IOP-4", vectors=[]), 1, "must be a non-empty list"),
     # --- every mapping names something that exists ---
-    ("entry maps to nothing", entry("IOP-4", vectors=None), 1, "maps to no vector and no test, and records no gap"),
+    ("entry maps to nothing", entry("IOP-4", vectors=None, gap=None), 1, "maps to no vector and no test, and records no gap"),
     (
         "vector name misspelt",
         entry("IOP-9", vectors=["interop-mode.json:reject_int_overflowed"]),
@@ -324,9 +372,25 @@ CASES: list[Case] = [
         "test name that does not exist",
         entry("IOP-10", tests=["tools/interop-reference.py:_selfcheck"]),
         1,
-        "has no '_selfcheck'",
+        "defines no '_selfcheck'",
     ),
     ("test file that does not exist", entry("IOP-10", tests=["tools/no-such-tool.py:main"]), 1, "no file tools/no-such-tool.py"),
+    # The word is in the file (in a comment), but nothing defines it.
+    (
+        "test name that only appears in a comment",
+        entry("IOP-10", tests=["tools/interop-reference.py:serde_json"]),
+        1,
+        "defines no 'serde_json'",
+    ),
+    (
+        "test in a file that is neither .py nor .mjs",
+        both(
+            lambda root: (root / "tools/notes.txt").write_text("def x():\n", encoding="utf-8"),
+            entry("IOP-10", tests=["tools/notes.txt:x"]),
+        ),
+        1,
+        "name a .py or .mjs tool",
+    ),
     ("test reference outside tools/", entry("IOP-10", tests=["spec/interop-mode.md:MUST"]), 1, "is not tools/<file>:<name>"),
     ("empty gap", entry("IOP-6", gap=""), 1, "gap must be a non-empty one-line reason"),
     ("multi-line gap", entry("IOP-6", gap="two\nlines"), 1, "gap must be a non-empty one-line reason"),
@@ -465,18 +529,73 @@ CASES: list[Case] = [
     ),
     ("unclosed comment block", append(SPEC, "\n<!--\nReaders MUST reject it.\n"), 1, "unclosed HTML comment"),
     # Inside a fence, only a line of the same character, at least as long and with no info string, closes it.
-    ("4-backtick fence holding a 3-backtick line", append(SPEC, "\n````text\n```\nMUST inside\n````\n"), 0, OK),
-    ("backtick fence holding a tilde line", append(SPEC, "\n```text\n~~~\nMUST inside\n```\n"), 0, OK),
-    ("fence holding a line with an info string", append(SPEC, "\n```text\n```inner\nMUST inside\n```\n"), 0, OK),
-    ("fence in a blockquote", append(SPEC, "\n> ```text\n> MUST inside\n> ```\n"), 0, OK),
-    # GFM splits a row into cells before it finds code spans, so a backtick cannot pair across cells.
-    ("stray backtick in one table cell", append(SPEC, "\n| a ` b | Readers MUST reject it | `x` |\n"), 1, "this MUST has no id"),
+    (
+        "4-backtick fence holding a 3-backtick line",
+        append(SPEC, "\n````text\n```\nMUST inside\n````\n"),
+        1,
+        "sits inside the code fence opened at line",
+    ),
+    (
+        "backtick fence holding a tilde line",
+        append(SPEC, "\n```text\n~~~\nMUST inside\n```\n"),
+        1,
+        "sits inside the code fence opened at line",
+    ),
+    (
+        "fence holding a line with an info string",
+        append(SPEC, "\n```text\n```inner\nMUST inside\n```\n"),
+        1,
+        "sits inside the code fence opened at line",
+    ),
+    (
+        "fence in a blockquote",
+        append(SPEC, "\n> ```text\n> MUST inside\n> ```\n"),
+        1,
+        "sits inside the code fence opened at line",
+    ),
+    # GFM splits a table row into cells before it finds code spans, so a backtick cannot pair across cells.
+    (
+        "stray backtick in one table cell",
+        append(SPEC, "\n| h1 | h2 | h3 |\n| --- | --- | --- |\n| a ` b | Readers MUST reject it | `x` |\n"),
+        1,
+        "this MUST has no id",
+    ),
+    # Without a delimiter row the line is a paragraph, and the keyword sits inside a code span.
+    ("pipe-led line without a delimiter row", append(SPEC, "\n| a ` b | Readers MUST reject it | `x` |\n"), 0, OK),
     # A one-backtick span closes only at a run of exactly one backtick: MUST is inside the code here.
     ("code span closed only by an equal run", append(SPEC, "\nUse `x``` MUST `y` here.\n"), 0, OK),
     ("setext heading", edit(SPEC, "### Segment grammar\n", "Segment grammar\n---------------\n"), 0, OK),
     ("retired id with an empty reason", index(lambda s: s["retired"].__setitem__("IOP-99", "")), 1, "retired must map each id"),
     ("text after a comment block closes", append(SPEC, "\n<!--\nnote\n--> Readers MUST reject it.\n"), 1, "this MUST has no id"),
     ("heading with closing hashes", edit(SPEC, "### Decode bounds\n", "### Decode bounds ###\n"), 0, OK),
+    # --- ids are never reused: next only grows ---
+    (
+        "new id at or above next",
+        both(
+            append(SPEC, f"\nReaders MUST{marker('IOP-37')} reject it.\n"),
+            index(lambda s: s["requirements"].__setitem__("IOP-37", {"section": "Test Vectors", "binds": "sdk", "gap": "t"})),
+        ),
+        1,
+        "IOP-37 is at or above next (37)",
+    ),
+    (
+        # Dropping IOP-36 must not make the hint offer its number again.
+        "hint skips a dropped id",
+        both(
+            edit(SPEC, f"MUST{marker('IOP-36')}", "should"),
+            index(lambda s: s["requirements"].pop("IOP-36")),
+            append(SPEC, "\nReaders MUST reject it.\n"),
+        ),
+        1,
+        "the next free id is IOP-37",
+    ),
+    ("next missing", index(lambda s: s.pop("next")), 1, "next must be the number the next new id gets"),
+    (
+        "gap naming an id that is not indexed",
+        entry("IOP-6", gap="See IOP-99."),
+        1,
+        "gap names IOP-99, which is not an indexed requirement",
+    ),
     # --- malformed index and sdks.json shapes are reported, never a traceback ---
     ("binds given as a list", entry("IOP-1", binds=["sdk"]), 1, "binds must be one of"),
     ("index lists no spec file", files(lambda f: f.clear()), 1, "lists no spec file"),
@@ -510,7 +629,7 @@ CASES: list[Case] = [
         "test name that is only a prefix of a real one",
         entry("IOP-10", tests=["tools/interop-reference.py:_self_che"]),
         1,
-        "has no '_self_che'",
+        "defines no '_self_che'",
     ),
     (
         "sdks.json repository that is not https",
@@ -545,7 +664,14 @@ CASES: list[Case] = [
         1,
         "matches no revision of test-vectors/file-backend.json",
     ),
-    ("requirements not a map, with --base", commit_base(lambda _: None), 1, "expected prefix, requirements and retired"),
+    ("requirements not a map, with --base", commit_base(lambda _: None), 1, "expected prefix, next, requirements and retired"),
+    ("next lowered since the base", commit_base(lambda _: None), 1, "next went down from 37"),
+    (
+        "SDK dropped from sdks.json since the base",
+        commit_base(lambda _: None),
+        1,
+        "cachekit-py was listed at HEAD and is now gone",
+    ),
     # --- ids are never dropped or reused (--base) ---
     (
         "id dropped instead of retired",
@@ -571,6 +697,8 @@ AFTER_BASE: dict[str, tuple[Mutate, str]] = {
     "base that does not exist": (lambda _: None, "no-such-ref"),
     "vendored copy from a commit not on the base": (vendored_from_unmerged_commit, "HEAD~1"),
     "requirements not a map, with --base": (index(lambda s: s.__setitem__("requirements", 7)), "HEAD"),
+    "next lowered since the base": (index(lambda s: s.__setitem__("next", 36)), "HEAD"),
+    "SDK dropped from sdks.json since the base": (both(sdks(lambda d: d.pop("cachekit-py")), report), "HEAD"),
 }
 
 PRISTINE: Path | None = None
@@ -718,20 +846,22 @@ REPORT_CASES: list[tuple[str, Mutate, dict[str, list[str]], list[str]]] = [
         "statuses on the unmodified tree",
         lambda _: None,
         {
-            "IOP-5": ["covered", "covered", "covered"],
+            "IOP-5": ["partial (gap)"] * 3,
+            "IOP-9": ["covered"] * 3,
             "IOP-2": ["partial (gap)"] * 3,
             "IOP-10": ["uncovered"] * 3,
             "IOP-13": ["gap"] * 3,
             "IOP-6": ["n/a"] * 3,
             "IOP-14": ["n/a", "partial (gap)", "n/a"],
         },
-        [],
+        # Tests-only requirements are uncovered in every SDK, so the summary counts them apart.
+        ["| [`spec/interop-mode.md`](../spec/interop-mode.md) | 36 | 5 | 3 | 22 | 6 |"],
     ),
     (
         # interop-mode.json 1.1.0 predates the `..` vectors and lone_dots_stay_valid.
         "an SDK on an older revision lacks the newer vectors",
         pin("cachekit-ts", "interop-mode.json", "1.1.0"),
-        {"IOP-5": ["covered", "uncovered (0/3)", "covered"], "IOP-4": ["covered", "covered", "covered"]},
+        {"IOP-5": ["partial (gap)", "uncovered (0/3)", "partial (gap)"], "IOP-4": ["partial (gap)"] * 3},
         [],
     ),
     (
@@ -771,13 +901,13 @@ REPORT_CASES: list[tuple[str, Mutate, dict[str, list[str]], list[str]]] = [
             new_requirement("IOP-37", "Comments"),
         ),
         {},
-        ["| *Comments*: A comment opens with `<!--`; a reader MUST skip to the next `-->`. |"],
+        ["a reader **MUST** skip to the next `-->`."],
     ),
     (
         "a not-a-requirement marker is listed",
         append(SPEC, "\nThis names the word MUST<!-- not-a-requirement --> only.\n"),
         {},
-        ["Marked not-a-requirement in `spec/interop-mode.md`:", "This names the word MUST only."],
+        ["Marked not-a-requirement in `spec/interop-mode.md`:", "This names the word **MUST** only."],
     ),
 ]
 

@@ -109,9 +109,10 @@ jobs:
   # Every MUST and MUST NOT in an indexed spec file carries an id that
   # conformance/requirements.json maps to vectors, tests or a recorded gap, and
   # conformance/coverage.md is generated from it. Full history: each SDK's vendored
-  # fixture copy is matched to a revision of its fixture, and `--base HEAD^1` (on a
-  # pull request, GitHub's test merge's first parent is the base tip) catches an id
-  # dropped instead of retired. Mutation suite first, same doctrine as the guards above.
+  # fixture copy is matched to a revision of its fixture, and `--base` catches an id
+  # dropped instead of retired. The base is the commit before the push on main, and the
+  # first parent of GitHub's test merge (the base tip) on a pull request. Mutation suite
+  # first, same doctrine as the guards above.
   conformance:
     name: Every MUST has an id, a mapping and a current coverage report
     runs-on: ubuntu-latest
@@ -126,9 +127,11 @@ jobs:
           python-version: "3.12"
 
       - name: Conformance index (stdlib only; mutation suite first)
+        env:
+          BASE: ${{ github.event_name == 'push' && github.event.before || 'HEAD^1' }}
         run: |
           python3 tools/test_conformance.py
-          python3 tools/conformance.py check --base HEAD^1
+          python3 tools/conformance.py check --base "$BASE"
 
   # Every PR that added its entry under the shared `## [Unreleased]` heading
   # conflicted with every other open PR that did the same. Entries go in

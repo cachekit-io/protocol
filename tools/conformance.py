@@ -13,28 +13,30 @@ things in step:
 - conformance/requirements.json is the index. A spec file is indexed when it is listed there,
   and from then on every hard keyword in it needs an id. Each id maps to the vectors that
   exercise it (`<fixture>.json:<name>`, or `<fixture>.json` for all of a fixture's vectors),
-  to named tests in this repository's tools (`tools/<file>:<name>`), and to a one-line `gap`
-  for whatever no vector or test reaches. An id is never reused or renumbered: a requirement
-  that leaves the spec moves to the file's `retired` map.
+  to tests defined in this repository's tools (`tools/<file>:<name>`), and to a one-line `gap`
+  for whatever no vector or test reaches. An id is never reused or renumbered: each file's
+  `next` number only grows, and a requirement that leaves the spec moves to its `retired` map.
 - conformance/coverage.md is generated from the index, conformance/sdks.json (the sha256 of
   every fixture copy each SDK vendors, as of a named SDK commit) and test-vectors/. Each
   vendored copy is matched to a revision of the fixture in this repository's history, so a
   requirement counts as covered for an SDK only when its copy holds every mapped vector,
   identical to the vector published here.
 
-Keywords are found the way a Markdown renderer would show them: fenced code, HTML comment
-blocks, inline code and inline comments are skipped; inline code never spans lines or table
-cells. A fence closed at a different indent than it opened is an error, because a misread
-fence line would otherwise hide the text up to the next fence.
+Keywords are found the way a Markdown renderer would show them. Inline code and inline
+comments are skipped; inline code never spans lines or the cells of a table, found by its
+delimiter row. A keyword inside a code fence or an HTML comment block is an error unless the
+fence is marked not-a-requirement on the line before it: block detection can misread
+Markdown, and an error there fails closed where skipping would hide text. A fence closed at a
+different indent than it opened is an error for the same reason.
 
 **What this does NOT catch.** It checks that a mapping exists and that it names real vectors
 and tests. It cannot check that they exercise the requirement: whether a plausible wrong
 implementation passes every mapped vector is a reviewer's question, and a gap is only as
 honest as its reason. "Covered" means an SDK vendors the vectors, not that its tests drive
 each one through every entry point a requirement names or assert the error it requires. A
-`tools/<file>:<name>` reference is checked for existence only. With `--base`, it catches an
-id that was dropped instead of retired and a retired id brought back; it cannot tell a
-renumbered id from a new one.
+`tools/<file>:<name>` reference is checked for a definition, not for what it asserts. With
+`--base`, it catches an id that was dropped instead of retired, a retired id brought back,
+and `next` going down; it cannot tell an existing id moved onto a different rule.
 
 Fails closed: an unreadable or malformed file, a duplicate JSON key, a duplicate vector name,
 an unclosed code fence or HTML comment, an index that lists no spec file, or a vendored sha256
@@ -50,7 +52,8 @@ Usage:
 `check` and `report` need the repository's full history: a vendored copy is matched to a
 revision of its fixture, and a shallow clone holds too few. With `--base`, only revisions
 reachable from that commit (plus the working tree's) count, so a copy taken from a commit
-that never reached the base branch fails; CI passes `HEAD^1`, the base tip of a pull request.
+that never reached the base branch fails. CI passes the base tip on a pull request and the
+commit before the push on main.
 `strip` shows that adding ids changed no other text (not-a-requirement markers stay, so the
 diff shows every exemption):
     diff <(git show main:spec/interop-mode.md) <(python3 tools/conformance.py strip spec/interop-mode.md)
@@ -76,6 +79,7 @@ FIXTURES = "test-vectors"
 NAME_FIELD = {"path-encoding.json": "key"}
 BINDS = {"sdk": "SDKs", "server": "the server", "caller": "application code"}
 FIELDS = {"section", "binds", "sdks", "vectors", "tests", "gap"}
+FILE_FIELDS = {"prefix", "next", "requirements", "retired"}
 
 # A hard keyword is a whole word (an underscore around it is emphasis, not a letter). MUST NOT
 # may be split by a line break, a blockquote marker, or emphasis closed after MUST.
@@ -89,6 +93,8 @@ NOT_AFTER = re.compile(r"(?:\*{1,3}|_{1,3})?[\s>]+NOT(?![A-Za-z0-9])")
 FENCE = re.compile(r"(?P<lead>[ \t>]*(?:(?:[-*+]|[0-9]{1,9}[.)])[ \t]+)?)(?P<fence>`{3,}|~{3,})(?P<rest>.*)")
 BLOCK_COMMENT = re.compile(r"[ \t>]*<!--")
 TABLE_ROW = re.compile(r"[ \t>]*\|")
+# A GFM table's delimiter row: cells of dashes, optionally aligned with colons, between pipes.
+DELIMITER_ROW = re.compile(r"[ \t>]*\|?[ \t]*:?-+:?[ \t]*(?:\|[ \t]*:?-+:?[ \t]*)*\|?[ \t]*")
 LIST_ITEM = re.compile(r"[ \t>]*(?:[-*+]|[0-9]{1,9}[.)])[ \t]")
 PIPE = re.compile(r"(?<!\\)\|")
 # Inline code or an inline comment on one line, whichever opens first. A backtick that is
@@ -98,6 +104,12 @@ ATX = re.compile(r" {0,3}#{1,6}[ \t]+(.+?)(?:[ \t]+#+)?[ \t]*")
 SETEXT = re.compile(r" {0,3}(?:=+|-+)[ \t]*")
 PREFIX = re.compile(r"[A-Z][A-Z0-9]*")
 TEST_REF = re.compile(r"(tools/[A-Za-z0-9_.-]+):([A-Za-z0-9_]+)")
+# What a named test must be in its file: a definition, not a word that happens to appear.
+DEFINITION = {
+    ".py": r"^[ \t]*(?:async[ \t]+)?def[ \t]+{name}\b",
+    ".mjs": r"\bfunction[ \t]+{name}\b|\b(?:const|let|var)[ \t]+{name}[ \t]*=|FAIL {name}:",
+}
+ID_MENTION = re.compile(r"\b([A-Z][A-Z0-9]*)-([1-9][0-9]*)\b")
 HEX40 = re.compile(r"[0-9a-f]{40}")
 HEX64 = re.compile(r"[0-9a-f]{64}")
 
@@ -117,6 +129,15 @@ class Keyword:
 
 
 @dataclass(frozen=True)
+class Block:
+    kind: str  # "code fence" or "HTML comment"
+    start: int  # offset of its first line
+    end: int  # offset just past its last line
+    line: int  # the line it opens on
+    exempt: bool  # a code fence with <!-- not-a-requirement --> on the line before it
+
+
+@dataclass(frozen=True)
 class Spec:
     text: str  # the file, with CRLF line endings normalised to LF
     keywords: list[Keyword]
@@ -126,13 +147,29 @@ class Spec:
 # --- spec scanning ---------------------------------------------------------------------------
 
 
-def mask_line(line: str) -> str:
+def table_rows(lines: list[str]) -> set[int]:
+    """Indexes of the lines in a GFM table: the header, the delimiter row and the body rows.
+
+    Found by the delimiter row, so a table whose rows have no leading pipe still counts.
+    """
+    rows: set[int] = set()
+    for i, line in enumerate(lines):
+        if i and "|" in line and DELIMITER_ROW.fullmatch(line) and PIPE.search(lines[i - 1]):
+            rows.update((i - 1, i))
+            j = i + 1
+            while j < len(lines) and lines[j].strip() and PIPE.search(lines[j]):
+                rows.add(j)
+                j += 1
+    return rows
+
+
+def mask_line(line: str, row: bool) -> str:
     """`line` with its inline code and inline comments blanked; a table row cell by cell."""
 
     def inline(segment: str) -> str:
         return INLINE.sub(lambda m: " " * len(m.group(0)), segment)
 
-    if not TABLE_ROW.match(line):
+    if not row:
         return inline(line)
     out, start = [], 0
     for pipe in PIPE.finditer(line):
@@ -141,17 +178,23 @@ def mask_line(line: str) -> str:
     return "".join(out) + inline(line[start:])
 
 
-def mask(text: str) -> tuple[str, str]:
-    """(text with fenced code and comment blocks blanked, that with inline code and comments blanked too).
+def mask(text: str) -> tuple[str, str, list[Block]]:
+    """(text with code fences and comment blocks blanked, that with inline code and comments blanked too, the blocks).
 
     Blanking keeps every offset and line break, so positions in either map back to `text`.
     """
+    lines = text.split("\n")
+    rows = table_rows(lines)
     blocks: list[str] = []
     masked: list[str] = []
-    fence: tuple[str, int, int, int] | None = None  # (fence character, length, indent, line it opened on)
-    comment = 0  # the line a comment block opened on; 0 outside one
-    for number, line in enumerate(text.split("\n"), 1):
+    found: list[Block] = []
+    fence: tuple[str, int, int, int, int, bool] | None = None  # (char, length, indent, line, offset, exempt)
+    comment: tuple[int, int] | None = None  # (line, offset) of an open comment block
+    offset = 0
+    for number, line in enumerate(lines, 1):
         hidden = " " * len(line)
+        here = offset
+        offset += len(line) + 1
         if fence:
             m = FENCE.match(line)
             if m and m["fence"][0] == fence[0] and len(m["fence"]) >= fence[1] and not m["rest"].strip():
@@ -160,30 +203,33 @@ def mask(text: str) -> tuple[str, str]:
                         f"line {number}: closes the code fence opened at line {fence[3]} at a different indent; "
                         "one of the two fence lines is misread, so the text between them would go unchecked"
                     )
+                found.append(Block("code fence", fence[4], here + len(line), fence[3], fence[5]))
                 fence = None
         elif comment:
             if (end := line.find("-->")) >= 0:
                 # A comment block ends with the line holding -->; text after it still renders.
-                comment = 0
+                found.append(Block("HTML comment", comment[1], here + end + 3, comment[0], False))
+                comment = None
                 visible = line[end + 3 :]
                 blocks.append(" " * (end + 3) + visible)
-                masked.append(" " * (end + 3) + mask_line(visible))
+                masked.append(" " * (end + 3) + mask_line(visible, False))
                 continue
         elif (m := FENCE.match(line)) and not (m["fence"][0] == "`" and "`" in m["rest"]):
-            fence = (m["fence"][0], len(m["fence"]), len(m["lead"]), number)
+            exempt = number > 1 and re.sub(r"^[ \t>]*", "", lines[number - 2]).strip() == EXEMPT
+            fence = (m["fence"][0], len(m["fence"]), len(m["lead"]), number, here, exempt)
         elif (c := BLOCK_COMMENT.match(line)) and "-->" not in line[c.end() :]:
-            comment = number
+            comment = (number, here)
         else:
             blocks.append(line)
-            masked.append(mask_line(line))
+            masked.append(mask_line(line, number - 1 in rows))
             continue
         blocks.append(hidden)
         masked.append(hidden)
     if fence:
         raise Defect(f"line {fence[3]}: unclosed code fence (everything after it would go unchecked)")
     if comment:
-        raise Defect(f"line {comment}: unclosed HTML comment (everything after it would go unchecked)")
-    return "\n".join(blocks), "\n".join(masked)
+        raise Defect(f"line {comment[0]}: unclosed HTML comment (everything after it would go unchecked)")
+    return "\n".join(blocks), "\n".join(masked), found
 
 
 def heading_offsets(blocks: str) -> list[tuple[int, str]]:
@@ -210,19 +256,40 @@ def heading_offsets(blocks: str) -> list[tuple[int, str]]:
 
 
 def scan(text: str) -> Spec:
-    text = text.replace("\r\n", "\n")
-    blocks, masked = mask(text)
+    """Every hard keyword in `text` (LF line endings), with the id beside it and its section."""
+    blocks, masked, regions = mask(text)
     headings = heading_offsets(blocks)
     markers = {m.start(): m for m in MARKER.finditer(masked)}
     used: set[int] = set()
     keywords: list[Keyword] = []
-    for m in KEYWORD.finditer(masked):
+    for m in KEYWORD.finditer(text):
+        start = m.start()
         word = "MUST NOT" if m.group(0).endswith("NOT") else "MUST"
+        section = next((title for at, title in reversed(headings) if at < start), "")
+        line = text.count("\n", 0, start) + 1
+        # A keyword inside a block is reported, not skipped: if a block was misread, a keyword
+        # the renderer shows still fails the check instead of vanishing.
+        if block := next((b for b in regions if b.start <= start < b.end), None):
+            if block.exempt:
+                keywords.append(Keyword(word, start, line, section, ""))
+            elif block.kind == "code fence":
+                problem = (
+                    f"sits inside the code fence opened at line {block.line}, which cannot carry an id: put "
+                    f"{EXEMPT} on the line before the fence if it states no requirement, or state it in prose"
+                )
+                keywords.append(Keyword(word, start, line, section, None, problem))
+            else:
+                problem = (
+                    f"sits inside the HTML comment opened at line {block.line}, which can carry neither an id "
+                    "nor an exemption: reword it"
+                )
+                keywords.append(Keyword(word, start, line, section, None, problem))
+            continue
+        if masked[start] == " ":
+            continue  # inline code or an inline comment
         pos = m.end()
         if closer := CLOSER.match(text, pos):
             pos = closer.end()
-        section = next((title for at, title in reversed(headings) if at < m.start()), "")
-        line = text.count("\n", 0, m.start()) + 1
         rid: str | None = None
         problem = ""
         if text.startswith(EXEMPT, pos):
@@ -237,7 +304,7 @@ def scan(text: str) -> Spec:
                 problem = f"{rid} sits between MUST and NOT; it goes after NOT"
         elif text.startswith("<sup", pos):
             problem = 'malformed id marker (expected <sup id="iop-3">IOP-3</sup>)'
-        keywords.append(Keyword(word, m.start(), line, section, rid, problem))
+        keywords.append(Keyword(word, start, line, section, rid, problem))
     stray = [(text.count("\n", 0, at) + 1, mk.group(2)) for at, mk in markers.items() if at not in used]
     return Spec(text, keywords, stray)
 
@@ -362,6 +429,7 @@ class Model:
     sdks: dict[str, dict[str, object]]
     vendored: dict[str, dict[str, tuple[Revision, bool]]]  # sdk -> fixture -> (revision, is current)
     specs: dict[str, Spec]
+    index: dict  # requirements.json as parsed
 
 
 def as_strings(value: object, what: str, errors: list[str]) -> tuple[str, ...]:
@@ -462,10 +530,14 @@ def build(root: Path, errors: list[str], base: str | None = None) -> Model:
             errors.append(f"{INDEX}: {rel}: an indexed file must be a spec/*.md file")
             continue
         if not isinstance(entry, dict) or not isinstance(entry.get("requirements"), dict):
-            errors.append(f"{INDEX}: {rel}: expected prefix, requirements and retired")
+            errors.append(f"{INDEX}: {rel}: expected prefix, next, requirements and retired")
             continue
-        if unknown := sorted(set(entry) - {"prefix", "requirements", "retired"}):
+        if unknown := sorted(set(entry) - FILE_FIELDS):
             errors.append(f"{INDEX}: {rel}: unknown field(s) {unknown}")
+        high = entry.get("next")
+        if not isinstance(high, int) or isinstance(high, bool) or high < 1:
+            errors.append(f"{INDEX}: {rel}: next must be the number the next new id gets (a positive integer)")
+            high = 0
         prefix = entry.get("prefix")
         if not isinstance(prefix, str) or not PREFIX.fullmatch(prefix):
             errors.append(f"{INDEX}: {rel}: prefix must be uppercase letters and digits")
@@ -489,8 +561,11 @@ def build(root: Path, errors: list[str], base: str | None = None) -> Model:
         for rid in [*mapped, *retired]:
             if not shape.fullmatch(rid):
                 errors.append(f"{INDEX}: {rel}: {rid!r} is not an id of the form {prefix}-<n>")
-        numbers = [int(r.split("-")[-1]) for r in [*mapped, *retired] if shape.fullmatch(r)]
-        next_id = f"{prefix}-{max(numbers, default=0) + 1}"
+        # `next` only ever grows, so a dropped id's number is never offered again.
+        for rid in [*mapped, *retired]:
+            if high and shape.fullmatch(rid) and int(rid.split("-")[-1]) >= high:
+                errors.append(f"{INDEX}: {rel}: {rid} is at or above next ({high}); raise next past it")
+        next_id = f"{prefix}-{high}" if high else f"{prefix}-?"
 
         seen: dict[str, int] = {}
         for kw in spec.keywords:
@@ -526,9 +601,16 @@ def build(root: Path, errors: list[str], base: str | None = None) -> Model:
             if rid in retired:
                 errors.append(f"{INDEX}: {rid} is both indexed and retired")
 
+    # A gap may name another requirement; that id must exist, or the reason points nowhere.
+    active = {req.rid for req in requirements}
+    for req in requirements:
+        for mention in ID_MENTION.finditer(req.gap):
+            if mention.group(1) in prefixes and mention.group(0) not in active:
+                errors.append(f"{INDEX}: {req.rid}: gap names {mention.group(0)}, which is not an indexed requirement")
+
     unindexed = sorted(f"spec/{p.name}" for p in (root / "spec").glob("*.md") if f"spec/{p.name}" not in index["files"])
     requirements.sort(key=lambda r: (r.file, int(r.rid.split("-")[-1])))
-    return Model(requirements, unindexed, fixtures, sdks, vendored, specs)
+    return Model(requirements, unindexed, fixtures, sdks, vendored, specs, index)
 
 
 def requirement(
@@ -576,8 +658,11 @@ def requirement(
         except Defect as exc:
             errors.append(f"{what}: test {ref!r}: {exc}")
             continue
-        if not re.search(rf"\b{re.escape(m.group(2))}\b", source):
-            errors.append(f"{what}: test {ref!r}: {m.group(1)} has no {m.group(2)!r}")
+        pattern = DEFINITION.get(Path(m.group(1)).suffix)
+        if pattern is None:
+            errors.append(f"{what}: test {ref!r}: name a .py or .mjs tool")
+        elif not re.search(pattern.format(name=re.escape(m.group(2))), source, re.MULTILINE):
+            errors.append(f"{what}: test {ref!r}: {m.group(1)} defines no {m.group(2)!r}")
     gap = entry.get("gap", "")
     if not isinstance(gap, str) or "\n" in gap or (gap != gap.strip()) or ("gap" in entry and not gap):
         errors.append(f"{what}: gap must be a non-empty one-line reason")
@@ -594,13 +679,17 @@ def verify_base(root: Path, base: str) -> None:
         raise Defect(f"--base {base}: not a commit in this repository") from None
 
 
-def compare_base(root: Path, base: str, errors: list[str]) -> str:
-    """Ids at `base` must still be indexed or retired here, and retired ids must stay retired."""
+def compare_base(root: Path, base: str, now: dict, sdks: dict, errors: list[str]) -> str:
+    """Against `base`: every id is still indexed or retired, retired ids stay retired, `next` never goes
+    down, and every SDK is still listed (dropping one would drop its column from the report silently)."""
+    if git(root, "ls-tree", "--name-only", base, "--", SDKS).decode().strip():
+        for sdk in as_dict(parse_json(git(root, "show", f"{base}:{SDKS}"), f"{SDKS} at {base}")):
+            if sdk not in sdks:
+                errors.append(f"{SDKS}: {sdk} was listed at {base} and is now gone; its column would vanish from the report")
     listed = git(root, "ls-tree", "--name-only", base, "--", INDEX).decode().strip()
     if not listed:
         return f"{INDEX} does not exist at {base}; nothing to compare"
     then = parse_json(git(root, "show", f"{base}:{INDEX}"), f"{INDEX} at {base}")
-    now = parse_json(read(root, INDEX), INDEX)
 
     def files(document: object) -> dict[str, dict]:
         return {k: v for k, v in as_dict(as_dict(document).get("files")).items() if isinstance(v, dict)}
@@ -614,6 +703,9 @@ def compare_base(root: Path, base: str, errors: list[str]) -> str:
         for rid in as_dict(old.get("retired")):
             if rid not in retired:
                 errors.append(f"{INDEX}: {rid} was retired at {base}; a retired id stays retired")
+        was, is_now = old.get("next"), new.get("next")
+        if isinstance(was, int) and isinstance(is_now, int) and is_now < was:
+            errors.append(f"{INDEX}: {rel}: next went down from {was} at {base} to {is_now}; ids are never reused")
     return f"no id dropped or un-retired since {base}"
 
 
@@ -639,12 +731,10 @@ def status(req: Requirement, sdk: str, model: Model) -> str:
 
 
 def kind(req: Requirement) -> str:
-    if req.gap:
-        return "partial" if req.vectors or req.tests else "gap"
-    return "vectors" if req.vectors else "tests only"
-
-
-ABBREVIATIONS = re.compile(r"\b(?:e\.g|i\.e|etc|vs|incl|cf)\.$")
+    """The best status the requirement can reach in any SDK, so the summary agrees with the rows."""
+    if req.vectors:
+        return "partial" if req.gap else "vectors"
+    return "tests only" if req.tests else "gap"
 
 
 def cell(text: str) -> str:
@@ -652,8 +742,8 @@ def cell(text: str) -> str:
     return text.replace("\\|", "|").replace("|", "\\|")
 
 
-def excerpt(text: str, start: int) -> str:
-    """The sentence holding the keyword at `start`, from its paragraph, list item or table cell.
+def excerpt(text: str, start: int, word: str) -> str:
+    """The text around the keyword at `start`, from its paragraph, list item or table cell, keyword in bold.
 
     Display only: a construct it does not follow degrades the excerpt, never the check.
     """
@@ -671,7 +761,7 @@ def excerpt(text: str, start: int) -> str:
         b = body(line)
         return not b.strip() or b.startswith(("#", "|", "```", "~~~", "[!"))
 
-    if TABLE_ROW.match(lines[at]):
+    if at in table_rows(lines):
         row = lines[at]
         pos = row.index("\0")
         pipes = [p.start() for p in PIPE.finditer(row)]
@@ -691,27 +781,15 @@ def excerpt(text: str, start: int) -> str:
     parts = re.split(r"(`+[^`]*`+)", clean)
     clean = "".join(part if i % 2 else re.sub(r"\*\*|__", "", part) for i, part in enumerate(parts))
     clean = re.sub(r"\s+", " ", clean).strip()
-    if "\0" not in clean:
+    pos = clean.find("\0")
+    if pos < 0 or not clean.startswith(word, pos + 1):
         return cell(re.sub(r"\s+", " ", MARKER.sub("", lines[at]).replace("\0", "")).strip()[:240])
-    pos = clean.index("\0")
-    begin = 0
-    for m in re.finditer(r"[.!?](?=\s)", clean[:pos]):
-        if not ABBREVIATIONS.search(clean[: m.end()]):
-            begin = m.end()
-    end = len(clean)
-    for m in re.finditer(r"[.!?](?=\s|$)", clean[pos:]):
-        if not ABBREVIATIONS.search(clean[: pos + m.end()]):
-            end = pos + m.end()
-            break
-    sentence = clean[begin:end].strip()
-    pos = sentence.index("\0")
-    if len(sentence) > 240:
-        # A window around the keyword, cut at spaces so no word is split.
-        lo = sentence.find(" ", pos - 100, pos) + 1 if pos > 100 else 0
-        hi = sentence.rfind(" ", pos, pos + 140) if pos + 140 < len(sentence) else len(sentence)
-        hi = hi if hi > pos else len(sentence)
-        sentence = ("… " if lo else "") + sentence[lo:hi].strip() + (" …" if hi < len(sentence) else "")
-    return cell(sentence.replace("\0", ""))
+    after = pos + 1 + len(word)
+    lo = clean.find(" ", pos - 100, pos) + 1 if pos > 100 else 0
+    hi = clean.rfind(" ", after, after + 120) if after + 120 < len(clean) else len(clean)
+    hi = hi if hi > after else len(clean)
+    shown = ("… " if lo else "") + clean[lo:pos] + f"**{word}**" + clean[after:hi] + (" …" if hi < len(clean) else "")
+    return cell(shown)
 
 
 def evidence(req: Requirement, model: Model) -> str:
@@ -745,15 +823,7 @@ def render(model: Model) -> str:
         "indexed spec file carries an id, written beside it as a superscript. [`requirements.json`](requirements.json)",
         "maps each id to the vectors and reference-tool tests that exercise it, or records a gap;",
         "[`sdks.json`](sdks.json) records the fixture copies each SDK vendors.",
-        "How ids are assigned and how to add one: [README.md](README.md).",
-        "",
-        "Per SDK, a requirement is **covered** when the SDK's vendored fixtures hold every vector it maps to,",
-        "identical to the vector published here, and no gap is recorded for it; **partial** when they hold some",
-        "of those vectors, or all of them while part of the requirement is a recorded gap; **uncovered** when",
-        "they hold none, or when only this repository's reference tools test it; **gap** when nothing tests it;",
-        "and **n/a** when it binds the server, application code, or only other SDKs. Covered means the vectors",
-        "are vendored, not that the SDK's tests drive each one through every entry point the requirement names:",
-        "[sdk-feature-matrix.md](../sdk-feature-matrix.md) records that per SDK.",
+        "How ids are assigned, and what each status means: [README.md](README.md#coverage-statuses).",
         "",
         "## SDKs",
         "",
@@ -796,13 +866,13 @@ def render(model: Model) -> str:
         out.append("| :--- | :--- | :--- |" + " :--- |" * len(sdks))
         for req in (r for r in model.requirements if r.file == rel):
             link = f"[{req.rid}](../{rel}#{req.rid.lower()})"
-            said = f"*{cell(req.section)}*: {excerpt(spec.text, req.keyword.start)}"
+            said = f"*{cell(req.section)}*: {excerpt(spec.text, req.keyword.start, req.keyword.word)}"
             cells = " | ".join(status(req, sdk, model) for sdk in sdks)
             out.append(f"| {link} | {said} | {evidence(req, model)} | {cells} |")
         exempt = [kw for kw in spec.keywords if kw.rid == ""]
         if exempt:
             out += ["", f"Marked not-a-requirement in `{rel}`:", ""]
-            out += [f"- line {kw.line}: {excerpt(spec.text, kw.start)}" for kw in exempt]
+            out += [f"- line {kw.line}: {excerpt(spec.text, kw.start, kw.word)}" for kw in exempt]
     return "\n".join(out) + "\n"
 
 
@@ -817,7 +887,7 @@ def run_check(root: Path, base: str | None) -> int:
             verify_base(root, base)
         model = build(root, errors, base)
         if base:
-            notes.append(compare_base(root, base, errors))
+            notes.append(compare_base(root, base, model.index, model.sdks, errors))
         if not errors:
             expected = render(model)
             try:
@@ -864,8 +934,6 @@ def run_report(root: Path) -> int:
 
 
 def main(argv: list[str]) -> int:
-    for stream in (sys.stdout, sys.stderr):
-        stream.reconfigure(errors="backslashreplace")  # type: ignore[union-attr]
     parser = argparse.ArgumentParser(description=(__doc__ or "").split("\n\n")[0])
     commands = parser.add_subparsers(dest="command", required=True)
     check = commands.add_parser("check", help="exit 1 on any defect")
