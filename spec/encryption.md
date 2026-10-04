@@ -53,7 +53,7 @@ The customer supplies a master key via environment variable:
 export CACHEKIT_MASTER_KEY="$(openssl rand -hex 32)"  # hex-encoded, 32 bytes / 64 hex chars
 ```
 
-In production the key comes from a secret manager, never a literal in source or config.
+In production the key comes from a secret manager. Never commit it to source control.
 
 | Constraint | Value |
 | :--- | :--- |

@@ -18,7 +18,8 @@ on:
 
 permissions: {}
 
-# Queue back-to-back merges, so at most one refresh is in flight.
+# A newer run replaces one still waiting. Each refresh re-indexes the whole
+# repo, so nothing is lost.
 concurrency:
   group: context7-refresh
 
@@ -43,6 +44,7 @@ jobs:
           cat "$RUNNER_TEMP/context7-response.json"
           echo
           case "$status" in
+            202) echo "::warning::Context7 has not finalized this library yet (HTTP 202). Re-run this workflow later." ;;
             2??) echo "Context7 accepted the refresh (HTTP $status)." ;;
             *) echo "::error::Context7 refresh failed with HTTP $status."; exit 1 ;;
           esac
