@@ -150,3 +150,10 @@ Test vectors are published in [`test-vectors/`](test-vectors/) as JSON files.
 [Protocol Repo](https://github.com/cachekit-io/protocol) · [SDK Feature Matrix](sdk-feature-matrix.md) · [Cache Key Format](spec/cache-key-format.md) · [Wire Format](spec/wire-format.md) · [Encryption](spec/encryption.md) · [SaaS API](spec/saas-api.md)
 
 </div>
+
+## Contributing
+
+User-facing docs in this repository follow CacheKit's shared rule on what belongs in them:
+[What belongs in these docs](https://docs.cachekit.io/contributing/#what-belongs-in-these-docs).
+`prek install` (or `pre-commit install`) sets up hooks that reject internal references in README
+files, `docs/` and commit messages.
