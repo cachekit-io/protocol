@@ -221,7 +221,7 @@ and interop mode never do — see below).
 | :--- | :--- | :--- |
 | Version byte | `0x03` | AAD format version |
 | `tenant_id` | Length-prefixed UTF-8 | Tenant identifier |
-| `cache_key` | Length-prefixed UTF-8 | Full cache key exactly as the client hands it to storage: after every prefix added on the client side (an SDK namespace, or a key prefix the backend or its client library prepends, such as an ioredis or memjs `keyPrefix`), and without any scoping a server applies after it receives the key (such as the SaaS's per-tenant storage). Prevents ciphertext swapping between keys, namespaces and prefixes |
+| `cache_key` | Length-prefixed UTF-8 | The **logical backend key**: the UTF-8 string the client passes to its backend, taken after every client-side prefix (an SDK namespace, or a prefix the backend adds, such as ioredis `keyPrefix` or a Memcached backend's `keyPrefix`) and before any encoding the backend uses to address its store (percent-encoding, the [File backend](file-backend-format.md)'s BLAKE2b-128 file name, a Cache API URL). It never includes scoping a server applies after it receives the key, such as the SaaS's per-tenant storage. Prevents ciphertext swapping between keys, namespaces and prefixes |
 | `format` | Length-prefixed UTF-8 | Serialization-format token — see [`format` tokens](#format-tokens) |
 | `compressed` | Length-prefixed UTF-8 | Boolean token — exactly `True` or `False`, see [`compressed` tokens](#compressed-tokens) |
 | `original_type` | Length-prefixed UTF-8 | *(Optional)* Original-type hint — see [`original_type`](#original_type-optional-fifth-component) |
@@ -416,8 +416,9 @@ Input: user_data, master_key, tenant_id, cache_key
                                   )
                // Returns: nonce(12) || encrypted_data || auth_tag(16)
 6. Store:      backend.set(cache_key, ciphertext)   // format + compressed stored as cleartext metadata
-               // Storage receives exactly cache_key. A prefix the backend or its client
-               // library prepends is already part of cache_key; it is not added twice.
+               // The backend addresses its store from exactly cache_key, the logical
+               // backend key; its own encodings are not part of the AAD. Where a client
+               // library prepends the prefix, the call passes the key without it.
 ```
 
 The AAD inputs in step 4 MUST reflect what steps 1–2 actually produced — e.g.
@@ -453,8 +454,8 @@ process but fails authentication for any correct second reader (see
 Input: ciphertext, stored metadata (format, compressed, optional original_type,
        optional per-entry key_fingerprint — SDK-internal storage, e.g.
        cachekit-py's CK frame header), keyring (current master_key +
-       decrypt-only master keys), tenant_id, cache_key (the same client-side
-       storage key the ciphertext was read from — see the cache_key AAD field)
+       decrypt-only master keys), tenant_id, cache_key (the logical backend key the
+       ciphertext was read from — see the cache_key AAD field)
 
 1. Select key:  per [Key Rotation (Keyring)](#key-rotation-keyring) — fingerprint
                 match where the stored key_fingerprint is present (binding: no
