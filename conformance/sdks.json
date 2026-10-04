@@ -1,0 +1,35 @@
+{
+  "cachekit-py": {
+    "repository": "https://github.com/cachekit-io/cachekit-py",
+    "commit": "0359979051889d50de3ef8dd5759829030310230",
+    "fixtures": {
+      "cache-keys.json": "e4c4174217757686069224a6f4553a1af7816191f689a865498f1cb4969856bb",
+      "decode-bounds.json": "907b025d2b270a0f60abd9296a8a1c864e69057c553ac7a70206b44256558916",
+      "file-backend.json": "8d9d8c4709baf9ef3a8f2d71d21fb5a56207bc7a05c9bc7a967ac567f2604615",
+      "interop-mode.json": "702613766d1b92bc3a337627a96b9aedc89abfeb4d9208c2bb00c9539a0a1f40",
+      "path-encoding.json": "8f6fd4be5440da9cf4bbb1a112cb89c410c4e46734c7d8a9c023eaa034727ee3",
+      "wire-format.json": "5d72ca1ff27202ab46aa501f54abf77e535f275d2ea4443966ad464f3c020cd7"
+    }
+  },
+  "cachekit-ts": {
+    "repository": "https://github.com/cachekit-io/cachekit-ts",
+    "commit": "c416dd54063fd97eba389f9164c6ac00c9dd1640",
+    "fixtures": {
+      "decode-bounds.json": "907b025d2b270a0f60abd9296a8a1c864e69057c553ac7a70206b44256558916",
+      "encryption.json": "e924ba7aa840dd913ab8b3f6855df915a3765bc1cf098515088759ef81f122fe",
+      "interop-mode.json": "702613766d1b92bc3a337627a96b9aedc89abfeb4d9208c2bb00c9539a0a1f40",
+      "path-encoding.json": "8f6fd4be5440da9cf4bbb1a112cb89c410c4e46734c7d8a9c023eaa034727ee3",
+      "wire-format.json": "5d72ca1ff27202ab46aa501f54abf77e535f275d2ea4443966ad464f3c020cd7"
+    }
+  },
+  "cachekit-rs": {
+    "repository": "https://github.com/cachekit-io/cachekit-rs",
+    "commit": "c186929ce93b559df94100729a374061fde84bde",
+    "fixtures": {
+      "decode-bounds.json": "907b025d2b270a0f60abd9296a8a1c864e69057c553ac7a70206b44256558916",
+      "file-backend.json": "8d9d8c4709baf9ef3a8f2d71d21fb5a56207bc7a05c9bc7a967ac567f2604615",
+      "interop-mode.json": "702613766d1b92bc3a337627a96b9aedc89abfeb4d9208c2bb00c9539a0a1f40",
+      "path-encoding.json": "8f6fd4be5440da9cf4bbb1a112cb89c410c4e46734c7d8a9c023eaa034727ee3"
+    }
+  }
+}

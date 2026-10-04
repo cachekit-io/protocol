@@ -1,0 +1,425 @@
+{
+  "schema": 1,
+  "files": {
+    "spec/interop-mode.md": {
+      "prefix": "IOP",
+      "requirements": {
+        "IOP-1": {
+          "section": "The Problem",
+          "binds": "sdk",
+          "vectors": [
+            "interop-mode.json:issue_example_object",
+            "interop-mode.json:float_value_stays_float64",
+            "interop-mode.json:mixed_array",
+            "interop-mode.json:datetime_sentinel_value"
+          ]
+        },
+        "IOP-2": {
+          "section": "Segment grammar",
+          "binds": "sdk",
+          "vectors": [
+            "interop-mode.json:reject_uppercase_namespace",
+            "interop-mode.json:reject_colon_in_operation",
+            "interop-mode.json:reject_trailing_newline"
+          ],
+          "gap": "No vector pins the 64-character limit, the leading-character rule (a segment starting with '.', '_' or '-'), an empty segment, or an uppercase operation."
+        },
+        "IOP-3": {
+          "section": "Segment grammar",
+          "binds": "sdk",
+          "vectors": [
+            "interop-mode.json:reject_uppercase_namespace",
+            "interop-mode.json:reject_colon_in_operation",
+            "interop-mode.json:reject_trailing_newline",
+            "interop-mode.json:reject_reserved_namespace_ns",
+            "interop-mode.json:reject_reserved_namespace_nsapi",
+            "interop-mode.json:reject_double_dot_namespace",
+            "interop-mode.json:reject_double_dot_operation"
+          ],
+          "gap": "The vectors drive key derivation; that the error comes at decoration or registration time, not at the first call, is an SDK API property no vector observes."
+        },
+        "IOP-4": {
+          "section": "Segment grammar",
+          "binds": "sdk",
+          "vectors": [
+            "interop-mode.json:reject_reserved_namespace_ns",
+            "interop-mode.json:reject_reserved_namespace_nsapi",
+            "interop-mode.json:reservation_scope"
+          ]
+        },
+        "IOP-5": {
+          "section": "Segment grammar",
+          "binds": "sdk",
+          "vectors": [
+            "interop-mode.json:reject_double_dot_namespace",
+            "interop-mode.json:reject_double_dot_operation",
+            "interop-mode.json:lone_dots_stay_valid"
+          ]
+        },
+        "IOP-6": {
+          "section": "The Canonical Argument Array",
+          "binds": "caller",
+          "gap": "No vector can carry the signature of the function an application passes to the TypeScript wrapper."
+        },
+        "IOP-7": {
+          "section": "The Canonical Argument Array",
+          "binds": "caller",
+          "gap": "Every vector carries the full argument list, so none can show a call that passes fewer arguments."
+        },
+        "IOP-8": {
+          "section": "The Interop Data Model",
+          "binds": "sdk",
+          "vectors": [
+            "interop-mode.json:reject_nan",
+            "interop-mode.json:reject_infinity",
+            "interop-mode.json:reject_negative_infinity",
+            "interop-mode.json:reject_int_overflow",
+            "interop-mode.json:reject_int_underflow",
+            "interop-mode.json:reject_naive_datetime"
+          ],
+          "gap": "Portable JSON cannot express a value whose type is outside the data model (an arbitrary object, a non-string map key), so no vector carries one."
+        },
+        "IOP-9": {
+          "section": "The Interop Data Model",
+          "binds": "sdk",
+          "vectors": [
+            "interop-mode.json:reject_int_overflow",
+            "interop-mode.json:reject_int_underflow",
+            "interop-mode.json:uint64_max",
+            "interop-mode.json:int64_min"
+          ]
+        },
+        "IOP-10": {
+          "section": "The Interop Data Model",
+          "binds": "sdk",
+          "tests": [
+            "tools/interop-reference.py:_self_check",
+            "tools/interop-crosscheck.mjs:lone_surrogate_selftest"
+          ]
+        },
+        "IOP-11": {
+          "section": "The Interop Data Model",
+          "binds": "sdk",
+          "tests": [
+            "tools/interop-reference.py:_self_check",
+            "tools/interop-crosscheck.mjs:lone_surrogate_selftest"
+          ]
+        },
+        "IOP-12": {
+          "section": "The Interop Data Model",
+          "binds": "sdk",
+          "sdks": [
+            "cachekit-ts"
+          ],
+          "tests": [
+            "tools/interop-crosscheck.mjs:lone_surrogate_selftest"
+          ]
+        },
+        "IOP-13": {
+          "section": "The Interop Data Model",
+          "binds": "sdk",
+          "gap": "Portable JSON object keys are always strings, so no vector carries a non-string key, and neither reference tool self-tests one."
+        },
+        "IOP-14": {
+          "section": "The Interop Data Model",
+          "binds": "sdk",
+          "sdks": [
+            "cachekit-ts"
+          ],
+          "vectors": [
+            "interop-mode.json:map_key_sort_supplementary"
+          ]
+        },
+        "IOP-15": {
+          "section": "Number canonicalization",
+          "binds": "sdk",
+          "sdks": [
+            "cachekit-ts"
+          ],
+          "vectors": [
+            "interop-mode.json:uint64_max",
+            "interop-mode.json:int64_min"
+          ]
+        },
+        "IOP-16": {
+          "section": "Number canonicalization",
+          "binds": "sdk",
+          "sdks": [
+            "cachekit-ts"
+          ],
+          "gap": "The vectors spell integers beyond 2^53 as {\"$int\": ...}, which a JavaScript reader turns into a BigInt, so no vector or reference test passes a bare Number beyond 2^53."
+        },
+        "IOP-17": {
+          "section": "Interop Value Format",
+          "binds": "sdk",
+          "vectors": [
+            "interop-mode.json:issue_example_object",
+            "interop-mode.json:float_value_stays_float64",
+            "interop-mode.json:mixed_array",
+            "interop-mode.json:datetime_sentinel_value"
+          ]
+        },
+        "IOP-18": {
+          "section": "Interop Value Format",
+          "binds": "sdk",
+          "vectors": [
+            "interop-mode.json:issue_example_object",
+            "interop-mode.json:float_value_stays_float64",
+            "interop-mode.json:mixed_array",
+            "interop-mode.json:datetime_sentinel_value",
+            "decode-bounds.json:nested_fixarray_depth_32",
+            "decode-bounds.json:nested_fixmap_depth_32",
+            "decode-bounds.json:array16_256_backed_nils"
+          ],
+          "gap": "No vector holds a non-canonical document (a padded integer width, unsorted map keys, a float32), which readers must accept too."
+        },
+        "IOP-19": {
+          "section": "Interop Value Format",
+          "binds": "sdk",
+          "vectors": [
+            "python-frame.json:ck_frame_fed_to_interop_reader"
+          ],
+          "gap": "The one trailing-bytes vector is a CK frame, so a reader that rejects only a 0x43 0x4B prefix, not any trailing byte, passes it."
+        },
+        "IOP-20": {
+          "section": "Interop Value Format",
+          "binds": "sdk",
+          "sdks": [
+            "cachekit-rs"
+          ],
+          "vectors": [
+            "python-frame.json:ck_frame_fed_to_interop_reader"
+          ],
+          "gap": "The one trailing-bytes vector is a CK frame, so a reader that rejects only a 0x43 0x4B prefix, not any trailing byte, passes it."
+        },
+        "IOP-21": {
+          "section": "SDK Implementation Requirements",
+          "binds": "sdk",
+          "vectors": [
+            "interop-mode.json"
+          ],
+          "gap": "Items 1 and 2 (namespace and operation are required arguments; named and defaulted arguments bind to their positions) and item 6 (auto mode unchanged) are SDK API properties no vector observes."
+        },
+        "IOP-22": {
+          "section": "SDK Implementation Requirements",
+          "binds": "sdk",
+          "vectors": [
+            "interop-mode.json:reject_nan",
+            "interop-mode.json:reject_infinity",
+            "interop-mode.json:reject_negative_infinity",
+            "interop-mode.json:reject_int_overflow",
+            "interop-mode.json:reject_int_underflow",
+            "interop-mode.json:reject_naive_datetime",
+            "interop-mode.json:reject_uppercase_namespace",
+            "interop-mode.json:reject_colon_in_operation",
+            "interop-mode.json:reject_trailing_newline",
+            "interop-mode.json:reject_reserved_namespace_ns",
+            "interop-mode.json:reject_reserved_namespace_nsapi",
+            "interop-mode.json:reject_double_dot_namespace",
+            "interop-mode.json:reject_double_dot_operation"
+          ]
+        },
+        "IOP-23": {
+          "section": "SDK Implementation Requirements",
+          "binds": "caller",
+          "gap": "A UUID passed as a plain string reaches the SDK as an ordinary string, so neither the SDK nor a vector can see how it was spelled."
+        },
+        "IOP-24": {
+          "section": "Decode bounds",
+          "binds": "sdk",
+          "vectors": [
+            "decode-bounds.json"
+          ],
+          "gap": "Rule 3 (a rejection becomes a cache miss, never an uncaught crash or an abort) is a property of the SDK read path; the vectors pin only the verdict."
+        },
+        "IOP-25": {
+          "section": "Decode bounds",
+          "binds": "sdk",
+          "vectors": [
+            "decode-bounds.json:nested_fixarray_depth_32",
+            "decode-bounds.json:nested_fixmap_depth_32"
+          ]
+        },
+        "IOP-26": {
+          "section": "Decode bounds",
+          "binds": "sdk",
+          "vectors": [
+            "decode-bounds.json:nested_fixarray_depth_1025_complete",
+            "decode-bounds.json:nested_fixmap_depth_1025_complete"
+          ]
+        },
+        "IOP-27": {
+          "section": "Decode bounds",
+          "binds": "sdk",
+          "vectors": [
+            "decode-bounds.json:nested_array16_depth_2048",
+            "decode-bounds.json:nested_array32_input_len_depth_1100",
+            "decode-bounds.json:nested_map16_depth_2048",
+            "decode-bounds.json:nested_array16_each_header_fits_sum_overclaims",
+            "decode-bounds.json:array16_overclaim_shallow",
+            "decode-bounds.json:array32_max_claim_alone",
+            "decode-bounds.json:map32_max_claim_alone",
+            "decode-bounds.json:array32_sum_wraps_u32",
+            "decode-bounds.json:array32_sum_wraps_u32_small_first",
+            "decode-bounds.json:map32_half_claim_wraps_u32_mul",
+            "decode-bounds.json:fixmap_short_by_one",
+            "decode-bounds.json:bin32_overclaim",
+            "decode-bounds.json:str32_overclaim",
+            "decode-bounds.json:ext32_overclaim",
+            "decode-bounds.json:fixarray_short_by_one",
+            "decode-bounds.json:nested_fixarray_depth_32",
+            "decode-bounds.json:nested_fixmap_depth_32",
+            "decode-bounds.json:array16_256_backed_nils"
+          ]
+        },
+        "IOP-28": {
+          "section": "Decode bounds",
+          "binds": "sdk",
+          "vectors": [
+            "decode-bounds.json:nested_array16_depth_2048",
+            "decode-bounds.json:nested_array32_input_len_depth_1100",
+            "decode-bounds.json:nested_map16_depth_2048",
+            "decode-bounds.json:nested_array16_each_header_fits_sum_overclaims",
+            "decode-bounds.json:array16_overclaim_shallow",
+            "decode-bounds.json:array32_max_claim_alone",
+            "decode-bounds.json:map32_max_claim_alone",
+            "decode-bounds.json:array32_sum_wraps_u32",
+            "decode-bounds.json:array32_sum_wraps_u32_small_first",
+            "decode-bounds.json:map32_half_claim_wraps_u32_mul",
+            "decode-bounds.json:fixmap_short_by_one",
+            "decode-bounds.json:bin32_overclaim",
+            "decode-bounds.json:str32_overclaim",
+            "decode-bounds.json:ext32_overclaim",
+            "decode-bounds.json:fixarray_short_by_one"
+          ]
+        },
+        "IOP-29": {
+          "section": "Decode bounds",
+          "binds": "sdk",
+          "vectors": [
+            "decode-bounds.json:fixarray_short_by_one",
+            "decode-bounds.json:fixmap_short_by_one"
+          ],
+          "gap": "No reject vector is incomplete while within the slot budget (the spec's own 92 dc 00 00), the one shape a sum-only guard accepts."
+        },
+        "IOP-30": {
+          "section": "Decode bounds",
+          "binds": "sdk",
+          "vectors": [
+            "decode-bounds.json:array32_sum_wraps_u32",
+            "decode-bounds.json:array32_sum_wraps_u32_small_first",
+            "decode-bounds.json:map32_half_claim_wraps_u32_mul",
+            "decode-bounds.json:map32_max_claim_alone"
+          ]
+        },
+        "IOP-31": {
+          "section": "Decode bounds",
+          "binds": "sdk",
+          "vectors": [
+            "decode-bounds.json:nested_array16_depth_2048",
+            "decode-bounds.json:nested_array32_input_len_depth_1100",
+            "decode-bounds.json:nested_map16_depth_2048",
+            "decode-bounds.json:nested_array16_each_header_fits_sum_overclaims",
+            "decode-bounds.json:nested_fixarray_depth_1025_complete",
+            "decode-bounds.json:nested_fixmap_depth_1025_complete",
+            "decode-bounds.json:array16_overclaim_shallow",
+            "decode-bounds.json:array32_max_claim_alone",
+            "decode-bounds.json:map32_max_claim_alone",
+            "decode-bounds.json:array32_sum_wraps_u32",
+            "decode-bounds.json:array32_sum_wraps_u32_small_first",
+            "decode-bounds.json:map32_half_claim_wraps_u32_mul",
+            "decode-bounds.json:fixmap_short_by_one",
+            "decode-bounds.json:bin32_overclaim",
+            "decode-bounds.json:str32_overclaim",
+            "decode-bounds.json:ext32_overclaim",
+            "decode-bounds.json:fixarray_short_by_one"
+          ],
+          "gap": "Which entry points an SDK's test drives each vector through, and which error it asserts, is SDK test code no vector can check; sdk-feature-matrix.md's \"Test vectors in CI\" row records it per SDK."
+        },
+        "IOP-32": {
+          "section": "Decode bounds",
+          "binds": "sdk",
+          "vectors": [
+            "decode-bounds.json:nested_array16_depth_2048",
+            "decode-bounds.json:nested_array32_input_len_depth_1100",
+            "decode-bounds.json:nested_map16_depth_2048",
+            "decode-bounds.json:nested_array16_each_header_fits_sum_overclaims",
+            "decode-bounds.json:nested_fixarray_depth_1025_complete",
+            "decode-bounds.json:nested_fixmap_depth_1025_complete",
+            "decode-bounds.json:array16_overclaim_shallow",
+            "decode-bounds.json:array32_max_claim_alone",
+            "decode-bounds.json:map32_max_claim_alone",
+            "decode-bounds.json:array32_sum_wraps_u32",
+            "decode-bounds.json:array32_sum_wraps_u32_small_first",
+            "decode-bounds.json:map32_half_claim_wraps_u32_mul",
+            "decode-bounds.json:fixmap_short_by_one",
+            "decode-bounds.json:bin32_overclaim",
+            "decode-bounds.json:str32_overclaim",
+            "decode-bounds.json:ext32_overclaim",
+            "decode-bounds.json:fixarray_short_by_one"
+          ],
+          "gap": "Which entry points an SDK's test drives each vector through, and which error it asserts, is SDK test code no vector can check; sdk-feature-matrix.md's \"Test vectors in CI\" row records it per SDK."
+        },
+        "IOP-33": {
+          "section": "Decode bounds",
+          "binds": "sdk",
+          "vectors": [
+            "decode-bounds.json:nested_array16_depth_2048",
+            "decode-bounds.json:nested_array32_input_len_depth_1100",
+            "decode-bounds.json:nested_map16_depth_2048",
+            "decode-bounds.json:nested_array16_each_header_fits_sum_overclaims",
+            "decode-bounds.json:nested_fixarray_depth_1025_complete",
+            "decode-bounds.json:nested_fixmap_depth_1025_complete",
+            "decode-bounds.json:array16_overclaim_shallow",
+            "decode-bounds.json:array32_max_claim_alone",
+            "decode-bounds.json:map32_max_claim_alone",
+            "decode-bounds.json:array32_sum_wraps_u32",
+            "decode-bounds.json:array32_sum_wraps_u32_small_first",
+            "decode-bounds.json:map32_half_claim_wraps_u32_mul",
+            "decode-bounds.json:fixmap_short_by_one",
+            "decode-bounds.json:bin32_overclaim",
+            "decode-bounds.json:str32_overclaim",
+            "decode-bounds.json:ext32_overclaim",
+            "decode-bounds.json:fixarray_short_by_one"
+          ]
+        },
+        "IOP-34": {
+          "section": "Decode bounds",
+          "binds": "sdk",
+          "vectors": [
+            "decode-bounds.json:nested_fixarray_depth_32",
+            "decode-bounds.json:nested_fixmap_depth_32",
+            "decode-bounds.json:array16_256_backed_nils"
+          ]
+        },
+        "IOP-35": {
+          "section": "Test Vectors",
+          "binds": "sdk",
+          "vectors": [
+            "interop-mode.json:reject_nan",
+            "interop-mode.json:reject_infinity",
+            "interop-mode.json:reject_negative_infinity",
+            "interop-mode.json:reject_int_overflow",
+            "interop-mode.json:reject_int_underflow",
+            "interop-mode.json:reject_naive_datetime",
+            "interop-mode.json:reject_uppercase_namespace",
+            "interop-mode.json:reject_colon_in_operation",
+            "interop-mode.json:reject_trailing_newline",
+            "interop-mode.json:reject_reserved_namespace_ns",
+            "interop-mode.json:reject_reserved_namespace_nsapi",
+            "interop-mode.json:reject_double_dot_namespace",
+            "interop-mode.json:reject_double_dot_operation"
+          ]
+        },
+        "IOP-36": {
+          "section": "Test Vectors",
+          "binds": "sdk",
+          "vectors": [
+            "interop-mode.json"
+          ]
+        }
+      },
+      "retired": {}
+    }
+  }
+}
