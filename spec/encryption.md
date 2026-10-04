@@ -49,9 +49,11 @@ CacheKit provides **optional** client-side encryption using AES-256-GCM. When en
 
 The customer supplies a master key via environment variable:
 
+```bash
+export CACHEKIT_MASTER_KEY="$(openssl rand -hex 32)"  # hex-encoded, 32 bytes / 64 hex chars
 ```
-CACHEKIT_MASTER_KEY=a1b2c3d4e5f6...  (hex-encoded, minimum 32 bytes / 64 hex chars)
-```
+
+In production the key comes from a secret manager, never a literal in source or config.
 
 | Constraint | Value |
 | :--- | :--- |
