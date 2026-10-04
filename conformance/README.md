@@ -2,8 +2,8 @@
 
 Every MUST and MUST NOT in an indexed spec file carries a requirement id. This directory maps
 each id to the test vectors that exercise it, and reports which of those vectors each SDK
-runs. It answers two questions the fixture files cannot: which requirements has no vector
-reached, and which requirements does a given SDK's CI exercise?
+vendors. It answers two questions the fixture files cannot: which requirements does no vector
+reach, and which requirements do a given SDK's vendored vectors reach?
 
 | File | What it holds |
 | :--- | :--- |
