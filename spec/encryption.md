@@ -221,7 +221,7 @@ and interop mode never do — see below).
 | :--- | :--- | :--- |
 | Version byte | `0x03` | AAD format version |
 | `tenant_id` | Length-prefixed UTF-8 | Tenant identifier |
-| `cache_key` | Length-prefixed UTF-8 | Full cache key (prevents ciphertext swapping between keys) |
+| `cache_key` | Length-prefixed UTF-8 | Full cache key exactly as the backend stores it, including any SDK namespace prefix and any backend key prefix (prevents ciphertext swapping between keys, namespaces and prefixes) |
 | `format` | Length-prefixed UTF-8 | Serialization-format token — see [`format` tokens](#format-tokens) |
 | `compressed` | Length-prefixed UTF-8 | Boolean token — exactly `True` or `False`, see [`compressed` tokens](#compressed-tokens) |
 | `original_type` | Length-prefixed UTF-8 | *(Optional)* Original-type hint — see [`original_type`](#original_type-optional-fifth-component) |
