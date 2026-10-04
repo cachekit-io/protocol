@@ -372,7 +372,7 @@ CASES: list[Case] = [
         "test name that does not exist",
         entry("IOP-10", tests=["tools/interop-reference.py:_selfcheck"]),
         1,
-        "defines no '_selfcheck'",
+        "defines no function '_selfcheck'",
     ),
     ("test file that does not exist", entry("IOP-10", tests=["tools/no-such-tool.py:main"]), 1, "no file tools/no-such-tool.py"),
     # The word is in the file (in a comment), but nothing defines it.
@@ -380,7 +380,7 @@ CASES: list[Case] = [
         "test name that only appears in a comment",
         entry("IOP-10", tests=["tools/interop-reference.py:serde_json"]),
         1,
-        "defines no 'serde_json'",
+        "defines no function 'serde_json'",
     ),
     (
         "test in a file that is neither .py nor .mjs",
@@ -390,6 +390,40 @@ CASES: list[Case] = [
         ),
         1,
         "name a .py or .mjs tool",
+    ),
+    # A diagnostic label, a comment or a docstring is not a test: only a definition counts.
+    (
+        "mjs test cited by its FAIL label",
+        entry("IOP-10", tests=["tools/interop-crosscheck.mjs:lone_surrogate_selftest"]),
+        1,
+        "defines no function 'lone_surrogate_selftest'",
+    ),
+    (
+        "mjs test cited by a word in a comment",
+        both(
+            append("tools/interop-crosscheck.mjs", "\n// the function probe is gone\n"),
+            entry("IOP-10", tests=["tools/interop-crosscheck.mjs:probe"]),
+        ),
+        1,
+        "defines no function 'probe'",
+    ),
+    (
+        "py test cited by a def inside a docstring",
+        both(
+            append("tools/interop-reference.py", '\n"""\ndef phantom():\n"""\n'),
+            entry("IOP-10", tests=["tools/interop-reference.py:phantom"]),
+        ),
+        1,
+        "defines no function 'phantom'",
+    ),
+    (
+        "py tool that does not parse",
+        both(
+            lambda root: (root / "tools/broken.py").write_text("def x(:\n", encoding="utf-8"),
+            entry("IOP-10", tests=["tools/broken.py:x"]),
+        ),
+        1,
+        "does not parse",
     ),
     ("test reference outside tools/", entry("IOP-10", tests=["spec/interop-mode.md:MUST"]), 1, "is not tools/<file>:<name>"),
     ("empty gap", entry("IOP-6", gap=""), 1, "gap must be a non-empty one-line reason"),
@@ -467,11 +501,13 @@ CASES: list[Case] = [
         1,
         "this MUST has no id",
     ),
+    # Pipe-led lines with no delimiter row are a paragraph, so this span runs from the first line
+    # to the third and the keyword is inside it, as GitHub renders it.
     (
-        "stray backtick in a table row",
+        "pipe-led lines without a delimiter row",
         append(SPEC, "\n| a | a lone ` is literal |\n| b | Readers MUST reject them |\n| c | see `x` |\n"),
-        1,
-        "this MUST has no id",
+        0,
+        OK,
     ),
     (
         "stray backtick in a list",
@@ -560,6 +596,53 @@ CASES: list[Case] = [
         1,
         "this MUST has no id",
     ),
+    # A table body runs to the first blank line; a row needs no pipe.
+    (
+        "table row after a row without pipes",
+        append(SPEC, "\n| a | b |\n| - | - |\nx\n`c | MUST | y`\n"),
+        1,
+        "this MUST has no id",
+    ),
+    # Header and delimiter rows with different cell counts make no table: these lines are a paragraph.
+    (
+        "header and delimiter cell counts differ",
+        append(SPEC, "\na | b | c\n--- | ---\nx ` y | ` MUST `\n"),
+        1,
+        "this MUST has no id",
+    ),
+    # A blank line ends a table, so the paragraph after it is masked as a paragraph.
+    (
+        "paragraph after a table and a blank line",
+        append(SPEC, "\n| a | b |\n| - | - |\n| c | d |\n\nUse `a | b` and MUST `c`.\n"),
+        1,
+        "this MUST has no id",
+    ),
+    # A blockquote interrupts a paragraph, so no code span runs into it: the keyword here sits
+    # inside the quote's own span, as GitHub renders it.
+    ("blockquote after a paragraph line", append(SPEC, "\nText `x\n> y` MUST `z`\n"), 0, OK),
+    # A code span may cross a line break inside a paragraph.
+    ("code span across a line break", append(SPEC, "\nA key `x\ny` MUST `z` here.\n"), 1, "this MUST has no id"),
+    ("MUST inside a code span across a line break", append(SPEC, "\nUse `a\nMUST b` here.\n"), 0, OK),
+    ("code span across a list item's continuation", append(SPEC, "\n- item `x\n  y` MUST `z`\n"), 1, "this MUST has no id"),
+    (
+        "stray backtick in a blockquote paragraph",
+        append(SPEC, "\n> a lone ` backtick\n>\n> Readers MUST reject it, see `x`.\n"),
+        1,
+        "this MUST has no id",
+    ),
+    # Only a fence at column 0 can be exempted: these render as indented code or an ended quote.
+    (
+        "exemption before an indented fence-like line",
+        append(SPEC, "\n<!-- not-a-requirement -->\n    ```\n\nReaders MUST reject it.\n\n    ```\n"),
+        1,
+        "sits inside the code fence opened at line",
+    ),
+    (
+        "exemption before a quoted fence",
+        append(SPEC, "\n<!-- not-a-requirement -->\n> ```text\n> code\n\nReaders MUST reject it.\n\n> ```\n"),
+        1,
+        "sits inside the code fence opened at line",
+    ),
     # Without a delimiter row the line is a paragraph, and the keyword sits inside a code span.
     ("pipe-led line without a delimiter row", append(SPEC, "\n| a ` b | Readers MUST reject it | `x` |\n"), 0, OK),
     # A one-backtick span closes only at a run of exactly one backtick: MUST is inside the code here.
@@ -629,7 +712,7 @@ CASES: list[Case] = [
         "test name that is only a prefix of a real one",
         entry("IOP-10", tests=["tools/interop-reference.py:_self_che"]),
         1,
-        "defines no '_self_che'",
+        "defines no function '_self_che'",
     ),
     (
         "sdks.json repository that is not https",
@@ -847,7 +930,8 @@ REPORT_CASES: list[tuple[str, Mutate, dict[str, list[str]], list[str]]] = [
         lambda _: None,
         {
             "IOP-5": ["partial (gap)"] * 3,
-            "IOP-9": ["covered"] * 3,
+            "IOP-9": ["partial (gap)"] * 3,
+            "IOP-17": ["covered"] * 3,
             "IOP-2": ["partial (gap)"] * 3,
             "IOP-10": ["uncovered"] * 3,
             "IOP-13": ["gap"] * 3,
@@ -855,7 +939,7 @@ REPORT_CASES: list[tuple[str, Mutate, dict[str, list[str]], list[str]]] = [
             "IOP-14": ["n/a", "partial (gap)", "n/a"],
         },
         # Tests-only requirements are uncovered in every SDK, so the summary counts them apart.
-        ["| [`spec/interop-mode.md`](../spec/interop-mode.md) | 36 | 5 | 3 | 22 | 6 |"],
+        ["| [`spec/interop-mode.md`](../spec/interop-mode.md) | 36 | 3 | 24 | 3 | 6 |"],
     ),
     (
         # interop-mode.json 1.1.0 predates the `..` vectors and lone_dots_stay_valid.
@@ -867,13 +951,13 @@ REPORT_CASES: list[tuple[str, Mutate, dict[str, list[str]], list[str]]] = [
     (
         "an SDK that does not vendor a fixture holds none of its vectors",
         pin("cachekit-rs", "decode-bounds.json", None),
-        {"IOP-9": ["covered"] * 3, "IOP-26": ["partial (gap)", "partial (gap)", "uncovered (0/2)"]},
+        {"IOP-17": ["covered"] * 3, "IOP-26": ["partial (gap)", "partial (gap)", "uncovered (0/2)"]},
         [],
     ),
     (
         "a vector changed in place no longer counts as held",
         reworded("interop-mode.json", "reject_nan"),
-        {"IOP-22": ["partial (12/13)"] * 3, "IOP-9": ["covered"] * 3},
+        {"IOP-22": ["partial (12/13)"] * 3, "IOP-17": ["covered"] * 3},
         [],
     ),
     (

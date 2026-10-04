@@ -85,14 +85,15 @@
             "interop-mode.json:reject_int_underflow",
             "interop-mode.json:uint64_max",
             "interop-mode.json:int64_min"
-          ]
+          ],
+          "gap": "Every out-of-range vector puts the integer at the top of the argument list, so a range check that never reaches a nested value (an integer inside a list or a map) passes all four; no vector nests one."
         },
         "IOP-10": {
           "section": "The Interop Data Model",
           "binds": "sdk",
           "tests": [
             "tools/interop-reference.py:_self_check",
-            "tools/interop-crosscheck.mjs:lone_surrogate_selftest"
+            "tools/interop-crosscheck.mjs:loneSurrogateSelftest"
           ],
           "gap": "Both self-tests use one lone high surrogate (U+D800) as a whole argument; a lone low surrogate, or one inside a map key or a nested value, is untested, and portable JSON cannot carry any of them."
         },
@@ -101,7 +102,7 @@
           "binds": "sdk",
           "tests": [
             "tools/interop-reference.py:_self_check",
-            "tools/interop-crosscheck.mjs:lone_surrogate_selftest"
+            "tools/interop-crosscheck.mjs:loneSurrogateSelftest"
           ],
           "gap": "Both self-tests use one lone high surrogate (U+D800) as a whole argument; a lone low surrogate, or one inside a map key or a nested value, is untested, and portable JSON cannot carry any of them."
         },
@@ -112,7 +113,7 @@
             "cachekit-ts"
           ],
           "tests": [
-            "tools/interop-crosscheck.mjs:lone_surrogate_selftest"
+            "tools/interop-crosscheck.mjs:loneSurrogateSelftest"
           ],
           "gap": "The self-test exercises the reference cross-check, not cachekit-ts; portable JSON cannot carry a lone surrogate, so only the SDK's own suite can test it."
         },
@@ -143,7 +144,8 @@
           "vectors": [
             "interop-mode.json:uint64_max",
             "interop-mode.json:int64_min"
-          ]
+          ],
+          "gap": "int64_min is exact in a float64 and uint64_max lies outside int64, so a TypeScript SDK that turns any BigInt inside int64 into a Number passes both and silently rounds 2^53+1; no vector holds an integer between 2^53 and 2^63."
         },
         "IOP-16": {
           "section": "Number canonicalization",
@@ -243,7 +245,7 @@
             "decode-bounds.json:nested_fixarray_depth_32",
             "decode-bounds.json:nested_fixmap_depth_32"
           ],
-          "gap": "The accept vectors reach only the entry points an SDK's test drives them through, while the bound binds every untrusted decode, invalidation events included, and IOP-31 asks for every entry point only with reject vectors. At the commit sdks.json pins, cachekit-ts runs the accept vectors through its invalidation-event decoder and asserts they are rejected there, because that decoder caps depth at 3."
+          "gap": "The accept vectors reach only the entry points an SDK's test drives them through, while the bound binds every untrusted decode, invalidation events included, and IOP-31 asks for every entry point only with reject vectors. At the commit sdks.json pins, cachekit-ts runs the two depth-32 accept vectors through its invalidation-event decoder and asserts they are rejected there, because that decoder caps depth at 3."
         },
         "IOP-26": {
           "section": "Decode bounds",
@@ -400,7 +402,7 @@
             "decode-bounds.json:nested_fixmap_depth_32",
             "decode-bounds.json:array16_256_backed_nils"
           ],
-          "gap": "The accept vectors reach only the entry points an SDK's test drives them through, while the bound binds every untrusted decode, invalidation events included, and IOP-31 asks for every entry point only with reject vectors. At the commit sdks.json pins, cachekit-ts runs the accept vectors through its invalidation-event decoder and asserts they are rejected there, because that decoder caps depth at 3."
+          "gap": "The accept vectors reach only the entry points an SDK's test drives them through, while the rule binds every untrusted decode, invalidation events included, and IOP-31 asks for every entry point only with reject vectors. At the commit sdks.json pins, cachekit-ts runs the accept vectors through its invalidation-event decoder and asserts they are rejected there: the two depth-32 vectors by its depth cap of 3, and array16_256_backed_nils because an event must be a map."
         },
         "IOP-35": {
           "section": "Test Vectors",

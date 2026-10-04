@@ -30,9 +30,10 @@ same text in lowercase. When the keyword is bold, the id goes after the closing 
 | :--- | :--- |
 | [`spec/interop-mode.md`](../spec/interop-mode.md) | `IOP` |
 
-Each keyword occurrence is one requirement. A sentence with two keywords carries two ids, and
-a keyword that introduces a list ("An SDK implementation of interop mode MUST:") carries one
-id for the whole list. A capitalised keyword used as a word rather than as a requirement
+Each keyword occurrence is one requirement. A sentence with two keywords carries two ids. A
+keyword that introduces a list ("An SDK implementation of interop mode MUST:") carries one id,
+and a keyword inside one of the list's items carries its own; the lead-in's entry maps only
+what no item's id owns. A capitalised keyword used as a word rather than as a requirement
 carries `<!-- not-a-requirement -->` in place of an id. Lowercase "must", SHOULD and MAY carry
 nothing.
 
@@ -44,8 +45,8 @@ Ids are permanent, because an SDK test that cites one must keep meaning the same
 - An editorial rewording keeps the id. A change in what is demanded (raising a bound from 32
   to 64, say), a split into two requirements, or a merge of two into one retires the old id
   or ids and mints new ones.
-- When a requirement leaves the spec, move its entry from `requirements` to `retired` with a
-  one-line reason.
+- When a requirement leaves the spec, delete its entry from `requirements` and add
+  `"IOP-n": "<one-line reason>"` to the file's `retired` map.
 
 `check --base` catches an id that is dropped instead of retired, a retired id brought back, and
 `next` going down. It cannot catch an existing id deliberately moved onto a different rule,
@@ -62,12 +63,15 @@ a change adds. Each one is also listed under its file in `coverage.md`.
 
 Keywords are found the way a Markdown renderer shows them. A keyword in a table, a list, a
 blockquote or emphasis (`**MUST**`, `_MUST_`) needs an id; one in inline code or an inline
-comment does not. A keyword inside a code fence or an HTML comment block is an error, so that
-a block the checker misreads fails instead of hiding text:
+comment does not. Inline code may cross a line break inside a paragraph, but never a table
+cell; a table is found by the GFM rules (a header row and a delimiter row with the same number
+of cells, then rows to the first blank line). A keyword inside a code fence or an HTML comment
+block is an error, so that a block the checker misreads fails instead of hiding text:
 
 - A code fence cannot carry an id. If its keywords state no requirement, put
-  `<!-- not-a-requirement -->` on the line before the fence; if they do, state the requirement
-  in prose.
+  `<!-- not-a-requirement -->` on the line right before a fence that opens at column 0; if they
+  do, state the requirement in prose. An indented, quoted or list fence cannot be exempted,
+  because the renderer may show it as prose.
 - An HTML comment can carry neither an id nor an exemption, so reword the keyword.
 
 A fence that closes at a different indent than it opened is an error for the same reason.
@@ -84,8 +88,8 @@ and its `retired` ids. Each requirement entry has these fields:
 | `binds` | Who must comply: `sdk`, `server` (the CachekitIO service) or `caller` (application code that uses an SDK). |
 | `sdks` | Optional. The SDKs a language-specific requirement binds, such as `["cachekit-ts"]`. Omitted, it binds every SDK. |
 | `vectors` | Vectors that exercise the requirement: `<fixture>.json:<name>`, or `<fixture>.json` for every vector in the fixture. A `path-encoding.json` vector is named by its `key`. |
-| `tests` | Tests in this repository's tools that exercise it, as `tools/<file>:<name>`. `<name>` must be defined there: a `def` in a `.py` tool; a function, a `const`, or a `FAIL <name>:` self-test label in a `.mjs` tool. These run only against the reference implementations. |
-| `gap` | One line naming what no vector or test reaches, and why. Required when there are no vectors and no tests. Name what is missing by its content, not its position ("item 5" breaks when a list is reordered); an id the gap names must be an indexed requirement. |
+| `tests` | Tests in this repository's tools that exercise it, as `tools/<file>:<name>`. `<name>` must be a function the tool defines: a `def` in a `.py` tool (found with Python's `ast`), or a `function` declared at the start of a line in a `.mjs` tool. These run only against the reference implementations. |
+| `gap` | One line naming what no vector or test reaches, and why. Required when there are no vectors and no tests. Name what is missing by its content, not its position ("item 5" breaks when a list is reordered); an id the gap names must be an indexed requirement. A known SDK violation is not a gap: [`sdk-feature-matrix.md`](../sdk-feature-matrix.md) records it, and a gap may point there. |
 
 A mapping claims that a plausible wrong implementation fails at least one listed vector.
 `check` verifies that every listed vector and test exists. It cannot verify the claim
@@ -93,6 +97,15 @@ itself, so a reviewer of a mapping should ask what wrong implementation would pa
 listed vector, and record anything it finds as a `gap`.
 
 ## Coverage statuses
+
+The summary counts each spec file's requirements by what their entries map to:
+
+| Column | Entries that list |
+| :--- | :--- |
+| Vectors, no gap | vectors, and no gap |
+| Vectors and a gap | vectors, and a gap for what they miss |
+| Tests only | reference-tool tests but no vectors, so every SDK shows them uncovered |
+| Gap only | nothing but a gap |
 
 For each SDK, `coverage.md` gives every requirement one status:
 

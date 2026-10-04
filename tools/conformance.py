@@ -23,11 +23,12 @@ things in step:
   identical to the vector published here.
 
 Keywords are found the way a Markdown renderer would show them. Inline code and inline
-comments are skipped; inline code never spans lines or the cells of a table, found by its
-delimiter row. A keyword inside a code fence or an HTML comment block is an error unless the
-fence is marked not-a-requirement on the line before it: block detection can misread
-Markdown, and an error there fails closed where skipping would hide text. A fence closed at a
-different indent than it opened is an error for the same reason.
+comments are skipped. A code span may cross a line break within a paragraph but never a
+table cell, and tables follow the GFM table extension's start and end rules. A keyword inside
+a code fence or an HTML comment block is an error, unless the fence opens at column 0 with
+<!-- not-a-requirement --> on the line before it: block detection can misread Markdown, and
+an error there fails closed where skipping would hide text. A fence closed at a different
+indent than it opened is an error for the same reason.
 
 **What this does NOT catch.** It checks that a mapping exists and that it names real vectors
 and tests. It cannot check that they exercise the requirement: whether a plausible wrong
@@ -62,6 +63,7 @@ diff shows every exemption):
 from __future__ import annotations
 
 import argparse
+import ast
 import hashlib
 import json
 import re
@@ -93,22 +95,28 @@ NOT_AFTER = re.compile(r"(?:\*{1,3}|_{1,3})?[\s>]+NOT(?![A-Za-z0-9])")
 FENCE = re.compile(r"(?P<lead>[ \t>]*(?:(?:[-*+]|[0-9]{1,9}[.)])[ \t]+)?)(?P<fence>`{3,}|~{3,})(?P<rest>.*)")
 BLOCK_COMMENT = re.compile(r"[ \t>]*<!--")
 TABLE_ROW = re.compile(r"[ \t>]*\|")
-# A GFM table's delimiter row: cells of dashes, optionally aligned with colons, between pipes.
-DELIMITER_ROW = re.compile(r"[ \t>]*\|?[ \t]*:?-+:?[ \t]*(?:\|[ \t]*:?-+:?[ \t]*)*\|?[ \t]*")
+# Container prefix of a line: its blockquote markers, and the text after them.
+QUOTED = re.compile(r"((?:[ \t]*>)*)[ \t]?(.*)")
+# A GFM table's delimiter row, after its blockquote markers: cells of dashes, optionally
+# aligned with colons, between pipes.
+DELIMITER_ROW = re.compile(r"[ \t]*\|?[ \t]*:?-+:?[ \t]*(?:\|[ \t]*:?-+:?[ \t]*)*\|?[ \t]*")
 LIST_ITEM = re.compile(r"[ \t>]*(?:[-*+]|[0-9]{1,9}[.)])[ \t]")
+# Lines that start a new block, after blockquote markers: these end a paragraph or a table body.
+BLOCK_START = re.compile(
+    r" {0,3}(?:#{1,6}(?:[ \t]|$)|`{3,}|~{3,}|>|(?:[-*+]|[0-9]{1,9}[.)])(?:[ \t]|$)"
+    r"|(?:-[ \t]*){3,}$|(?:\*[ \t]*){3,}$|(?:_[ \t]*){3,}$|=+[ \t]*$)"
+)
 PIPE = re.compile(r"(?<!\\)\|")
-# Inline code or an inline comment on one line, whichever opens first. A backtick that is
-# escaped, or that sits inside a longer run, opens no code span.
-INLINE = re.compile(r"(?<![`\\])(`+)(?!`).+?(?<!`)\1(?!`)|<!--.*?-->")
+# Inline code or an inline comment, whichever opens first, within one paragraph (so it may
+# cross a line break) or one table cell. A backtick that is escaped, or that sits inside a
+# longer run, opens no code span.
+INLINE = re.compile(r"(?<![`\\])(`+)(?!`).+?(?<!`)\1(?!`)|<!--.*?-->", re.DOTALL)
 ATX = re.compile(r" {0,3}#{1,6}[ \t]+(.+?)(?:[ \t]+#+)?[ \t]*")
 SETEXT = re.compile(r" {0,3}(?:=+|-+)[ \t]*")
 PREFIX = re.compile(r"[A-Z][A-Z0-9]*")
 TEST_REF = re.compile(r"(tools/[A-Za-z0-9_.-]+):([A-Za-z0-9_]+)")
-# What a named test must be in its file: a definition, not a word that happens to appear.
-DEFINITION = {
-    ".py": r"^[ \t]*(?:async[ \t]+)?def[ \t]+{name}\b",
-    ".mjs": r"\bfunction[ \t]+{name}\b|\b(?:const|let|var)[ \t]+{name}[ \t]*=|FAIL {name}:",
-}
+# A named test in a .mjs tool must be a function declared at the start of a line.
+MJS_FUNCTION = r"^[ \t]*(?:export[ \t]+)?(?:async[ \t]+)?function\*?[ \t]+{name}[ \t]*\("
 ID_MENTION = re.compile(r"\b([A-Z][A-Z0-9]*)-([1-9][0-9]*)\b")
 HEX40 = re.compile(r"[0-9a-f]{40}")
 HEX64 = re.compile(r"[0-9a-f]{64}")
@@ -147,35 +155,90 @@ class Spec:
 # --- spec scanning ---------------------------------------------------------------------------
 
 
-def table_rows(lines: list[str]) -> set[int]:
-    """Indexes of the lines in a GFM table: the header, the delimiter row and the body rows.
+def quoted(line: str) -> tuple[int, str]:
+    """(blockquote depth, the text after the markers) of a line."""
+    m = QUOTED.fullmatch(line)
+    return (m.group(1).count(">"), m.group(2)) if m else (0, line)
 
-    Found by the delimiter row, so a table whose rows have no leading pipe still counts.
+
+def cells(row: str) -> int:
+    """How many cells a table row has: one more than its unescaped pipes, outer pipes aside."""
+    row = row.strip()
+    row = row.removeprefix("|")
+    row = row[:-1] if row.endswith("|") and not row.endswith("\\|") else row
+    return len(PIPE.findall(row)) + 1
+
+
+def table_rows(lines: list[str]) -> set[int]:
+    """Indexes of the lines in a GFM table, by the GFM table extension's start and end rules.
+
+    A table starts where a header row with a pipe is followed by a delimiter row with the same
+    number of cells, and its body runs to the first blank line or line that starts another
+    block. A body row needs no pipe.
     """
     rows: set[int] = set()
-    for i, line in enumerate(lines):
-        if i and "|" in line and DELIMITER_ROW.fullmatch(line) and PIPE.search(lines[i - 1]):
-            rows.update((i - 1, i))
-            j = i + 1
-            while j < len(lines) and lines[j].strip() and PIPE.search(lines[j]):
-                rows.add(j)
-                j += 1
+    for i in range(1, len(lines)):
+        depth, delimiter = quoted(lines[i])
+        head_depth, head = quoted(lines[i - 1])
+        if (
+            depth != head_depth
+            or "|" not in delimiter
+            or not DELIMITER_ROW.fullmatch(delimiter)
+            or not PIPE.search(head)
+            or BLOCK_START.match(head)
+            or cells(head) != cells(delimiter)
+        ):
+            continue
+        rows.update((i - 1, i))
+        j = i + 1
+        while j < len(lines):
+            row_depth, row = quoted(lines[j])
+            if row_depth != depth or not row.strip() or BLOCK_START.match(row):
+                break
+            rows.add(j)
+            j += 1
     return rows
 
 
-def mask_line(line: str, row: bool) -> str:
-    """`line` with its inline code and inline comments blanked; a table row cell by cell."""
+def blank(match: re.Match[str]) -> str:
+    return re.sub(r"[^\n]", " ", match.group(0))
 
-    def inline(segment: str) -> str:
-        return INLINE.sub(lambda m: " " * len(m.group(0)), segment)
 
-    if not row:
-        return inline(line)
+def mask_cells(row: str) -> str:
+    """A table row with its inline code and comments blanked cell by cell: GFM splits cells first."""
     out, start = [], 0
-    for pipe in PIPE.finditer(line):
-        out += [inline(line[start : pipe.start()]), "|"]
+    for pipe in PIPE.finditer(row):
+        out += [INLINE.sub(blank, row[start : pipe.start()]), "|"]
         start = pipe.end()
-    return "".join(out) + inline(line[start:])
+    return "".join(out) + INLINE.sub(blank, row[start:])
+
+
+def paragraphs(lines: list[str], flow: list[bool]) -> list[list[int]]:
+    """Runs of flow lines that belong to one paragraph, so a code span may cross their line breaks.
+
+    A run ends at a blank line and before a heading, a list item, a thematic break, a setext
+    underline or a deeper blockquote, the blocks that interrupt a paragraph.
+    """
+    runs: list[list[int]] = []
+    current: list[int] = []
+    for i, line in enumerate(lines):
+        depth, body = quoted(line)
+        starts = BLOCK_START.match(body) is not None and not body.lstrip().startswith(">")
+        deeper = bool(current) and depth > quoted(lines[current[-1]])[0]
+        if not flow[i] or not body.strip() or starts or deeper:
+            if current:
+                runs.append(current)
+            current = []
+            if flow[i] and body.strip():
+                current = [i]
+                if starts and re.match(r" {0,3}#", body):
+                    runs.append(current)  # a heading is one line
+                    current = []
+            continue
+        current.append(i)
+    if current:
+        runs.append(current)
+    return runs
 
 
 def mask(text: str) -> tuple[str, str, list[Block]]:
@@ -185,13 +248,15 @@ def mask(text: str) -> tuple[str, str, list[Block]]:
     """
     lines = text.split("\n")
     rows = table_rows(lines)
-    blocks: list[str] = []
-    masked: list[str] = []
+    blocks = list(lines)
+    masked = list(lines)
+    flow = [False] * len(lines)
     found: list[Block] = []
     fence: tuple[str, int, int, int, int, bool] | None = None  # (char, length, indent, line, offset, exempt)
     comment: tuple[int, int] | None = None  # (line, offset) of an open comment block
     offset = 0
-    for number, line in enumerate(lines, 1):
+    for i, line in enumerate(lines):
+        number = i + 1
         hidden = " " * len(line)
         here = offset
         offset += len(line) + 1
@@ -211,24 +276,32 @@ def mask(text: str) -> tuple[str, str, list[Block]]:
                 found.append(Block("HTML comment", comment[1], here + end + 3, comment[0], False))
                 comment = None
                 visible = line[end + 3 :]
-                blocks.append(" " * (end + 3) + visible)
-                masked.append(" " * (end + 3) + mask_line(visible, False))
+                blocks[i] = " " * (end + 3) + visible
+                masked[i] = " " * (end + 3) + INLINE.sub(blank, visible)
                 continue
         elif (m := FENCE.match(line)) and not (m["fence"][0] == "`" and "`" in m["rest"]):
-            exempt = number > 1 and re.sub(r"^[ \t>]*", "", lines[number - 2]).strip() == EXEMPT
+            # Only a fence at column 0 can be exempted: an indented or quoted "fence" may be
+            # something the renderer shows as prose.
+            exempt = not m["lead"] and i > 0 and lines[i - 1].rstrip() == EXEMPT
             fence = (m["fence"][0], len(m["fence"]), len(m["lead"]), number, here, exempt)
         elif (c := BLOCK_COMMENT.match(line)) and "-->" not in line[c.end() :]:
             comment = (number, here)
-        else:
-            blocks.append(line)
-            masked.append(mask_line(line, number - 1 in rows))
+        elif i in rows:
+            masked[i] = mask_cells(line)
             continue
-        blocks.append(hidden)
-        masked.append(hidden)
+        else:
+            flow[i] = True
+            continue
+        blocks[i] = hidden
+        masked[i] = hidden
     if fence:
         raise Defect(f"line {fence[3]}: unclosed code fence (everything after it would go unchecked)")
     if comment:
         raise Defect(f"line {comment[0]}: unclosed HTML comment (everything after it would go unchecked)")
+    for run in paragraphs(lines, flow):
+        joined = INLINE.sub(blank, "\n".join(lines[i] for i in run)).split("\n")
+        for i, part in zip(run, joined):
+            masked[i] = part
     return "\n".join(blocks), "\n".join(masked), found
 
 
@@ -658,11 +731,23 @@ def requirement(
         except Defect as exc:
             errors.append(f"{what}: test {ref!r}: {exc}")
             continue
-        pattern = DEFINITION.get(Path(m.group(1)).suffix)
-        if pattern is None:
+        suffix = Path(m.group(1)).suffix
+        if suffix == ".py":
+            try:
+                tree = ast.parse(source)
+            except SyntaxError as exc:
+                errors.append(f"{what}: test {ref!r}: {m.group(1)} does not parse ({exc.msg})")
+                continue
+            defined = any(
+                isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == m.group(2) for node in ast.walk(tree)
+            )
+        elif suffix == ".mjs":
+            defined = re.search(MJS_FUNCTION.format(name=re.escape(m.group(2))), source, re.MULTILINE) is not None
+        else:
             errors.append(f"{what}: test {ref!r}: name a .py or .mjs tool")
-        elif not re.search(pattern.format(name=re.escape(m.group(2))), source, re.MULTILINE):
-            errors.append(f"{what}: test {ref!r}: {m.group(1)} defines no {m.group(2)!r}")
+            continue
+        if not defined:
+            errors.append(f"{what}: test {ref!r}: {m.group(1)} defines no function {m.group(2)!r}")
     gap = entry.get("gap", "")
     if not isinstance(gap, str) or "\n" in gap or (gap != gap.strip()) or ("gap" in entry and not gap):
         errors.append(f"{what}: gap must be a non-empty one-line reason")
@@ -843,12 +928,12 @@ def render(model: Model) -> str:
         "",
         "## Summary",
         "",
-        "| Spec file | Requirements | Vectors | Tests only | Partial | Gap |",
+        "| Spec file | Requirements | Vectors, no gap | Vectors and a gap | Tests only | Gap only |",
         "| :--- | ---: | ---: | ---: | ---: | ---: |",
     ]
     for rel in sorted(model.specs):
         reqs = [r for r in model.requirements if r.file == rel]
-        counts = [sum(kind(r) == k for r in reqs) for k in ("vectors", "tests only", "partial", "gap")]
+        counts = [sum(kind(r) == k for r in reqs) for k in ("vectors", "partial", "tests only", "gap")]
         out.append(f"| [`{rel}`](../{rel}) | {len(reqs)} | " + " | ".join(map(str, counts)) + " |")
     if sdks:
         out += ["", "| SDK | Covered | Partial | Uncovered | Gap | n/a |", "| :--- | ---: | ---: | ---: | ---: | ---: |"]
@@ -906,8 +991,8 @@ def run_check(root: Path, base: str | None) -> int:
     kinds = [kind(r) for r in model.requirements]
     print(
         f"conformance: OK -- {len(model.requirements)} requirement id(s) in {len(model.specs)} indexed spec file(s): "
-        f"{kinds.count('vectors')} vectors, {kinds.count('tests only')} tests only, "
-        f"{kinds.count('partial')} partial, {kinds.count('gap')} gap; {REPORT} is current"
+        f"{kinds.count('vectors')} vectors with no gap, {kinds.count('partial')} vectors and a gap, "
+        f"{kinds.count('tests only')} tests only, {kinds.count('gap')} gap only; {REPORT} is current"
         + "".join(f"; {note}" for note in notes)
     )
     return 0
