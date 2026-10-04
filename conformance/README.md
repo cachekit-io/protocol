@@ -47,6 +47,14 @@ Adding ids changes no normative text. To confirm that for a file:
 diff <(git show main:spec/interop-mode.md) <(python3 tools/conformance.py strip spec/interop-mode.md)
 ```
 
+`strip` removes only the ids, so the diff still shows every `<!-- not-a-requirement -->` marker
+a change adds. Each one is also listed under its file in `coverage.md`.
+
+Keywords are found the way a Markdown renderer shows them. A keyword in fenced code, inline
+code or an HTML comment needs no id; one in a table, a list, a blockquote or emphasis
+(`**MUST**`, `_MUST_`) does. A fence that closes at a different indent than it opened is an
+error, because a misread fence line would hide the text up to the next fence.
+
 ## The index
 
 `requirements.json` lists the indexed spec files. Once a file is listed, every hard keyword
@@ -97,3 +105,8 @@ read it from in `sdks.json`, then regenerate the report. `check` matches each sh
 revision of the fixture in this repository's history and fails if none matches, so a copy
 must be byte-identical to a revision committed here. `check` needs the full history: run
 `git fetch --unshallow` in a shallow clone.
+
+CI runs `check --base HEAD^1`, which on a pull request is the tip of the base branch. With a
+base, only fixture revisions reachable from it (plus the working tree's) count, so a copy taken
+from an unmerged commit fails; and every id the base's index holds must still be indexed or
+retired, so an id is never silently dropped or brought back.

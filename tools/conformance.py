@@ -22,6 +22,11 @@ things in step:
   requirement counts as covered for an SDK only when its copy holds every mapped vector,
   identical to the vector published here.
 
+Keywords are found the way a Markdown renderer would show them: fenced code, HTML comment
+blocks, inline code and inline comments are skipped; inline code never spans lines or table
+cells. A fence closed at a different indent than it opened is an error, because a misread
+fence line would otherwise hide the text up to the next fence.
+
 **What this does NOT catch.** It checks that a mapping exists and that it names real vectors
 and tests. It cannot check that they exercise the requirement: whether a plausible wrong
 implementation passes every mapped vector is a reviewer's question, and a gap is only as
@@ -32,18 +37,22 @@ id that was dropped instead of retired and a retired id brought back; it cannot 
 renumbered id from a new one.
 
 Fails closed: an unreadable or malformed file, a duplicate JSON key, a duplicate vector name,
-an unclosed code fence, or a vendored sha256 that matches no revision of its fixture is an
-error, not a pass. A guard that silently checks nothing is worse than no guard. Uses explicit
-failures rather than `assert`, so it cannot be defanged by `-O`.
+an unclosed code fence or HTML comment, an index that lists no spec file, or a vendored sha256
+that matches no revision of its fixture is an error, not a pass. A guard that silently checks
+nothing is worse than no guard. Uses explicit failures rather than `assert`, so it cannot be
+defanged by `-O`.
 
 Usage:
     python3 tools/conformance.py check [--base REF] [ROOT]   exit 1 on any defect
     python3 tools/conformance.py report [ROOT]               rewrite conformance/coverage.md
-    python3 tools/conformance.py strip FILE                  FILE with its ids removed, to stdout
+    python3 tools/conformance.py strip FILE                  FILE without its id markers, to stdout
 
-`check` needs the repository's full history (a shallow clone cannot resolve older fixture
-revisions); `--base` names the commit to compare the index against, `HEAD^1` in CI.
-`strip` shows that adding ids changed no normative text:
+`check` and `report` need the repository's full history: a vendored copy is matched to a
+revision of its fixture, and a shallow clone holds too few. With `--base`, only revisions
+reachable from that commit (plus the working tree's) count, so a copy taken from a commit
+that never reached the base branch fails; CI passes `HEAD^1`, the base tip of a pull request.
+`strip` shows that adding ids changed no other text (not-a-requirement markers stay, so the
+diff shows every exemption):
     diff <(git show main:spec/interop-mode.md) <(python3 tools/conformance.py strip spec/interop-mode.md)
 """
 
@@ -68,14 +77,25 @@ NAME_FIELD = {"path-encoding.json": "key"}
 BINDS = {"sdk": "SDKs", "server": "the server", "caller": "application code"}
 FIELDS = {"section", "binds", "sdks", "vectors", "tests", "gap"}
 
-KEYWORD = re.compile(r"\bMUST(?:[\s>]+NOT)?\b")
+# A hard keyword is a whole word (an underscore around it is emphasis, not a letter). MUST NOT
+# may be split by a line break, a blockquote marker, or emphasis closed after MUST.
+KEYWORD = re.compile(r"(?<![A-Za-z0-9])MUST(?:(?:\*{1,3}|_{1,3})?[\s>]+NOT)?(?![A-Za-z0-9])")
 MARKER = re.compile(r'<sup id="([a-z0-9-]+)">([A-Z][A-Z0-9]*-([1-9][0-9]*))</sup>')
 EXEMPT = "<!-- not-a-requirement -->"
-CLOSER = re.compile(r"\*\*|__|\*|_")
-FENCE = re.compile(r"[ \t>]*(`{3,}|~{3,})")
-HEADING = re.compile(r"^#{1,6}[ \t]+(.+?)(?:[ \t]+#+)?[ \t]*$", re.MULTILINE)
-# Inline code and HTML comments, whichever opens first; a code span never crosses a blank line.
-INLINE = re.compile(r"(`+)(?!`)(?:(?!\n[ \t]*\n).)+?(?<!`)\1(?!`)|<!--.*?-->", re.DOTALL)
+CLOSER = re.compile(r"\*{1,3}|_{1,3}")
+NOT_AFTER = re.compile(r"(?:\*{1,3}|_{1,3})?[\s>]+NOT(?![A-Za-z0-9])")
+# A fence line: its container prefix (blockquote markers, indentation, a list marker), the
+# fence, and the rest of the line (the info string of an opener).
+FENCE = re.compile(r"(?P<lead>[ \t>]*(?:(?:[-*+]|[0-9]{1,9}[.)])[ \t]+)?)(?P<fence>`{3,}|~{3,})(?P<rest>.*)")
+BLOCK_COMMENT = re.compile(r"[ \t>]*<!--")
+TABLE_ROW = re.compile(r"[ \t>]*\|")
+LIST_ITEM = re.compile(r"[ \t>]*(?:[-*+]|[0-9]{1,9}[.)])[ \t]")
+PIPE = re.compile(r"(?<!\\)\|")
+# Inline code or an inline comment on one line, whichever opens first. A backtick that is
+# escaped, or that sits inside a longer run, opens no code span.
+INLINE = re.compile(r"(?<![`\\])(`+)(?!`).+?(?<!`)\1(?!`)|<!--.*?-->")
+ATX = re.compile(r" {0,3}#{1,6}[ \t]+(.+?)(?:[ \t]+#+)?[ \t]*")
+SETEXT = re.compile(r" {0,3}(?:=+|-+)[ \t]*")
 PREFIX = re.compile(r"[A-Z][A-Z0-9]*")
 TEST_REF = re.compile(r"(tools/[A-Za-z0-9_.-]+):([A-Za-z0-9_]+)")
 HEX40 = re.compile(r"[0-9a-f]{40}")
@@ -93,12 +113,12 @@ class Keyword:
     line: int
     section: str
     rid: str | None  # the id beside it; None when it has none, "" when it is marked not-a-requirement
-    problem: str = ""  # a malformed marker beside it
+    problem: str = ""  # a malformed or misplaced marker beside it
 
 
 @dataclass(frozen=True)
 class Spec:
-    text: str
+    text: str  # the file, with CRLF line endings normalised to LF
     keywords: list[Keyword]
     stray: list[tuple[int, str]]  # (line, id) of markers that sit beside no keyword
 
@@ -106,42 +126,98 @@ class Spec:
 # --- spec scanning ---------------------------------------------------------------------------
 
 
-def blank(match: re.Match[str]) -> str:
-    return re.sub(r"[^\n]", " ", match.group(0))
+def mask_line(line: str) -> str:
+    """`line` with its inline code and inline comments blanked; a table row cell by cell."""
+
+    def inline(segment: str) -> str:
+        return INLINE.sub(lambda m: " " * len(m.group(0)), segment)
+
+    if not TABLE_ROW.match(line):
+        return inline(line)
+    out, start = [], 0
+    for pipe in PIPE.finditer(line):
+        out += [inline(line[start : pipe.start()]), "|"]
+        start = pipe.end()
+    return "".join(out) + inline(line[start:])
 
 
 def mask(text: str) -> tuple[str, str]:
-    """(text with fenced code blanked, that with inline code and HTML comments blanked too).
+    """(text with fenced code and comment blocks blanked, that with inline code and comments blanked too).
 
     Blanking keeps every offset and line break, so positions in either map back to `text`.
     """
-    lines = text.split("\n")
-    fence = ""
-    opened = 0
-    for i, line in enumerate(lines):
-        m = FENCE.match(line)
-        if not fence:
-            if m:
-                fence, opened = m.group(1), i + 1
-                lines[i] = " " * len(line)
+    blocks: list[str] = []
+    masked: list[str] = []
+    fence: tuple[str, int, int, int] | None = None  # (fence character, length, indent, line it opened on)
+    comment = 0  # the line a comment block opened on; 0 outside one
+    for number, line in enumerate(text.split("\n"), 1):
+        hidden = " " * len(line)
+        if fence:
+            m = FENCE.match(line)
+            if m and m["fence"][0] == fence[0] and len(m["fence"]) >= fence[1] and not m["rest"].strip():
+                if len(m["lead"]) != fence[2]:
+                    raise Defect(
+                        f"line {number}: closes the code fence opened at line {fence[3]} at a different indent; "
+                        "one of the two fence lines is misread, so the text between them would go unchecked"
+                    )
+                fence = None
+        elif comment:
+            if (end := line.find("-->")) >= 0:
+                # A comment block ends with the line holding -->; text after it still renders.
+                comment = 0
+                visible = line[end + 3 :]
+                blocks.append(" " * (end + 3) + visible)
+                masked.append(" " * (end + 3) + mask_line(visible))
+                continue
+        elif (m := FENCE.match(line)) and not (m["fence"][0] == "`" and "`" in m["rest"]):
+            fence = (m["fence"][0], len(m["fence"]), len(m["lead"]), number)
+        elif (c := BLOCK_COMMENT.match(line)) and "-->" not in line[c.end() :]:
+            comment = number
+        else:
+            blocks.append(line)
+            masked.append(mask_line(line))
             continue
-        if m and m.group(1)[0] == fence[0] and len(m.group(1)) >= len(fence) and not line[m.end() :].strip():
-            fence = ""
-        lines[i] = " " * len(line)
+        blocks.append(hidden)
+        masked.append(hidden)
     if fence:
-        raise Defect(f"line {opened}: unclosed code fence (everything after it would go unchecked)")
-    fenced = "\n".join(lines)
-    return fenced, INLINE.sub(blank, fenced)
+        raise Defect(f"line {fence[3]}: unclosed code fence (everything after it would go unchecked)")
+    if comment:
+        raise Defect(f"line {comment}: unclosed HTML comment (everything after it would go unchecked)")
+    return "\n".join(blocks), "\n".join(masked)
+
+
+def heading_offsets(blocks: str) -> list[tuple[int, str]]:
+    """(offset, title) of every ATX and setext heading, in document order."""
+    found: list[tuple[int, str]] = []
+    offset = 0
+    previous: tuple[int, str] | None = None
+    for line in blocks.split("\n"):
+        if m := ATX.fullmatch(line):
+            found.append((offset, m.group(1)))
+        elif (
+            previous
+            and SETEXT.fullmatch(line)
+            and previous[1].strip()
+            and not ATX.fullmatch(previous[1])
+            and not TABLE_ROW.match(previous[1])
+            and not LIST_ITEM.match(previous[1])
+            and not previous[1].lstrip().startswith(">")
+        ):
+            found.append((previous[0], previous[1].strip()))
+        previous = (offset, line)
+        offset += len(line) + 1
+    return found
 
 
 def scan(text: str) -> Spec:
-    fenced, masked = mask(text)
-    headings = [(m.start(), m.group(1)) for m in HEADING.finditer(fenced)]
+    text = text.replace("\r\n", "\n")
+    blocks, masked = mask(text)
+    headings = heading_offsets(blocks)
     markers = {m.start(): m for m in MARKER.finditer(masked)}
     used: set[int] = set()
     keywords: list[Keyword] = []
     for m in KEYWORD.finditer(masked):
-        word = "MUST NOT" if m.group(0) != "MUST" else "MUST"
+        word = "MUST NOT" if m.group(0).endswith("NOT") else "MUST"
         pos = m.end()
         if closer := CLOSER.match(text, pos):
             pos = closer.end()
@@ -157,6 +233,8 @@ def scan(text: str) -> Spec:
             rid = marker.group(2)
             if marker.group(1) != rid.lower():
                 problem = f'anchor id="{marker.group(1)}" does not match {rid} (it must be "{rid.lower()}")'
+            elif word == "MUST" and NOT_AFTER.match(text, marker.end()):
+                problem = f"{rid} sits between MUST and NOT; it goes after NOT"
         elif text.startswith("<sup", pos):
             problem = 'malformed id marker (expected <sup id="iop-3">IOP-3</sup>)'
         keywords.append(Keyword(word, m.start(), line, section, rid, problem))
@@ -165,8 +243,8 @@ def scan(text: str) -> Spec:
 
 
 def strip(text: str) -> str:
-    """`text` with every id marker and not-a-requirement marker removed."""
-    return MARKER.sub("", text).replace(EXEMPT, "")
+    """`text` without its id markers. Not-a-requirement markers stay, so a diff shows each exemption."""
+    return MARKER.sub("", text.replace("\r\n", "\n"))
 
 
 # --- loading ---------------------------------------------------------------------------------
@@ -184,13 +262,14 @@ def parse_json(raw: bytes | str, what: str) -> object:
         return json.loads(raw, object_pairs_hook=no_duplicate_keys)
     except Defect as exc:
         raise Defect(f"{what}: {exc}") from None
-    except ValueError as exc:
+    except (ValueError, RecursionError) as exc:
         raise Defect(f"{what}: not valid JSON ({exc})") from None
 
 
 def read(root: Path, rel: str) -> bytes:
+    """A file's bytes, with CRLF line endings normalised to LF (a Windows checkout)."""
     try:
-        return (root / rel).read_bytes()
+        return (root / rel).read_bytes().replace(b"\r\n", b"\n")
     except OSError as exc:
         raise Defect(f"{rel}: cannot read ({exc.strerror or exc})") from None
 
@@ -221,9 +300,14 @@ def fixture_vectors(document: object, fixture: str) -> dict[str, object]:
     return found
 
 
+def canonical(vector: object) -> str:
+    """A vector's content as one string, so 30 and 30.0 (or false and 0) never compare equal."""
+    return json.dumps(vector, sort_keys=True, ensure_ascii=False)
+
+
 def git(root: Path, *args: str) -> bytes:
     try:
-        proc = subprocess.run(["git", "-C", str(root), *args], capture_output=True, check=False)
+        proc = subprocess.run(["git", "-c", "log.showSignature=false", "-C", str(root), *args], capture_output=True, check=False)
     except OSError as exc:
         raise Defect(f"cannot run git ({exc})") from None
     if proc.returncode != 0:
@@ -233,23 +317,24 @@ def git(root: Path, *args: str) -> bytes:
 
 @dataclass(frozen=True)
 class Revision:
-    vectors: dict[str, object]
+    vectors: dict[str, str]  # name -> canonical content
     version: str  # the fixture's own "version" field
 
 
-def revisions(root: Path, fixture: str) -> dict[str, Revision]:
-    """sha256 -> revision, for every committed revision of a fixture plus the working copy."""
+def revisions(root: Path, fixture: str, ref: str) -> dict[str, tuple[str, bytes]]:
+    """sha256 -> (where, bytes) for every revision of a fixture reachable from `ref`, plus the working tree's.
+
+    The bytes are parsed only when a vendored copy matches them, so a malformed revision that no
+    SDK vendors cannot break the check.
+    """
     rel = f"{FIXTURES}/{fixture}"
-    found: dict[str, Revision] = {}
-    commits = git(root, "log", "--full-history", "--diff-filter=ACMRT", "--format=%H", "--", rel).decode().split()
-    blobs = [(commit, git(root, "show", f"{commit}:{rel}")) for commit in reversed(commits)]
-    blobs.append(("", read(root, rel)))
-    for commit, blob in blobs:
-        sha = hashlib.sha256(blob).hexdigest()
-        if sha not in found:
-            document = parse_json(blob, f"{rel} at {commit[:12] or 'working tree'}")
-            version = document.get("version") if isinstance(document, dict) else None
-            found[sha] = Revision(fixture_vectors(document, fixture), str(version or "unversioned"))
+    found: dict[str, tuple[str, bytes]] = {}
+    commits = git(root, "log", "--full-history", "--diff-filter=ACMRT", "--format=%H", ref, "--", rel).decode().split()
+    for commit in reversed(commits):
+        blob = git(root, "show", f"{commit}:{rel}")
+        found.setdefault(hashlib.sha256(blob).hexdigest(), (commit[:12], blob))
+    current = read(root, rel)
+    found.setdefault(hashlib.sha256(current).hexdigest(), ("the working tree", current))
     return found
 
 
@@ -273,7 +358,7 @@ class Requirement:
 class Model:
     requirements: list[Requirement]
     unindexed: list[str]  # spec files the index does not list
-    fixtures: dict[str, dict[str, object]]  # fixture -> name -> vector, as published here
+    fixtures: dict[str, dict[str, str]]  # fixture -> name -> canonical content, as published here
     sdks: dict[str, dict[str, object]]
     vendored: dict[str, dict[str, tuple[Revision, bool]]]  # sdk -> fixture -> (revision, is current)
     specs: dict[str, Spec]
@@ -290,7 +375,7 @@ def as_strings(value: object, what: str, errors: list[str]) -> tuple[str, ...]:
     return tuple(value)
 
 
-def expand(ref: str, fixtures: dict[str, dict[str, object]]) -> list[tuple[str, str]]:
+def expand(ref: str, fixtures: dict[str, dict[str, str]]) -> list[tuple[str, str]]:
     """(fixture, name) pairs a vector reference stands for; raises Defect if it names nothing."""
     fixture, sep, name = ref.partition(":")
     if fixture not in fixtures:
@@ -302,23 +387,34 @@ def expand(ref: str, fixtures: dict[str, dict[str, object]]) -> list[tuple[str, 
     return [(fixture, name)]
 
 
-def build(root: Path, errors: list[str]) -> Model:
+def as_dict(value: object) -> dict:
+    return value if isinstance(value, dict) else {}
+
+
+def build(root: Path, errors: list[str], base: str | None = None) -> Model:
     index = parse_json(read(root, INDEX), INDEX)
     sdks = parse_json(read(root, SDKS), SDKS)
     if not isinstance(index, dict) or index.get("schema") != 1 or not isinstance(index.get("files"), dict):
         raise Defect(f'{INDEX}: expected {{"schema": 1, "files": {{...}}}}')
+    if not index["files"]:
+        raise Defect(f"{INDEX}: lists no spec file, so nothing would be checked")
     if not isinstance(sdks, dict):
         raise Defect(f"{SDKS}: expected an object keyed by SDK name")
 
     fixtures = {
-        path.name: fixture_vectors(parse_json(path.read_bytes(), f"{FIXTURES}/{path.name}"), path.name)
+        path.name: {
+            name: canonical(vector)
+            for name, vector in fixture_vectors(
+                parse_json(read(root, f"{FIXTURES}/{path.name}"), f"{FIXTURES}/{path.name}"), path.name
+            ).items()
+        }
         for path in sorted((root / FIXTURES).glob("*.json"))
     }
     if not fixtures:
         raise Defect(f"{FIXTURES}/: no fixtures found")
 
     vendored: dict[str, dict[str, tuple[Revision, bool]]] = {}
-    history: dict[str, dict[str, Revision]] = {}
+    history: dict[str, dict[str, tuple[str, bytes]]] = {}
     if sdks and git(root, "rev-parse", "--is-shallow-repository").strip() == b"true":
         raise Defect("shallow clone: vendored fixture copies cannot be matched to older revisions (git fetch --unshallow)")
     for sdk, entry in sdks.items():
@@ -340,16 +436,23 @@ def build(root: Path, errors: list[str]) -> Model:
                 errors.append(f"{SDKS}: {sdk}: {fixture}: expected a lowercase sha256")
                 continue
             if fixture not in history:
-                history[fixture] = revisions(root, fixture)
-            revs = history[fixture]
-            if sha not in revs:
+                history[fixture] = revisions(root, fixture, base or "HEAD")
+            if sha not in history[fixture]:
                 errors.append(
                     f"{SDKS}: {sdk}: {fixture} sha256 {sha[:12]}… matches no revision of {FIXTURES}/{fixture} "
-                    "in this repository's history (a modified copy, or one taken from an unmerged branch)"
+                    f"reachable from {base or 'HEAD'} (a modified copy, or one taken from an unmerged commit)"
                 )
                 continue
-            current = hashlib.sha256((root / FIXTURES / fixture).read_bytes()).hexdigest()
-            vendored[sdk][fixture] = (revs[sha], sha == current)
+            where, blob = history[fixture][sha]
+            try:
+                document = parse_json(blob, f"{FIXTURES}/{fixture} at {where}")
+                vectors = {name: canonical(v) for name, v in fixture_vectors(document, fixture).items()}
+            except Defect as exc:
+                errors.append(f"{SDKS}: {sdk}: the {fixture} revision it vendors does not load: {exc}")
+                continue
+            version = str(document.get("version") or "unversioned") if isinstance(document, dict) else "unversioned"
+            current = hashlib.sha256(read(root, f"{FIXTURES}/{fixture}")).hexdigest()
+            vendored[sdk][fixture] = (Revision(vectors, version), sha == current)
 
     specs: dict[str, Spec] = {}
     requirements: list[Requirement] = []
@@ -432,7 +535,7 @@ def requirement(
     rel: str,
     kw: Keyword,
     entry: object,
-    fixtures: dict[str, dict[str, object]],
+    fixtures: dict[str, dict[str, str]],
     sdks: dict[str, object],
     root: Path,
     errors: list[str],
@@ -446,7 +549,7 @@ def requirement(
     if entry.get("section") != kw.section:
         errors.append(f"{what}: section is {entry.get('section')!r}, but the id sits under the heading {kw.section!r}")
     binds = entry.get("binds")
-    if binds not in BINDS:
+    if not isinstance(binds, str) or binds not in BINDS:
         errors.append(f"{what}: binds must be one of {sorted(BINDS)}")
     only = as_strings(entry.get("sdks"), f"{what}: sdks", errors)
     if only and binds != "sdk":
@@ -465,10 +568,15 @@ def requirement(
         if not (m := TEST_REF.fullmatch(ref)):
             errors.append(f"{what}: test {ref!r} is not tools/<file>:<name>")
             continue
-        path = root / m.group(1)
-        if not path.is_file():
+        if not (root / m.group(1)).is_file():
             errors.append(f"{what}: test {ref!r}: no file {m.group(1)}")
-        elif not re.search(rf"\b{re.escape(m.group(2))}\b", path.read_text(encoding="utf-8")):
+            continue
+        try:
+            source = read(root, m.group(1)).decode("utf-8", "replace")
+        except Defect as exc:
+            errors.append(f"{what}: test {ref!r}: {exc}")
+            continue
+        if not re.search(rf"\b{re.escape(m.group(2))}\b", source):
             errors.append(f"{what}: test {ref!r}: {m.group(1)} has no {m.group(2)!r}")
     gap = entry.get("gap", "")
     if not isinstance(gap, str) or "\n" in gap or (gap != gap.strip()) or ("gap" in entry and not gap):
@@ -479,9 +587,15 @@ def requirement(
     return Requirement(kw.rid or "", rel, kw.section, str(binds), only, vectors, tests, gap, kw)
 
 
+def verify_base(root: Path, base: str) -> None:
+    try:
+        git(root, "rev-parse", "--verify", "--quiet", f"{base}^{{commit}}")
+    except Defect:
+        raise Defect(f"--base {base}: not a commit in this repository") from None
+
+
 def compare_base(root: Path, base: str, errors: list[str]) -> str:
     """Ids at `base` must still be indexed or retired here, and retired ids must stay retired."""
-    git(root, "rev-parse", "--verify", "--quiet", f"{base}^{{commit}}")
     listed = git(root, "ls-tree", "--name-only", base, "--", INDEX).decode().strip()
     if not listed:
         return f"{INDEX} does not exist at {base}; nothing to compare"
@@ -489,16 +603,15 @@ def compare_base(root: Path, base: str, errors: list[str]) -> str:
     now = parse_json(read(root, INDEX), INDEX)
 
     def files(document: object) -> dict[str, dict]:
-        found = document.get("files") if isinstance(document, dict) else None
-        return {k: v for k, v in found.items() if isinstance(v, dict)} if isinstance(found, dict) else {}
+        return {k: v for k, v in as_dict(as_dict(document).get("files")).items() if isinstance(v, dict)}
 
     for rel, old in files(then).items():
         new = files(now).get(rel, {})
-        active, retired = new.get("requirements") or {}, new.get("retired") or {}
-        for rid in old.get("requirements") or {}:
+        active, retired = as_dict(new.get("requirements")), as_dict(new.get("retired"))
+        for rid in as_dict(old.get("requirements")):
             if rid not in active and rid not in retired:
                 errors.append(f"{INDEX}: {rid} was indexed at {base} and is now gone; retire it instead (ids are never reused)")
-        for rid in old.get("retired") or {}:
+        for rid in as_dict(old.get("retired")):
             if rid not in retired:
                 errors.append(f"{INDEX}: {rid} was retired at {base}; a retired id stays retired")
     return f"no id dropped or un-retired since {base}"
@@ -534,8 +647,16 @@ def kind(req: Requirement) -> str:
 ABBREVIATIONS = re.compile(r"\b(?:e\.g|i\.e|etc|vs|incl|cf)\.$")
 
 
+def cell(text: str) -> str:
+    """Text made safe for a Markdown table cell: every pipe escaped exactly once."""
+    return text.replace("\\|", "|").replace("|", "\\|")
+
+
 def excerpt(text: str, start: int) -> str:
-    """The sentence holding the keyword at `start`, from its paragraph, list item or table cell."""
+    """The sentence holding the keyword at `start`, from its paragraph, list item or table cell.
+
+    Display only: a construct it does not follow degrades the excerpt, never the check.
+    """
     marked = text[:start] + "\0" + text[start:]
     lines = marked.split("\n")
     at = marked.count("\n", 0, start)
@@ -550,11 +671,11 @@ def excerpt(text: str, start: int) -> str:
         b = body(line)
         return not b.strip() or b.startswith(("#", "|", "```", "~~~", "[!"))
 
-    if body(lines[at]).startswith("|"):
+    if TABLE_ROW.match(lines[at]):
         row = lines[at]
         pos = row.index("\0")
-        end = row.find("|", pos)
-        block = row[row.rfind("|", 0, pos) + 1 : end if end >= 0 else len(row)]
+        pipes = [p.start() for p in PIPE.finditer(row)]
+        block = row[max((p for p in pipes if p < pos), default=-1) + 1 : min((p for p in pipes if p > pos), default=len(row))]
     else:
         first = at
         while not opens_item(lines[first]) and first > 0 and not boundary(lines[first - 1]):
@@ -563,11 +684,15 @@ def excerpt(text: str, start: int) -> str:
         while last + 1 < len(lines) and not boundary(lines[last + 1]) and not opens_item(lines[last + 1]):
             last += 1
         block = " ".join(re.sub(r"^(?:[-*+]|\d+[.)])[ \t]+", "", body(ln)) for ln in lines[first : last + 1])
-    clean = strip(block)
-    clean = re.sub(r"<!--.*?-->", "", clean)
+    clean = MARKER.sub("", block)
+    clean = re.sub(r"<!--(?:(?!\0).)*?-->", "", clean)
     clean = re.sub(r"\[([^\]]+)\]\([^)]*\)", r"\1", clean)
-    clean = re.sub(r"\*\*|__", "", clean)
+    # Emphasis markers go, but not inside code: `2**53` and `__init__` stay as written.
+    parts = re.split(r"(`+[^`]*`+)", clean)
+    clean = "".join(part if i % 2 else re.sub(r"\*\*|__", "", part) for i, part in enumerate(parts))
     clean = re.sub(r"\s+", " ", clean).strip()
+    if "\0" not in clean:
+        return cell(re.sub(r"\s+", " ", MARKER.sub("", lines[at]).replace("\0", "")).strip()[:240])
     pos = clean.index("\0")
     begin = 0
     for m in re.finditer(r"[.!?](?=\s)", clean[:pos]):
@@ -586,7 +711,7 @@ def excerpt(text: str, start: int) -> str:
         hi = sentence.rfind(" ", pos, pos + 140) if pos + 140 < len(sentence) else len(sentence)
         hi = hi if hi > pos else len(sentence)
         sentence = ("… " if lo else "") + sentence[lo:hi].strip() + (" …" if hi < len(sentence) else "")
-    return sentence.replace("\0", "").replace("|", "\\|")
+    return cell(sentence.replace("\0", ""))
 
 
 def evidence(req: Requirement, model: Model) -> str:
@@ -606,7 +731,7 @@ def evidence(req: Requirement, model: Model) -> str:
         parts.insert(0, f"Binds {BINDS[req.binds]}.")
     elif req.sdks:
         parts.insert(0, f"Binds {', '.join(req.sdks)} only.")
-    return "<br>".join(p.replace("|", "\\|") for p in parts)
+    return "<br>".join(cell(p) for p in parts)
 
 
 def render(model: Model) -> str:
@@ -666,14 +791,18 @@ def render(model: Model) -> str:
         out += ["", "Not indexed yet: " + ", ".join(f"[`{rel}`](../{rel})" for rel in model.unindexed) + "."]
 
     for rel in sorted(model.specs):
-        text = model.specs[rel].text
+        spec = model.specs[rel]
         out += ["", f"## {rel}", "", "| Id | Requirement | Vectors, tests and gaps | " + " | ".join(sdks) + " |"]
         out.append("| :--- | :--- | :--- |" + " :--- |" * len(sdks))
         for req in (r for r in model.requirements if r.file == rel):
             link = f"[{req.rid}](../{rel}#{req.rid.lower()})"
-            said = f"*{req.section}*: {excerpt(text, req.keyword.start)}"
+            said = f"*{cell(req.section)}*: {excerpt(spec.text, req.keyword.start)}"
             cells = " | ".join(status(req, sdk, model) for sdk in sdks)
             out.append(f"| {link} | {said} | {evidence(req, model)} | {cells} |")
+        exempt = [kw for kw in spec.keywords if kw.rid == ""]
+        if exempt:
+            out += ["", f"Marked not-a-requirement in `{rel}`:", ""]
+            out += [f"- line {kw.line}: {excerpt(spec.text, kw.start)}" for kw in exempt]
     return "\n".join(out) + "\n"
 
 
@@ -684,14 +813,16 @@ def run_check(root: Path, base: str | None) -> int:
     errors: list[str] = []
     notes: list[str] = []
     try:
-        model = build(root, errors)
+        if base:
+            verify_base(root, base)
+        model = build(root, errors, base)
         if base:
             notes.append(compare_base(root, base, errors))
         if not errors:
             expected = render(model)
             try:
-                actual = (root / REPORT).read_text(encoding="utf-8")
-            except OSError:
+                actual = (root / REPORT).read_bytes().replace(b"\r\n", b"\n").decode("utf-8")
+            except (OSError, UnicodeDecodeError):
                 actual = None
             if actual != expected:
                 errors.append(f"{REPORT} is stale or missing: run python3 tools/conformance.py report")
@@ -723,7 +854,11 @@ def run_report(root: Path) -> int:
         for error in errors:
             print(f"  {error}", file=sys.stderr)
         return 1
-    (root / REPORT).write_text(render(model), encoding="utf-8")
+    try:
+        (root / REPORT).write_text(render(model), encoding="utf-8", newline="\n")
+    except OSError as exc:
+        print(f"conformance: cannot write {REPORT} ({exc.strerror or exc})", file=sys.stderr)
+        return 1
     print(f"conformance: wrote {REPORT} ({len(model.requirements)} requirement ids)")
     return 0
 
@@ -731,7 +866,7 @@ def run_report(root: Path) -> int:
 def main(argv: list[str]) -> int:
     for stream in (sys.stdout, sys.stderr):
         stream.reconfigure(errors="backslashreplace")  # type: ignore[union-attr]
-    parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
+    parser = argparse.ArgumentParser(description=(__doc__ or "").split("\n\n")[0])
     commands = parser.add_subparsers(dest="command", required=True)
     check = commands.add_parser("check", help="exit 1 on any defect")
     check.add_argument("--base", help="git revision whose index this one must not drop or un-retire ids from")
@@ -745,7 +880,13 @@ def main(argv: list[str]) -> int:
         return run_check(args.root, args.base)
     if args.command == "report":
         return run_report(args.root)
-    sys.stdout.write(strip(args.file.read_text(encoding="utf-8")))
+    try:
+        text = args.file.read_bytes().decode("utf-8")
+    except (OSError, UnicodeDecodeError) as exc:
+        print(f"conformance: cannot read {args.file} ({exc})", file=sys.stderr)
+        return 1
+    # Bytes, not text: the output must not depend on the terminal's encoding.
+    sys.stdout.buffer.write(strip(text).encode("utf-8"))
     return 0
 
 

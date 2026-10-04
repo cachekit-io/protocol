@@ -6,13 +6,8 @@
       "requirements": {
         "IOP-1": {
           "section": "The Problem",
-          "binds": "sdk",
-          "vectors": [
-            "interop-mode.json:issue_example_object",
-            "interop-mode.json:float_value_stays_float64",
-            "interop-mode.json:mixed_array",
-            "interop-mode.json:datetime_sentinel_value"
-          ]
+          "binds": "caller",
+          "gap": "Whether a value is meant for another SDK is the application's choice; the SDK's part, writing interop values as plain MessagePack, is IOP-17 and IOP-21 item 5."
         },
         "IOP-2": {
           "section": "Segment grammar",
@@ -22,7 +17,7 @@
             "interop-mode.json:reject_colon_in_operation",
             "interop-mode.json:reject_trailing_newline"
           ],
-          "gap": "No vector pins the 64-character limit, the leading-character rule (a segment starting with '.', '_' or '-'), an empty segment, or an uppercase operation."
+          "gap": "No vector pins the 64-character limit, the leading-character rule (a segment starting with '.', '_' or '-'), an empty segment, or a character outside the set other than an uppercase letter, ':' and a newline (a non-ASCII digit, 'é', '/', a space); each rule is tested on one segment only (uppercase and the newline on the namespace, ':' on the operation)."
         },
         "IOP-3": {
           "section": "Segment grammar",
@@ -36,7 +31,7 @@
             "interop-mode.json:reject_double_dot_namespace",
             "interop-mode.json:reject_double_dot_operation"
           ],
-          "gap": "The vectors drive key derivation; that the error comes at decoration or registration time, not at the first call, is an SDK API property no vector observes."
+          "gap": "The vectors drive key derivation, so they share IOP-2's holes; rejection at decoration or registration time rather than at the first call, and on every backend, are SDK API properties no vector observes."
         },
         "IOP-4": {
           "section": "Segment grammar",
@@ -77,7 +72,7 @@
             "interop-mode.json:reject_int_underflow",
             "interop-mode.json:reject_naive_datetime"
           ],
-          "gap": "Portable JSON cannot express a value whose type is outside the data model (an arbitrary object, a non-string map key), so no vector carries one."
+          "gap": "Portable JSON cannot express a value whose type is outside the data model (an arbitrary object, a non-string map key), and every error vector puts the bad value at the top of the argument list, so a check that skips nested values (a set's elements, a map's values) passes them all."
         },
         "IOP-9": {
           "section": "The Interop Data Model",
@@ -95,7 +90,8 @@
           "tests": [
             "tools/interop-reference.py:_self_check",
             "tools/interop-crosscheck.mjs:lone_surrogate_selftest"
-          ]
+          ],
+          "gap": "Both self-tests use one lone high surrogate (U+D800) as a whole argument; a lone low surrogate, or one inside a map key or a nested value, is untested, and portable JSON cannot carry any of them."
         },
         "IOP-11": {
           "section": "The Interop Data Model",
@@ -103,7 +99,8 @@
           "tests": [
             "tools/interop-reference.py:_self_check",
             "tools/interop-crosscheck.mjs:lone_surrogate_selftest"
-          ]
+          ],
+          "gap": "Both self-tests use one lone high surrogate (U+D800) as a whole argument; a lone low surrogate, or one inside a map key or a nested value, is untested, and portable JSON cannot carry any of them."
         },
         "IOP-12": {
           "section": "The Interop Data Model",
@@ -113,7 +110,8 @@
           ],
           "tests": [
             "tools/interop-crosscheck.mjs:lone_surrogate_selftest"
-          ]
+          ],
+          "gap": "The self-test exercises the reference cross-check, not cachekit-ts; portable JSON cannot carry a lone surrogate, so only the SDK's own suite can test it."
         },
         "IOP-13": {
           "section": "The Interop Data Model",
@@ -127,8 +125,11 @@
             "cachekit-ts"
           ],
           "vectors": [
-            "interop-mode.json:map_key_sort_supplementary"
-          ]
+            "interop-mode.json:map_key_sort_supplementary",
+            "interop-mode.json:map_key_sort_ascii",
+            "interop-mode.json:nested_map_recursive_sort"
+          ],
+          "gap": "A collator sort with uppercase first (Intl.Collator with caseFirst 'upper') passes all three vectors yet departs from code-point order on punctuation (a-b against a_b), which no vector orders."
         },
         "IOP-15": {
           "section": "Number canonicalization",
@@ -147,7 +148,7 @@
           "sdks": [
             "cachekit-ts"
           ],
-          "gap": "The vectors spell integers beyond 2^53 as {\"$int\": ...}, which a JavaScript reader turns into a BigInt, so no vector or reference test passes a bare Number beyond 2^53."
+          "gap": "The vectors spell integers beyond 2^53 as {\"$int\": ...} (a BigInt) or {\"$float\": ...} (an explicit float, which cachekit-ts's harness wraps so the SDK can tell it from a bare Number); no vector or reference test passes a bare Number beyond 2^53, and neither the spec nor the fixture's tagged_json note documents the float wrapper."
         },
         "IOP-17": {
           "section": "Interop Value Format",
@@ -171,7 +172,7 @@
             "decode-bounds.json:nested_fixmap_depth_32",
             "decode-bounds.json:array16_256_backed_nils"
           ],
-          "gap": "No vector holds a non-canonical document (a padded integer width, unsorted map keys, a float32), which readers must accept too."
+          "gap": "No vector an SDK feeds to its interop reader holds a non-canonical document (a padded integer width, unsorted map keys, a float32), a map with non-string keys, or an ext type, all of which readers must accept; python-frame.json's frame payloads hold unsorted keys but are not read as interop values."
         },
         "IOP-19": {
           "section": "Interop Value Format",
@@ -198,7 +199,7 @@
           "vectors": [
             "interop-mode.json"
           ],
-          "gap": "Items 1 and 2 (namespace and operation are required arguments; named and defaulted arguments bind to their positions) and item 6 (auto mode unchanged) are SDK API properties no vector observes."
+          "gap": "Items 1, 3 and 4 share the holes recorded on IOP-2, IOP-8, IOP-10, IOP-13 and IOP-16, no vector reaches the 32-bit length tier (untested by design), and no vector passes a small integer as {\"$int\": ...}, so an encoder that always writes a BigInt at full width passes; item 2 (named and defaulted arguments bind to positions) is an SDK API property no vector observes; item 6 (auto mode unchanged) is pinned only where an SDK vendors cache-keys.json or wire-format.json."
         },
         "IOP-22": {
           "section": "SDK Implementation Requirements",
@@ -230,7 +231,7 @@
           "vectors": [
             "decode-bounds.json"
           ],
-          "gap": "Rule 3 (a rejection becomes a cache miss, never an uncaught crash or an abort) is a property of the SDK read path; the vectors pin only the verdict."
+          "gap": "Rule 2 (never pre-allocate beyond the input) cannot fail by verdict, because every overclaim vector is truncated and any decoder rejects it at end of input; rule 3 (a rejection becomes a cache miss, never a crash or an abort) is a property of the SDK read path; and which entry points the vectors reach is SDK test code (IOP-31)."
         },
         "IOP-25": {
           "section": "Decode bounds",
@@ -238,7 +239,8 @@
           "vectors": [
             "decode-bounds.json:nested_fixarray_depth_32",
             "decode-bounds.json:nested_fixmap_depth_32"
-          ]
+          ],
+          "gap": "The accept vectors reach only the entry points an SDK's test drives them through, while the bound binds every untrusted decode, invalidation events included; IOP-31 asks for every entry point only with reject vectors, so nothing makes a test run the accept vectors beyond value reads."
         },
         "IOP-26": {
           "section": "Decode bounds",
@@ -246,7 +248,8 @@
           "vectors": [
             "decode-bounds.json:nested_fixarray_depth_1025_complete",
             "decode-bounds.json:nested_fixmap_depth_1025_complete"
-          ]
+          ],
+          "gap": "These vectors reach only the decode entry points an SDK's test drives them through, while the rule binds every untrusted decode, invalidation events included; which entry points a test covers is SDK test code (IOP-31), recorded per SDK in sdk-feature-matrix.md's \"Test vectors in CI\" row."
         },
         "IOP-27": {
           "section": "Decode bounds",
@@ -270,7 +273,8 @@
             "decode-bounds.json:nested_fixarray_depth_32",
             "decode-bounds.json:nested_fixmap_depth_32",
             "decode-bounds.json:array16_256_backed_nils"
-          ]
+          ],
+          "gap": "A verdict cannot fail this: every overclaim vector is truncated, so any decoder rejects it at end of input whatever its guard does; only an SDK test that asserts the guard's own error (IOP-31) exercises it. The accept vectors do pin a budget set too tight."
         },
         "IOP-28": {
           "section": "Decode bounds",
@@ -291,7 +295,8 @@
             "decode-bounds.json:str32_overclaim",
             "decode-bounds.json:ext32_overclaim",
             "decode-bounds.json:fixarray_short_by_one"
-          ]
+          ],
+          "gap": "A verdict cannot fail this: every overclaim vector is truncated, so any decoder rejects it at end of input whatever its guard does; only an SDK test that asserts the guard's own error (IOP-31) exercises it."
         },
         "IOP-29": {
           "section": "Decode bounds",
@@ -300,7 +305,7 @@
             "decode-bounds.json:fixarray_short_by_one",
             "decode-bounds.json:fixmap_short_by_one"
           ],
-          "gap": "No reject vector is incomplete while within the slot budget (the spec's own 92 dc 00 00), the one shape a sum-only guard accepts."
+          "gap": "Both mapped vectors also overclaim, so a sum-only guard rejects them, and no reject vector is incomplete within the slot budget (the spec's own 92 dc 00 00, or 92 cb and one float64); even such a vector fails only an SDK test that asserts the guard's own error (IOP-31), since any decoder rejects it at end of input."
         },
         "IOP-30": {
           "section": "Decode bounds",
@@ -308,9 +313,9 @@
           "vectors": [
             "decode-bounds.json:array32_sum_wraps_u32",
             "decode-bounds.json:array32_sum_wraps_u32_small_first",
-            "decode-bounds.json:map32_half_claim_wraps_u32_mul",
-            "decode-bounds.json:map32_max_claim_alone"
-          ]
+            "decode-bounds.json:map32_half_claim_wraps_u32_mul"
+          ],
+          "gap": "A verdict cannot fail this: every overclaim vector is truncated, so any decoder rejects it at end of input whatever its guard does; only an SDK test that asserts the guard's own error (IOP-31) exercises it."
         },
         "IOP-31": {
           "section": "Decode bounds",
@@ -381,7 +386,8 @@
             "decode-bounds.json:str32_overclaim",
             "decode-bounds.json:ext32_overclaim",
             "decode-bounds.json:fixarray_short_by_one"
-          ]
+          ],
+          "gap": "These vectors reach only the decode entry points an SDK's test drives them through, while the rule binds every untrusted decode, invalidation events included; which entry points a test covers is SDK test code (IOP-31), recorded per SDK in sdk-feature-matrix.md's \"Test vectors in CI\" row."
         },
         "IOP-34": {
           "section": "Decode bounds",
@@ -390,7 +396,8 @@
             "decode-bounds.json:nested_fixarray_depth_32",
             "decode-bounds.json:nested_fixmap_depth_32",
             "decode-bounds.json:array16_256_backed_nils"
-          ]
+          ],
+          "gap": "The accept vectors reach only the entry points an SDK's test drives them through, while the bound binds every untrusted decode, invalidation events included; IOP-31 asks for every entry point only with reject vectors, so nothing makes a test run the accept vectors beyond value reads."
         },
         "IOP-35": {
           "section": "Test Vectors",
@@ -416,7 +423,8 @@
           "binds": "sdk",
           "vectors": [
             "interop-mode.json"
-          ]
+          ],
+          "gap": "Whether an SDK's suite runs every vector, not just vendors the file, is SDK test code no vector can check; sdk-feature-matrix.md's \"Test vectors in CI\" row records it per SDK."
         }
       },
       "retired": {}
