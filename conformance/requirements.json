@@ -155,7 +155,7 @@
         "ENC-1": {
           "section": "AAD v0x03 Format",
           "binds": "sdk",
-          "gap": "Every vector outside the draft interop-v2 profile carries the metadata and key it was sealed under, so a reader that retries with another format or compressed value, with or without original_type, or with its key stripped of a namespace or prefix, decrypts each one at its first attempt; interop-v2.json's crypto_reject_vectors present a ciphertext under the other compressed value, but no SDK implements that draft profile, and no vector presents another format, original_type or key form."
+          "gap": "Every sealed vector outside the draft interop-v2 profile carries the metadata and key it was sealed under, so a reader that retries with another format or compressed value, with or without original_type, or with its key stripped of a namespace or prefix, decrypts each one at its first attempt; interop-v2.json's crypto_reject_vectors present a ciphertext under the other compressed value, but no SDK implements that draft profile, and no vector presents another format, original_type or key form."
         },
         "ENC-2": {
           "section": "AAD v0x03 Format",
@@ -188,7 +188,17 @@
           "section": "`compressed` tokens",
           "binds": "sdk",
           "vectors": [
-            "encryption.json",
+            "encryption.json:basic_bytes",
+            "encryption.json:special_cache_key",
+            "encryption.json:compressed_basic",
+            "encryption.json:arrow_uncompressed",
+            "encryption.json:arrow_compressed",
+            "encryption.json:orjson_uncompressed",
+            "encryption.json:original_type_numpy",
+            "encryption.json:encrypted_with_k1",
+            "encryption.json:encrypted_with_k2",
+            "encryption.json:default_tenant_interop",
+            "encryption.json:master_key_every_hex_digit",
             "interop-mode.json:interop_key_aad",
             "interop-mode.json:interop_encryption_roundtrip"
           ],
@@ -374,27 +384,79 @@
           "binds": "sdk",
           "vectors": [
             "interop-mode.json:interop_encryption_roundtrip",
-            "encryption.json"
+            "encryption.json:basic_bytes",
+            "encryption.json:special_cache_key",
+            "encryption.json:compressed_basic",
+            "encryption.json:arrow_uncompressed",
+            "encryption.json:arrow_compressed",
+            "encryption.json:orjson_uncompressed",
+            "encryption.json:original_type_numpy",
+            "encryption.json:encrypted_with_k1",
+            "encryption.json:encrypted_with_k2",
+            "encryption.json:default_tenant_interop",
+            "encryption.json:master_key_every_hex_digit"
           ],
-          "gap": "Whether an SDK's test passes the hex string to its secure preset (which a preset that takes only raw bytes fails), rather than decoding it first for a lower-level API, is SDK test code no vector can check. Only default_tenant_interop reaches a preset that takes no tenant; the others are sealed under named tenants. Every key is all-digit hex with no zero byte, so a preset that rejects a key with hex letters in either case, or a 32-byte key with a leading zero byte, passes."
+          "tests": [
+            "tools/encryption-verify.py:verify_master_key_input",
+            "tools/encryption-verify.py:verify_wrong_entry_points"
+          ],
+          "gap": "Whether an SDK's test hands the hex string to its secure preset (which a preset that takes only raw bytes fails), rather than decoding it first for a lower-level API, is SDK test code no vector can check. Only default_tenant_interop and master_key_every_hex_digit reach a preset that takes no tenant; the others are sealed under named tenants. No vector's verdict turns on an uppercase letter, white space or a 0x prefix, which rule 1 does not settle, so none shows what a preset does with a valid key that holds one. No key the vectors accept has its first byte at 80 or above, so a preset that refuses such a key, as a two's-complement big integer padded to 32 bytes does, passes."
         },
         "PRE-17": {
           "section": "Master Key Input",
           "binds": "sdk",
           "vectors": [
             "interop-mode.json:interop_encryption_roundtrip",
-            "encryption.json"
+            "encryption.json:basic_bytes",
+            "encryption.json:special_cache_key",
+            "encryption.json:compressed_basic",
+            "encryption.json:arrow_uncompressed",
+            "encryption.json:arrow_compressed",
+            "encryption.json:orjson_uncompressed",
+            "encryption.json:original_type_numpy",
+            "encryption.json:encrypted_with_k1",
+            "encryption.json:encrypted_with_k2",
+            "encryption.json:default_tenant_interop",
+            "encryption.json:master_key_every_hex_digit",
+            "encryption.json:master_key_odd_65_digits",
+            "encryption.json:master_key_odd_63_digits",
+            "encryption.json:master_key_non_hex_digit",
+            "encryption.json:master_key_trailing_non_hex",
+            "encryption.json:master_key_plus_sign"
           ],
-          "gap": "Every master key the vectors hold is exactly 32 bytes of well-formed, all-digit hex repeating one nonzero byte (0x61, 0x11 or 0x22), so a decoder that mishandles a hex letter or its case, drops a leading zero byte, reorders bytes or cuts a longer key to 32 bytes passes, and nothing pins how one treats a malformed string (an odd length, a non-hex character, whitespace or a 0x prefix); whether a test decodes through the preset's own path is SDK test code."
+          "tests": [
+            "tools/encryption-verify.py:verify_master_key_input",
+            "tools/encryption-verify.py:verify_wrong_entry_points"
+          ],
+          "gap": "Every key the vectors accept is exactly 32 bytes, so a decoder that accepts a longer key and cuts it to 32 bytes passes, and none has its first byte at 80 or above, so a decoder that refuses such a key (a two's-complement big integer padded to 32 bytes) passes too. No vector's verdict turns on an uppercase letter, white space or a 0x prefix, which rule 1 does not settle, so none shows what a decoder does with a valid key that holds one. Whether a test decodes each string through the preset's own path is SDK test code."
         },
         "PRE-18": {
           "section": "Master Key Input",
           "binds": "sdk",
           "vectors": [
             "interop-mode.json:interop_encryption_roundtrip",
-            "encryption.json"
+            "encryption.json:basic_bytes",
+            "encryption.json:special_cache_key",
+            "encryption.json:compressed_basic",
+            "encryption.json:arrow_uncompressed",
+            "encryption.json:arrow_compressed",
+            "encryption.json:orjson_uncompressed",
+            "encryption.json:original_type_numpy",
+            "encryption.json:encrypted_with_k1",
+            "encryption.json:encrypted_with_k2",
+            "encryption.json:default_tenant_interop",
+            "encryption.json:master_key_every_hex_digit",
+            "encryption.json:master_key_odd_65_digits",
+            "encryption.json:master_key_odd_63_digits",
+            "encryption.json:master_key_non_hex_digit",
+            "encryption.json:master_key_trailing_non_hex",
+            "encryption.json:master_key_plus_sign"
           ],
-          "gap": "As PRE-17: SDKs that disagree on a hex letter, its case, a leading zero byte, a key longer than 32 bytes or a malformed string each pass, and whether each test feeds the string through its SDK's own preset path is SDK test code."
+          "tests": [
+            "tools/encryption-verify.py:verify_master_key_input",
+            "tools/encryption-verify.py:verify_wrong_entry_points"
+          ],
+          "gap": "As PRE-17: SDKs that disagree on a key longer than 32 bytes, on a key whose first byte is 80 or above, or on a valid key that holds an uppercase letter, white space or a 0x prefix, each pass, and whether each test feeds the string through its SDK's own preset path is SDK test code."
         },
         "PRE-19": {
           "section": "Master Key Input",
@@ -407,26 +469,52 @@
         "PRE-20": {
           "section": "Master Key Input",
           "binds": "sdk",
-          "gap": "No vector reaches construction, so nothing here catches a secure preset that constructs with no key and fails only on first use."
+          "gap": "No vector stands for a missing key, so nothing here catches a secure preset that constructs with no key and fails only on first use."
         },
         "PRE-21": {
           "section": "Master Key Input",
           "binds": "sdk",
-          "gap": "No vector reaches construction, so nothing here catches a secure preset that, given no key, builds a cache that stores plaintext."
+          "gap": "No vector stands for a missing key, so nothing here catches a secure preset that, given no key, builds a cache that stores plaintext."
         },
         "PRE-22": {
           "section": "Master Key Input",
           "binds": "sdk",
           "vectors": [
             "interop-mode.json:interop_encryption_roundtrip",
-            "encryption.json"
+            "encryption.json:basic_bytes",
+            "encryption.json:special_cache_key",
+            "encryption.json:compressed_basic",
+            "encryption.json:arrow_uncompressed",
+            "encryption.json:arrow_compressed",
+            "encryption.json:orjson_uncompressed",
+            "encryption.json:original_type_numpy",
+            "encryption.json:encrypted_with_k1",
+            "encryption.json:encrypted_with_k2",
+            "encryption.json:default_tenant_interop",
+            "encryption.json:master_key_every_hex_digit"
           ],
-          "gap": "A preset that refuses a 32-byte key fails the vectors only when an SDK's test drives them through it, and only default_tenant_interop reaches a preset that takes no tenant; that is SDK test code no vector can check. Every key is all-digit hex with no zero byte, so a preset that rejects a key with hex letters in either case, or a 32-byte key with a leading zero byte, passes."
+          "tests": [
+            "tools/encryption-verify.py:verify_master_key_input",
+            "tools/encryption-verify.py:verify_wrong_entry_points"
+          ],
+          "gap": "As PRE-16, for a preset that refuses a 32-byte key."
         },
         "PRE-23": {
           "section": "Master Key Input",
           "binds": "sdk",
-          "gap": "No vector holds a short key to reject, so nothing here catches an SDK that accepts one, at the 16-byte HKDF floor encryption.md once listed or padded to 32."
+          "vectors": [
+            "encryption.json:master_key_31_bytes",
+            "encryption.json:master_key_24_bytes",
+            "encryption.json:master_key_16_bytes",
+            "encryption.json:master_key_31_bytes_and_crlf",
+            "encryption.json:master_key_31_bytes_with_spaces",
+            "encryption.json:master_key_0x_and_31_bytes"
+          ],
+          "tests": [
+            "tools/encryption-verify.py:verify_master_key_input",
+            "tools/encryption-verify.py:verify_wrong_entry_points"
+          ],
+          "gap": "The rows reach whichever hex entry point an SDK's test feeds them to; whether it feeds them to every place a key enters (the preset's argument, CACHEKIT_MASTER_KEY, a companion constructor, a previous key), rather than to one shared decoder, is SDK test code no vector can check. The short keys are 16, 24 and 31 bytes, so a length rule that refuses those and accepts another length under 32 passes."
         },
         "PRE-24": {
           "section": "Master Key Input",
@@ -438,7 +526,17 @@
           "binds": "sdk",
           "vectors": [
             "interop-mode.json:interop_encryption_roundtrip",
-            "encryption.json"
+            "encryption.json:basic_bytes",
+            "encryption.json:special_cache_key",
+            "encryption.json:compressed_basic",
+            "encryption.json:arrow_uncompressed",
+            "encryption.json:arrow_compressed",
+            "encryption.json:orjson_uncompressed",
+            "encryption.json:original_type_numpy",
+            "encryption.json:encrypted_with_k1",
+            "encryption.json:encrypted_with_k2",
+            "encryption.json:default_tenant_interop",
+            "encryption.json:master_key_every_hex_digit"
           ],
           "gap": "As PRE-16, when the test hands the hex string to the preset itself: a preset that takes the key only as bytes, while a lower-level builder takes hex, passes a test that drives the builder."
         },
@@ -450,9 +548,19 @@
             "cachekit-rs"
           ],
           "vectors": [
-            "interop-mode.json:interop_encryption_roundtrip"
+            "interop-mode.json:interop_encryption_roundtrip",
+            "encryption.json:master_key_every_hex_digit",
+            "encryption.json:raw_key_31_bytes",
+            "encryption.json:raw_key_24_bytes",
+            "encryption.json:raw_key_16_bytes",
+            "encryption.json:raw_key_33_bytes",
+            "encryption.json:raw_key_ascii_hex_string"
           ],
-          "gap": "The vector's key is exactly 32 bytes, so it catches a raw-bytes entry point that refuses that length only when an SDK's test drives the vector through that entry point; no vector holds a raw key of another length, so nothing here catches one that accepts the 64 ASCII bytes of a hex string, the case the spec names."
+          "tests": [
+            "tools/encryption-verify.py:verify_master_key_input",
+            "tools/encryption-verify.py:verify_wrong_entry_points"
+          ],
+          "gap": "Each vector reaches a raw-bytes entry point only when an SDK's test drives it through one: the 32-byte keys of interop_encryption_roundtrip and master_key_every_hex_digit to be accepted (the second has bytes above 7f, which an entry point that passes the bytes through a text string corrupts), and the raw reject rows of 16, 24, 31 and 33 bytes and the ASCII bytes of a hex string to be refused, so one that refuses those and accepts another length but 32 passes. Whether a test drives them through every raw-bytes entry point the SDK offers, for current and previous keys alike, is SDK test code no vector can check."
         },
         "PRE-27": {
           "section": "Master Key Input",
@@ -470,11 +578,22 @@
           "binds": "sdk",
           "vectors": [
             "interop-mode.json:interop_encryption_roundtrip",
-            "encryption.json"
+            "encryption.json:basic_bytes",
+            "encryption.json:special_cache_key",
+            "encryption.json:compressed_basic",
+            "encryption.json:arrow_uncompressed",
+            "encryption.json:arrow_compressed",
+            "encryption.json:orjson_uncompressed",
+            "encryption.json:original_type_numpy",
+            "encryption.json:encrypted_with_k1",
+            "encryption.json:encrypted_with_k2",
+            "encryption.json:default_tenant_interop",
+            "encryption.json:master_key_every_hex_digit"
           ],
           "tests": [
             "tools/encryption-verify.py:verify_sealed_vector",
-            "tools/encryption-verify.py:verify_default_tenant"
+            "tools/encryption-verify.py:verify_default_tenant",
+            "tools/encryption-verify.py:verify_master_key_input"
           ],
           "gap": "The vectors fail a reader whose key and AAD use different tenants, the default or a named one, only when its test drives the SDK's own key derivation and AAD builder from one resolved tenant; a test that compares the AAD with a vector's aad_hex, or hands the tenant to each step itself, passes a reader that derives under \"default\" and builds the AAD under \"\". The writer side is PRE-29's gap."
         },
@@ -517,7 +636,7 @@
         "PRE-33": {
           "section": "Encryption Activation",
           "binds": "sdk",
-          "gap": "No vector reaches construction, so nothing here catches an SDK that accepts an encryption option it cannot honour instead of rejecting it."
+          "gap": "No vector holds an encryption option an SDK cannot honour, so nothing here catches an SDK that accepts one instead of rejecting it."
         },
         "PRE-34": {
           "section": "Encryption Activation",
@@ -613,12 +732,12 @@
         "PRE-45": {
           "section": "`io` Credentials",
           "binds": "sdk",
-          "gap": "No vector reaches construction or the environment, so nothing here catches an io that takes its API key from only one of the argument and CACHEKIT_API_KEY, or lets the variable win over an argument."
+          "gap": "No vector holds an API key or reaches the environment, so nothing here catches an io that takes its API key from only one of the argument and CACHEKIT_API_KEY, or lets the variable win over an argument."
         },
         "PRE-46": {
           "section": "`io` Credentials",
           "binds": "sdk",
-          "gap": "No vector reaches construction, so nothing here catches an io that constructs with no API key and fails only on its first request."
+          "gap": "No vector stands for a missing API key, so nothing here catches an io that constructs with no API key and fails only on its first request."
         },
         "PRE-47": {
           "section": "`io` Credentials",
@@ -636,7 +755,7 @@
         "PRE-49": {
           "section": "Explicit Configuration",
           "binds": "sdk",
-          "gap": "No vector reaches construction, so nothing here catches a preset that drops an argument it does not support, as cachekit-py's io did with backend= through 0.19.0."
+          "gap": "No vector holds an argument a preset does not support, so nothing here catches a preset that drops one, as cachekit-py's io did with backend= through 0.19.0."
         },
         "PRE-50": {
           "section": "Explicit Configuration",
@@ -650,9 +769,10 @@
             "cachekit-rs"
           ],
           "vectors": [
-            "encryption.json:default_tenant_interop"
+            "encryption.json:default_tenant_interop",
+            "encryption.json:master_key_every_hex_digit"
           ],
-          "gap": "The vector catches a secure companion that does not read CACHEKIT_MASTER_KEY only when a test supplies the key through that variable. No vector is a default-tenant entry sealed under a previous key (the keyring vectors use the tenant keyring-conformance), so nothing here catches one that ignores CACHEKIT_PREVIOUS_MASTER_KEYS; and apart from CACHEKIT_MASTER_KEY, which PRE-53's planted entry reaches, nothing observes an io companion that reads a variable besides CACHEKIT_API_KEY."
+          "gap": "The vectors catch a secure companion that does not read CACHEKIT_MASTER_KEY only when a test supplies the key through that variable. They are default-tenant entries under two different master keys and cache keys, so a companion that ignores CACHEKIT_PREVIOUS_MASTER_KEYS fails a test that sets one key as current and the other as previous only if the test asserts a hit, since a fail-open read recomputes instead; and apart from CACHEKIT_MASTER_KEY, which PRE-53's planted entry reaches, nothing observes an io companion that reads a variable besides CACHEKIT_API_KEY."
         },
         "PRE-52": {
           "section": "Explicit Configuration",
@@ -660,7 +780,7 @@
           "sdks": [
             "cachekit-rs"
           ],
-          "gap": "The rule asks for a construction error, which no vector observes; no vector is a default-tenant entry sealed under a previous key (see PRE-51)."
+          "gap": "The rule asks for a construction error, which no vector observes."
         },
         "PRE-53": {
           "section": "Explicit Configuration",
