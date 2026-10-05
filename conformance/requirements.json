@@ -385,7 +385,7 @@
             "interop-mode.json:interop_encryption_roundtrip",
             "encryption.json"
           ],
-          "gap": "Every master key the vectors hold is all-digit hex repeating one nonzero byte (0x61, 0x11 or 0x22), so a decoder that mishandles a hex letter in either case, drops a leading zero byte or reorders bytes passes; whether a test decodes through the preset's own path is SDK test code."
+          "gap": "Every master key the vectors hold is well-formed, all-digit hex repeating one nonzero byte (0x61, 0x11 or 0x22), so a decoder that mishandles a hex letter in either case, drops a leading zero byte, reorders bytes, or accepts whitespace or a 0x prefix passes; whether a test decodes through the preset's own path is SDK test code."
         },
         "PRE-18": {
           "section": "Master Key Input",
@@ -394,7 +394,7 @@
             "interop-mode.json:interop_encryption_roundtrip",
             "encryption.json"
           ],
-          "gap": "Every master key the vectors hold is all-digit hex repeating one nonzero byte, so two SDKs that disagree on a hex letter, its case or a leading zero byte both pass; whether each test feeds the string through its SDK's own preset path is SDK test code."
+          "gap": "Every master key the vectors hold is well-formed, all-digit hex repeating one nonzero byte, so SDKs that disagree on a hex letter, its case, a leading zero byte or whitespace between digits all pass; whether each test feeds the string through its SDK's own preset path is SDK test code."
         },
         "PRE-19": {
           "section": "Master Key Input",
@@ -438,6 +438,10 @@
         "PRE-26": {
           "section": "Master Key Input",
           "binds": "sdk",
+          "sdks": [
+            "cachekit-py",
+            "cachekit-rs"
+          ],
           "gap": "No vector holds a raw key, or one of another length, so nothing here catches a raw-bytes entry point that accepts the 64 ASCII bytes of a hex string, the case the spec names."
         },
         "PRE-27": {
