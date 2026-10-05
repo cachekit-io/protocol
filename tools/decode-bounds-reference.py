@@ -9,7 +9,7 @@ Usage:
     verify    (default) stdlib-only. Checks the file equals the recipes below,
               derives each vector's depth and declared slots with a header-only
               structural walk (never trusting the hand-entered tags), checks the
-              reject reasons against them, checks the set still holds a vector
+              reject reasons (depth, overclaim, incomplete) against them, checks the set still holds a vector
               each named near-miss structural guard would pass, and checks it holds
               accept vectors at exactly the depth floor. When `msgpack`
               (msgpack-python) is importable, additionally checks the real decoder
@@ -131,6 +131,18 @@ def build() -> dict:
         recipe("fixarray_short_by_one",
                "fixarray claiming 5 elements with 4 present: the minimal truncated document.",
                "95", 1, "c0c0c0c0", depth=1, slots=5, reasons=["overclaim"]),
+        recipe("incomplete_within_slot_budget",
+               "fixarray claiming 2 elements that holds one empty array16 and nothing else: 2 declared slots "
+               "against a budget of 3, and every header fits the bytes after it, so neither the sum nor a "
+               "per-header check rejects it. Only a walk that finds the root still owed an element does. Any "
+               "decoder rejects it at end of input, so only an SDK test asserting its guard's rejection can tell "
+               "a guard that skips the completeness check apart.",
+               "92", 1, "dc0000", depth=2, slots=2, reasons=["incomplete"]),
+        recipe("incomplete_map_within_slot_budget",
+               "Map twin of incomplete_within_slot_budget: a fixmap claiming 2 pairs that holds one pair (an empty "
+               "map16 key and a nil value) and nothing else. 4 declared slots fit the budget of 4, and every header "
+               "fits the bytes after it; a completeness check that counts a pair as one owed item finds it complete.",
+               "82", 1, "de0000c0", depth=2, slots=4, reasons=["incomplete"]),
     ]
     accept = [
         recipe("nested_fixarray_depth_32",
@@ -148,7 +160,7 @@ def build() -> dict:
     for v in accept:
         del v["reject_reasons"]
     return {
-        "version": "1.1.0",
+        "version": "1.2.0",
         "spec": "spec/interop-mode.md#decode-bounds",
         "generator": "tools/decode-bounds-reference.py generate (CPython stdlib)",
         "scope": "Any untrusted MessagePack decode in any SDK: interop/v1 values, the ByteStorage envelope bytes "
@@ -161,12 +173,14 @@ def build() -> dict:
             "overclaim": "Readers MUST NOT pre-allocate beyond what the input can back (each element or byte needs "
                          ">= 1 input byte): declared slots summed over the whole document MUST NOT exceed "
                          "input_len - 1, checked before anything is materialised. Checking each header against the "
-                         "remaining input does not satisfy this. Readers MUST reject a structurally incomplete "
-                         "document. Every reject vector tagged 'overclaim' has "
+                         "remaining input does not satisfy this. Every reject vector tagged 'overclaim' has "
                          "declared_slots > input_len - 1 (the root header is the only byte that is not an element). "
                          "A map pair counts as two slots (key + value). Every per-header term and the running sum "
                          "MUST be computed in >= 64 bits or with checked/saturating arithmetic; an overflow is "
                          "itself a rejection.",
+            "incomplete": "Readers MUST reject a structurally incomplete document (one whose root item is not "
+                          "complete at the end of the input) even when its declared slots fit the budget. Every "
+                          "reject vector tagged 'incomplete' fits the budget and ends before its root item does.",
             "failure_mode": "Rejection MUST surface as a catchable decode error that the SDK read path turns "
                             "into a cache miss (fail-closed), never an uncaught crash or an OOM abort.",
         },
@@ -204,6 +218,7 @@ def walk(data: bytes) -> dict:
     Reads headers in document order and skips str/bin/ext payloads; stops at the end of the
     root item or of the input. `complete` is framing only (one root item, nothing owed, no
     trailing bytes): it does not check str UTF-8 or ext contents, so `a1ff` is complete.
+    `truncated` means the input ended before the root item did; trailing bytes are not truncation.
 
     Also reports what seven near-miss structural guards conclude, for the coverage checks:
     `per_header_fits` (every claim <= the bytes after its header), `u32_add_fits` (a 32-bit
@@ -212,14 +227,17 @@ def walk(data: bytes) -> dict:
     counted on array headers only), and three exact whole-document sums that each mis-count
     one kind of header: `pair_as_one_fits` (a map pair counted as one slot),
     `ext_uncounted_fits` (ext lengths not counted) and `str_bin_uncounted_fits` (str and bin
-    lengths not counted).
+    lengths not counted). `pair_as_one_complete` is a completeness check that owes a map one item
+    per pair instead of two: it finds the root complete at the end of the input.
     """
     budget = len(data) - 1
     pos = depth = array_depth = arrays_open = slots = sum_add32 = sum_mul = 0
     sum_pair_as_one = sum_no_ext = sum_no_str_bin = 0
     per_header_fits = u32_add_fits = u32_mul_fits = True
-    complete = False
+    complete = finished = False
     owed: list[list[int]] = []  # [children still owed, 1 if array] per open collection
+    owed_pairs_as_one: list[int] = []  # the same, owing a map one item per pair
+    pair_as_one_complete: bool | None = None  # set where that model's root completes
     while pos < len(data):
         t = data[pos]
         pos += 1
@@ -264,21 +282,31 @@ def walk(data: bytes) -> dict:
                 if claim:
                     owed.append([claim, is_array])
                     arrays_open += is_array
+                    if pair_as_one_complete is None:
+                        owed_pairs_as_one.append(n)
                     continue
             else:
                 pos += n + (kind == "ext")  # payload (+ the ext type byte)
+        while owed_pairs_as_one:
+            owed_pairs_as_one[-1] -= 1
+            if owed_pairs_as_one[-1]:
+                break
+            owed_pairs_as_one.pop()
+        if not owed_pairs_as_one and pair_as_one_complete is None:
+            pair_as_one_complete = pos == len(data)
         while owed:  # one item completed: settle every collection it finishes
             owed[-1][0] -= 1
             if owed[-1][0]:
                 break
             arrays_open -= owed.pop()[1]
         if not owed:
-            complete = pos == len(data)
+            finished, complete = pos <= len(data), pos == len(data)  # pos past the end: a payload cut short
             break
-    return {"nesting_depth": depth, "declared_slots": slots, "complete": complete, "array_depth": array_depth,
+    return {"nesting_depth": depth, "declared_slots": slots, "complete": complete, "truncated": not finished,
+            "array_depth": array_depth,
             "per_header_fits": per_header_fits, "u32_add_fits": u32_add_fits, "u32_mul_fits": u32_mul_fits,
             "pair_as_one_fits": sum_pair_as_one <= budget, "ext_uncounted_fits": sum_no_ext <= budget,
-            "str_bin_uncounted_fits": sum_no_str_bin <= budget}
+            "str_bin_uncounted_fits": sum_no_str_bin <= budget, "pair_as_one_complete": bool(pair_as_one_complete)}
 
 
 def check(condition: bool, name: str, detail: str) -> None:  # noqa: FBT001
@@ -294,8 +322,8 @@ def verify(document: dict, *, require_extras: bool = False) -> tuple[int, str]:
     # above already proves them; the hand-entered tags are checked against the walk.
     for v in document["reject_vectors"]:  # its own loop: a reject vector equal to an accept vector is still checked
         reasons = v.get("reject_reasons", [])
-        check(bool(reasons) and set(reasons) <= {"depth", "overclaim"}, v["name"],
-              "reject_reasons must name at least one rule, each depth or overclaim")
+        check(bool(reasons) and set(reasons) <= {"depth", "overclaim", "incomplete"}, v["name"],
+              "reject_reasons must name at least one rule, each depth, overclaim or incomplete")
     names = [v["name"] for v in document["reject_vectors"] + document["accept_vectors"]]
     check(len(names) == len(set(names)), "document", "duplicate vector names (the walk index is keyed by name)")
     walked = {}
@@ -308,6 +336,10 @@ def verify(document: dict, *, require_extras: bool = False) -> tuple[int, str]:
         # Slot budget: every declared element (including a nested header) costs >= 1 input
         # byte; only the root header is not itself an element. So sum(declared) <= len - 1.
         check(("overclaim" in reasons) == (v["declared_slots"] > v["input_len"] - 1), v["name"], "overclaim tag mismatch")
+        # An overclaiming document is always cut short, so 'incomplete' marks only the ones within the budget.
+        if reasons:
+            check(("incomplete" in reasons) == (w["truncated"] and v["declared_slots"] <= v["input_len"] - 1),
+                  v["name"], "incomplete tag mismatch")
         if not reasons:
             check(v["nesting_depth"] <= MIN_DEPTH_FLOOR, v["name"], "accept vector deeper than the floor")
             check(w["complete"], v["name"], "accept vector is not one complete document")
@@ -330,6 +362,11 @@ def verify(document: dict, *, require_extras: bool = False) -> tuple[int, str]:
           "coverage", "no reject vector passes a sum that does not count ext lengths")
     check(some_reject(lambda v, w: v["reject_reasons"] == ["overclaim"] and w["str_bin_uncounted_fits"]),
           "coverage", "no reject vector passes a sum that does not count str/bin lengths")
+    check(some_reject(lambda v, w: v["reject_reasons"] == ["incomplete"] and w["per_header_fits"]),
+          "coverage", "no reject vector is incomplete within the slot budget with every header fitting")
+    check(some_reject(lambda v, w: v["reject_reasons"] == ["incomplete"] and w["per_header_fits"]
+                      and w["pair_as_one_complete"]),
+          "coverage", "no incomplete reject vector a pair-as-one-item completeness check finds complete")
     check(some_reject(lambda v, w: v["reject_reasons"] == ["depth"] and w["complete"]
                       and w["array_depth"] == MAX_DEPTH_CEILING + 1),
           "coverage", "no complete array spine one level past the depth ceiling")
@@ -348,7 +385,8 @@ def verify(document: dict, *, require_extras: bool = False) -> tuple[int, str]:
     for name, flag in (("array16_overclaim_shallow", "per_header_fits"), ("array32_sum_wraps_u32", "u32_add_fits"),
                        ("array32_sum_wraps_u32", "u32_mul_fits"), ("map32_max_claim_alone", "pair_as_one_fits"),
                        ("array16_overclaim_shallow", "ext_uncounted_fits"),
-                       ("array16_overclaim_shallow", "str_bin_uncounted_fits")):
+                       ("array16_overclaim_shallow", "str_bin_uncounted_fits"),
+                       ("incomplete_within_slot_budget", "pair_as_one_complete")):
         check(name in walked and not walked[name][flag], "coverage", f"{flag} passes {name}: the model is vacuous")
 
     total = len(document["reject_vectors"]) + len(document["accept_vectors"])

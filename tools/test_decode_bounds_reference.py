@@ -131,6 +131,15 @@ def walk_table() -> list[str | None]:
         w = dbr.walk(bytes.fromhex(hx))
         got = tuple(w[f] for f in FLAGS)
         out.append(None if got == want else f"walk flags {hx}: {got} != {want}")
+    # truncated: the input ends before the root item does; trailing bytes are something else.
+    for hx, want in (("92dc0000", True), ("dc00", True), ("cf00", True), ("a3", True), ("c0c0", False), ("90", False)):
+        got = dbr.walk(bytes.fromhex(hx))["truncated"]
+        out.append(None if got == want else f"walk truncated {hx}: {got} != {want}")
+    # pair_as_one_complete: owing a map one item per pair, the root completes early.
+    for hx, want in (("82de0000c0", True), ("81a0c0", False), ("82a0c0", True), ("c0", True), ("9181a0c0", False),
+                     ("92dc0000", False)):
+        got = dbr.walk(bytes.fromhex(hx))["pair_as_one_complete"]
+        out.append(None if got == want else f"walk pair_as_one_complete {hx}: {got} != {want}")
     out.append(expect_raises("walk 0xc1", lambda: dbr.walk(b"\xc1"), "never used"))
     return out
 
@@ -171,9 +180,23 @@ def main() -> None:
     results.append(expect_raises("depth tag", with_recipes(bad_depth), "depth tag mismatch"))
 
     complete = copy.deepcopy(good)  # the truncated fixarray made whole, still tagged 'overclaim'
-    complete["reject_vectors"][-1] = dbr.recipe("fixarray_short_by_one", "", "95", 1, "c0" * 5,
+    short = next(i for i, v in enumerate(complete["reject_vectors"]) if v["name"] == "fixarray_short_by_one")
+    complete["reject_vectors"][short] = dbr.recipe("fixarray_short_by_one", "", "95", 1, "c0" * 5,
                                                 depth=1, slots=5, reasons=["overclaim"])
     results.append(expect_raises("overclaim tag", with_recipes(complete), "overclaim tag mismatch"))
+
+    whole = copy.deepcopy(good)  # the incomplete vector made whole, still tagged 'incomplete'
+    at = next(i for i, v in enumerate(whole["reject_vectors"]) if v["name"] == "incomplete_within_slot_budget")
+    whole["reject_vectors"][at] = dbr.recipe("incomplete_within_slot_budget", "", "92", 1, "dc0000c0",
+                                             depth=2, slots=2, reasons=["incomplete"])
+    results.append(expect_raises("incomplete tag", with_recipes(whole), "incomplete tag mismatch"))
+
+    # Cut short within the budget but tagged only 'depth': every other tag check holds (depth 1026,
+    # 1027 slots against a budget of 1034), so only the incomplete check's reverse direction fires.
+    untagged = copy.deepcopy(good)
+    untagged["reject_vectors"].append(dbr.recipe("t", "", "92", 1, "91" * 1025 + "cf" + "00" * 8,
+                                                 depth=1026, slots=1027, reasons=["depth"]))
+    results.append(expect_raises("incomplete untagged", with_recipes(untagged), "incomplete tag mismatch"))
 
     deep_accept = copy.deepcopy(good)
     deep_accept["accept_vectors"][0] = accept("nested_fixarray_depth_33", "", "91", dbr.MIN_DEPTH_FLOOR + 1, "c0",
@@ -221,8 +244,15 @@ def main() -> None:
                          ("nested_fixarray_depth_1025_complete", "complete array spine"),
                          ("nested_fixmap_depth_1025_complete", "complete map spine"),
                          ("fixmap_short_by_one", "map pair as one slot"),
-                         ("ext32_overclaim", "does not count ext lengths")):
+                         ("ext32_overclaim", "does not count ext lengths"),
+                         ("incomplete_map_within_slot_budget", "pair-as-one-item completeness check")):
         results.append(expect_raises(f"coverage: drop {name}", with_recipes(without(name)), needle))
+    # Either incomplete vector alone keeps the plain completeness guard bound; only dropping both fires it.
+    no_incomplete = without("incomplete_within_slot_budget")
+    no_incomplete["reject_vectors"] = [v for v in no_incomplete["reject_vectors"]
+                                       if v["name"] != "incomplete_map_within_slot_budget"]
+    results.append(expect_raises("coverage: drop both incomplete vectors", with_recipes(no_incomplete),
+                                 "incomplete within the slot budget"))
     # bin32 and str32 are twins: each alone catches the str/bin model, so only dropping both fires.
     no_str_bin = without("bin32_overclaim")
     no_str_bin["reject_vectors"] = [v for v in no_str_bin["reject_vectors"] if v["name"] != "str32_overclaim"]
@@ -281,7 +311,7 @@ def main() -> None:
 
     # Negative controls: a near-miss model forced to always pass must be caught.
     real_walk = dbr.walk
-    for flag in FLAGS:
+    for flag in (*FLAGS, "pair_as_one_complete"):
         def forced(data: bytes, flag: str = flag) -> dict:
             return {**real_walk(data), flag: True}
         with patch.object(dbr, "walk", forced):

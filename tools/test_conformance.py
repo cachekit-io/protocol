@@ -1390,16 +1390,25 @@ REPORT_CASES: list[tuple[str, Mutate, dict[str, list[str]], list[str]]] = [
         lambda _: None,
         {
             "IOP-5": ["partial (gap)"] * 3,
-            "IOP-9": ["partial (gap)"] * 3,
-            "IOP-17": ["covered"] * 3,
-            "IOP-2": ["partial (gap)"] * 3,
+            "IOP-9": ["partial (4/8)"] * 3,
+            "IOP-17": ["partial (4/6)"] * 3,
+            "IOP-2": ["partial (3/19)"] * 3,
             "IOP-10": ["uncovered"] * 3,
-            "IOP-13": ["gap"] * 3,
+            "IOP-13": ["uncovered (0/1)"] * 3,
+            "ENC-4": ["gap"] * 3,  # no sdk-bound IOP requirement is gap only any more
             "IOP-6": ["n/a"] * 3,
-            "IOP-14": ["n/a", "partial (gap)", "n/a"],
+            "IOP-14": ["n/a", "partial (3/7)", "n/a"],
         },
         # Tests-only requirements are uncovered in every SDK, so the summary counts them apart.
-        ["| [`spec/interop-mode.md`](../spec/interop-mode.md) | 36 | 3 | 24 | 3 | 6 |"],
+        ["| [`spec/interop-mode.md`](../spec/interop-mode.md) | 36 | 8 | 20 | 4 | 4 |"],
+    ),
+    (
+        # Every SDK holds every listed vector, identical to this repo's, and no gap is recorded.
+        "a requirement whose vectors every SDK holds is covered",
+        entry("IOP-17", vectors=[f"interop-mode.json:{name}" for name in (
+            "issue_example_object", "float_value_stays_float64", "mixed_array", "datetime_sentinel_value")]),
+        {"IOP-17": ["covered"] * 3},
+        [],
     ),
     (
         # Tests but no vectors: uncovered in every SDK the requirement binds, and n/a in the others.
@@ -1418,20 +1427,20 @@ REPORT_CASES: list[tuple[str, Mutate, dict[str, list[str]], list[str]]] = [
     (
         "an SDK that does not vendor a fixture holds none of its vectors",
         pin("cachekit-rs", "decode-bounds.json", None),
-        {"IOP-17": ["covered"] * 3, "IOP-26": ["partial (gap)", "partial (gap)", "uncovered (0/2)"]},
+        {"IOP-17": ["partial (4/6)"] * 3, "IOP-26": ["partial (gap)", "partial (gap)", "uncovered (0/2)"]},
         [],
     ),
     (
         "a vector changed in place no longer counts as held",
         reworded("interop-mode.json", "reject_nan"),
-        {"IOP-22": ["partial (12/13)"] * 3, "IOP-17": ["covered"] * 3},
+        {"IOP-22": ["partial (12/34)"] * 3, "IOP-17": ["partial (4/6)"] * 3},
         [],
     ),
     (
         # 30 and 30.0 compare equal in Python, but interop mode encodes them differently.
         "an int retyped as a float no longer counts as held",
         retyped("interop-mode.json", "issue_example_object", ("value", "age"), 30.0),
-        {"IOP-17": ["partial (3/4)"] * 3},
+        {"IOP-17": ["partial (3/6)"] * 3},
         [],
     ),
     (
@@ -1520,7 +1529,7 @@ def run_report_case(tmp: Path, number: int, case: tuple[str, Mutate, dict[str, l
     text = (root / REPORT).read_text(encoding="utf-8") if proc.returncode == 0 else ""
     rows: dict[str, list[str]] = {}
     for line in text.splitlines():
-        if m := re.match(r"\| \[(IOP-\d+)\]", line):
+        if m := re.match(r"\| \[([A-Z]+-\d+)\]", line):
             cells = [c.strip() for c in re.split(r"(?<!\\)\|", line.strip()[1:-1])]
             rows[m.group(1)] = cells[-3:] if len(cells) == ROW_CELLS else [f"{len(cells)} cells"]
     wrong = {rid: rows.get(rid) for rid, cells in expected.items() if rows.get(rid) != cells}
