@@ -7,9 +7,10 @@ is one header's field value on a GET 200, or null when the header is absent. A
 exactly `fresh`, stale otherwise), and a `fresh_for_vectors` row's `fresh_for` what
 X-CacheKit-Fresh-For means (1-7 ASCII digits at most 2,592,000, otherwise 0; null when absent).
 Every value must be a field value under RFC 9110 §5.5: one byte per character, no leading or
-trailing space or tab, no other control character. A mutation self-test runs first, as in
+trailing space or tab, no other control character. A mutation self-test then runs, as in
 tools/path-encoding-verify.py: each poisoned copy of the fixture must trip the guard it names,
-and each mistake a row's note names, written out as a wrong reader, must misread that row.
+and each reader in WRONG_READERS, a plausible wrong reading of a header, must misread the rows
+it lists.
 """
 
 from __future__ import annotations
@@ -123,7 +124,7 @@ def converted(text: str) -> int:
 
 
 def as_float(text: str) -> int:
-    """What a reader built on float() returns, as JavaScript's Number() reads a decimal point or an exponent."""
+    """What a reader built on float() returns, as JavaScript's Number() reads a sign, a decimal point or an exponent."""
     try:
         number = float(text)
     except ValueError:
@@ -139,10 +140,17 @@ def digits_by_isdigit(text: str) -> int:
     return seconds if seconds <= FRESH_FOR_MAX else 0
 
 
+# CPython's default limit on int() of a string. It is modelled, not inherited, so that a PYTHONINTMAXSTRDIGITS
+# setting in the environment cannot change what the self-test proves.
+CPYTHON_INT_MAX_STR_DIGITS = 4300
+
+
 def converted_first(text: str) -> int:
-    """ASCII digits, converted with int() before the length and range checks: CPython raises past 4,300 digits."""
+    """ASCII digits converted with CPython's int() before the length and range checks: past 4,300 digits it raises."""
     if not re.fullmatch("[0-9]+", text):
         return 0
+    if len(text) > CPYTHON_INT_MAX_STR_DIGITS:
+        raise ValueError(f"Exceeds the limit ({CPYTHON_INT_MAX_STR_DIGITS} digits) for integer string conversion")
     seconds = int(text)
     return seconds if len(text) <= FRESH_FOR_MAX_DIGITS and seconds <= FRESH_FOR_MAX else 0
 
@@ -163,88 +171,90 @@ def digits(reader: Callable[[str], object]) -> Reader:
     return present(lambda v: reader(v) if re.fullmatch("[0-9]+", v) else 0)
 
 
-# Each mistake a row's note names: (result field, wrong reader, the rows that must show it). A reader
-# returns its wrong answer; only those in RAISING make their mistake by raising, as int() does on `²`.
-WRONG_READERS: dict[str, tuple[str, Reader, tuple[str, ...]]] = {
-    "case-insensitive label": ("stale", lambda v: v is not None and v.lower() != "fresh", ("freshness_capitalised",)),
-    "only `stale` is stale": ("stale", lambda v: v == "stale", ("freshness_uppercase_stale", "freshness_empty")),
-    "empty label read as absent": ("stale", lambda v: bool(v) and v != "fresh", ("freshness_empty",)),
-    "absent label read as stale": ("stale", lambda v: v != "fresh", ("freshness_absent",)),
-    "only `fresh` known, so `stale` raises": ("stale", known_labels_only, ("freshness_stale",)),
+def raising(reader: Reader) -> Reader:
+    """A wrong reader whose mistake is to raise, as int() does on `²`: the raise is its answer, so it misreads the row."""
+
+    def read(value: str | None) -> object:
+        try:
+            return reader(value)
+        except ValueError as exc:
+            return f"raised {exc!r}"
+
+    return read
+
+
+# Each wrong reader, and the rows that must show its mistake. A row's table gives the field its answer is compared
+# with. A reader returns its wrong answer; one whose mistake is the raise itself is wrapped in raising().
+WRONG_READERS: dict[str, tuple[Reader, tuple[str, ...]]] = {
+    "case-insensitive label": (lambda v: v is not None and v.lower() != "fresh", ("freshness_capitalised",)),
+    "only `stale` is stale": (lambda v: v == "stale", ("freshness_uppercase_stale", "freshness_empty")),
+    "empty label read as absent": (lambda v: bool(v) and v != "fresh", ("freshness_empty",)),
+    "absent label read as stale": (lambda v: v != "fresh", ("freshness_absent",)),
+    "label trimmed (str.strip(), trim())": (lambda v: v is not None and v.strip() != "fresh", ("freshness_nbsp_suffix",)),
+    "only `fresh` known, so `stale` raises": (raising(known_labels_only), ("freshness_stale",)),
     "first list item": (
-        "stale",
         lambda v: v is not None and v.split(",")[0].strip() != "fresh",
         ("freshness_list_fresh_first",),
     ),
-    "label prefix match": ("stale", lambda v: v is not None and not v.startswith("fresh"), ("freshness_list_fresh_first",)),
-    "`fresh` anywhere": ("stale", lambda v: v is not None and "fresh" not in v, ("freshness_list_fresh_first",)),
+    "label prefix match": (lambda v: v is not None and not v.startswith("fresh"), ("freshness_list_fresh_first",)),
+    "`fresh` anywhere": (lambda v: v is not None and "fresh" not in v, ("freshness_list_fresh_first",)),
     "last list item": (
-        "stale",
         lambda v: v is not None and v.split(",")[-1].strip() != "fresh",
         ("freshness_list_fresh_last",),
     ),
-    "absent Fresh-For read as 0": ("fresh_for", lambda v: 0 if v is None else fresh_for(v), ("fresh_for_absent",)),
-    "0 read as no value (`or None`)": ("fresh_for", present(lambda v: fresh_for(v) or None), ("fresh_for_zero",)),
-    "empty Fresh-For read as absent": ("fresh_for", lambda v: None if not v else fresh_for(v), ("fresh_for_empty",)),
+    "absent Fresh-For read as 0": (lambda v: 0 if v is None else fresh_for(v), ("fresh_for_absent",)),
+    "0 read as no value (`or None`)": (present(lambda v: fresh_for(v) or None), ("fresh_for_zero",)),
+    "empty Fresh-For read as absent": (lambda v: None if not v else fresh_for(v), ("fresh_for_empty",)),
     "leading zeros refused": (
-        "fresh_for",
         present(lambda v: 0 if len(v) > 1 and v.startswith("0") else fresh_for(v)),
         ("fresh_for_seven_digits",),
     ),
-    "cap excluded": (
-        "fresh_for",
-        present(lambda v: 0 if fresh_for(v) == FRESH_FOR_MAX else fresh_for(v)),
-        ("fresh_for_cap",),
-    ),
-    "no range check": ("fresh_for", present(lambda v: int(v) if re.fullmatch("[0-9]{1,7}", v) else 0), ("fresh_for_over_cap",)),
+    "cap excluded": (present(lambda v: 0 if fresh_for(v) == FRESH_FOR_MAX else fresh_for(v)), ("fresh_for_cap",)),
+    "no range check": (present(lambda v: int(v) if re.fullmatch("[0-9]{1,7}", v) else 0), ("fresh_for_over_cap",)),
     "sign accepted": (
-        "fresh_for",
         present(lambda v: int(v) if re.fullmatch("[+-]?[0-9]{1,7}", v) else 0),
         ("fresh_for_negative", "fresh_for_plus_sign"),
     ),
-    "int()": ("fresh_for", present(converted), ("fresh_for_plus_sign", "fresh_for_digit_separator")),
-    "float(), as Number() reads a decimal point or an exponent": (
-        "fresh_for",
+    "int()": (present(converted), ("fresh_for_plus_sign", "fresh_for_digit_separator")),
+    "float(), as Number() reads a sign, a decimal point or an exponent": (
         present(as_float),
-        ("fresh_for_decimal", "fresh_for_exponent"),
+        ("fresh_for_plus_sign", "fresh_for_decimal", "fresh_for_exponent"),
     ),
     "hex prefix read as hex (Number(), parseInt without a radix)": (
-        "fresh_for",
         present(lambda v: converted(str(int(v, 16))) if re.fullmatch("0[xX][0-9a-fA-F]+", v) else fresh_for(v)),
         ("fresh_for_hex",),
     ),
     "leading digits only (parseInt, radix 10)": (
-        "fresh_for",
         present(lambda v: converted(m[0]) if (m := re.match("[+-]?[0-9]+", v)) else 0),
-        ("fresh_for_decimal", "fresh_for_exponent", "fresh_for_digit_separator", "fresh_for_inner_space", "fresh_for_list"),
+        (
+            "fresh_for_plus_sign",
+            "fresh_for_decimal",
+            "fresh_for_exponent",
+            "fresh_for_digit_separator",
+            "fresh_for_inner_space",
+            "fresh_for_list",
+        ),
     ),
-    "white space dropped": ("fresh_for", present(lambda v: fresh_for(v.replace(" ", ""))), ("fresh_for_inner_space",)),
-    "white space trimmed (str.strip(), trim())": (
-        "fresh_for",
-        present(lambda v: fresh_for(v.strip())),
-        ("fresh_for_nbsp_prefix",),
-    ),
-    "no length check": ("fresh_for", digits(converted), ("fresh_for_eight_digits",)),
-    "no length check, 32-bit wrap": ("fresh_for", digits(lambda v: converted(str(int(v) % 2**32))), ("fresh_for_wraps_32_bit",)),
-    "no length check, 64-bit wrap": ("fresh_for", digits(lambda v: converted(str(int(v) % 2**64))), ("fresh_for_over_64_bits",)),
+    "white space dropped": (present(lambda v: fresh_for(v.replace(" ", ""))), ("fresh_for_inner_space",)),
+    "white space trimmed (str.strip(), trim())": (present(lambda v: fresh_for(v.strip())), ("fresh_for_nbsp_prefix",)),
+    "no length check": (digits(converted), ("fresh_for_eight_digits",)),
+    "no length check, 32-bit wrap": (digits(lambda v: converted(str(int(v) % 2**32))), ("fresh_for_wraps_32_bit",)),
+    "no length check, 64-bit wrap": (digits(lambda v: converted(str(int(v) % 2**64))), ("fresh_for_over_64_bits",)),
     "64-bit overflow read as no value": (
-        "fresh_for",
         digits(lambda v: None if int(v) >= 2**64 else fresh_for(v)),
         ("fresh_for_over_64_bits",),
     ),
-    "int() before the length check": ("fresh_for", present(converted_first), ("fresh_for_4301_digits",)),
-    "str.isdigit() for ASCII digits": ("fresh_for", present(digits_by_isdigit), ("fresh_for_superscript_two",)),
+    "int() before the length check": (raising(present(converted_first)), ("fresh_for_4301_digits",)),
+    "str.isdigit() for ASCII digits": (raising(present(digits_by_isdigit)), ("fresh_for_superscript_two",)),
     "UTF-8 decode, then str.isdigit()": (
-        "fresh_for",
         present(lambda v: digits_by_isdigit(v.encode("latin-1").decode("utf-8", "replace"))),
         ("fresh_for_arabic_indic_one",),
     ),
 }
-RAISING = {"only `fresh` known, so `stale` raises", "int() before the length check", "str.isdigit() for ASCII digits"}
 
 
 def self_test(document: dict) -> None:
-    """Each poisoned copy must trip the guard it names, and each wrong reader must misread the rows it names."""
+    """Each poisoned copy must trip the guard it names, and each wrong reader must misread the rows it lists."""
 
     def row(doc: dict, name: str) -> dict:
         return next(r for table in TABLES for r in doc[table] if r["name"] == name)
@@ -287,18 +297,18 @@ def self_test(document: dict) -> None:
             continue
         raise ValueError(f"self-test: mutation {label!r} was not rejected")
 
-    rows = {r["name"]: r for table in TABLES for r in document[table]}
-    for label, (result, reader, targets) in WRONG_READERS.items():
+    rows = {r["name"]: (TABLES[table], r) for table in TABLES for r in document[table]}
+    for label, (reader, targets) in WRONG_READERS.items():
         for target in targets:
             check(target in rows, "self-test", f"wrong reader {label!r} names {target}, which the fixture lacks")
+            result, target_row = rows[target]
             try:
-                read = reader(rows[target]["value"])
+                read = reader(target_row["value"])
             except ValueError as exc:
-                # Any other reader that raises is broken, and counting its raise as a misread would hide that.
-                check(label in RAISING, "self-test", f"wrong reader {label!r} raised on {target}: {exc}")
-                continue
+                # Counting this raise as a misread would hide a broken reader; a raise that is the mistake goes in raising().
+                raise ValueError(f"self-test: wrong reader {label!r} raised on {target}: {exc}") from None
             check(
-                read != rows[target][result],
+                read != target_row[result],
                 "self-test",
                 f"wrong reader {label!r} reads {target} correctly, so the row no longer shows the mistake its note names",
             )
@@ -312,9 +322,11 @@ def main() -> None:
     except json.JSONDecodeError as exc:
         sys.exit(f"invalid JSON in {VECTORS}: {exc}")
 
+    # The rows first, so a wrong row is reported by its own name; the self-test's mutations and wrong readers
+    # name rows too, and would otherwise blame themselves for it. Both must pass before the OK line.
     try:
-        self_test(document)
         count = verify(document)
+        self_test(document)
     except ValueError as exc:
         sys.exit(f"invalid vector file: {exc}")
     except (KeyError, TypeError, AttributeError, StopIteration) as exc:

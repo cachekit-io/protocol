@@ -2,7 +2,7 @@
   "version": "1.0.0",
   "generator": "hand-written rows; `stale` and `fresh_for` are what the reference parsers in tools/freshness-headers-verify.py return",
   "spec": "spec/saas-api.md § GET /v1/cache/{key} (response headers) and § Remaining Freshness",
-  "ci_verification": "tools/freshness-headers-verify.py (stdlib only; mutation self-test first)",
+  "ci_verification": "tools/freshness-headers-verify.py (stdlib only; with a mutation self-test)",
   "contract": "Each row is one header's value on a `GET` `200 OK`: `value` is the field value, or null when the response does not carry the header. A field value is bytes, so each character of `value` stands for one byte (U+0000 to U+00FF, as the Fetch Standard models header values). No `value` starts or ends with a space or tab: RFC 9110 §5.5 excludes that white space from the field value, and HTTP stacks differ in whether they strip it before a parser sees it. No `value` holds a control character other than tab: RFC 9110's field-value grammar excludes them, and stacks differ in what they do with one. In `freshness_vectors` the header is `X-CacheKit-Freshness` and `stale` is how the SDK must classify the response: fresh when the header is absent or exactly `fresh`, stale for any other value. In `fresh_for_vectors` the header is `X-CacheKit-Fresh-For` and `fresh_for` is the bound the SDK must read, in seconds: the value's number when it is 1 to 7 ASCII digits and at most 2,592,000, otherwise 0, and null when the header is absent (no server-side bound). An SDK conforms when its parser, handed each `value` as its HTTP stack would deliver those bytes, returns `stale` or `fresh_for`.",
   "freshness_vectors": [
     {
@@ -40,6 +40,12 @@
       "value": "",
       "stale": true,
       "note": "An empty value is present, not absent, so it is unrecognized and stale; a parser that tests the value's truthiness reads it as fresh."
+    },
+    {
+      "name": "freshness_nbsp_suffix",
+      "value": "fresh\u00a0",
+      "stale": true,
+      "note": "`fresh` and a no-break space (byte 0xA0), which HTTP keeps: unrecognized, so stale. Python's `str.strip()` and JavaScript's `trim()` drop it and read fresh."
     },
     {
       "name": "freshness_list_fresh_first",

@@ -1154,7 +1154,10 @@
             "path-encoding.json:a\\..\\health",
             "path-encoding.json:.\t.",
             "path-encoding.json:.\r\n.",
-            "path-encoding.json:%2e%2e"
+            "path-encoding.json:.. ",
+            "path-encoding.json:health\u000b",
+            "path-encoding.json:%2e%2e",
+            "path-encoding.json:‥"
           ],
           "tests": [
             "tools/path-encoding-verify.py:verify"
@@ -1177,11 +1180,14 @@
             "path-encoding.json:a\\..\\health",
             "path-encoding.json:.\t.",
             "path-encoding.json:.\r\n.",
+            "path-encoding.json:.. ",
+            "path-encoding.json:health\u000b",
             "path-encoding.json:a\u0000b\u001fc\u007fd",
             "path-encoding.json:%2e%2e",
             "path-encoding.json:User%3AKey",
             "path-encoding.json:café",
             "path-encoding.json:😀",
+            "path-encoding.json:‥",
             "path-encoding.json:User:Key",
             "path-encoding.json:a+b&c;d,e@f$g[h]i",
             "path-encoding.json:a\"b<c>d^e`f{g|h}i"
@@ -1189,7 +1195,7 @@
           "tests": [
             "tools/path-encoding-verify.py:verify"
           ],
-          "gap": "The rows pin the encoder, not the request path (API-15)."
+          "gap": "The rows pin the encoder, not the request path (API-15), and a test that reads only the parsed path cannot see a raw byte the URL parser encodes itself (API-7)."
         },
         "API-6": {
           "section": "Encoding rules",
@@ -1224,18 +1230,21 @@
             "path-encoding.json:a\\..\\health",
             "path-encoding.json:.\t.",
             "path-encoding.json:.\r\n.",
+            "path-encoding.json:.. ",
+            "path-encoding.json:health\u000b",
             "path-encoding.json:a\u0000b\u001fc\u007fd",
             "path-encoding.json:%2e%2e",
             "path-encoding.json:User%3AKey",
             "path-encoding.json:café",
             "path-encoding.json:😀",
+            "path-encoding.json:‥",
             "path-encoding.json:a+b&c;d,e@f$g[h]i",
             "path-encoding.json:a\"b<c>d^e`f{g|h}i"
           ],
           "tests": [
             "tools/path-encoding-verify.py:verify"
           ],
-          "gap": "The rows pin the encoder, not the request path (API-15)."
+          "gap": "The rows pin the encoder, not the request path (API-15), and a test that reads only the parsed path cannot tell a raw byte the URL parser encodes itself (a space or a C0 control other than tab, LF and CR inside the key, DEL, a byte of 0x80 or above, `\"<>^{}` or the backtick) from the encoder's `%HH`, though the parser then sends the same bytes."
         },
         "API-8": {
           "section": "Encoding rules",
@@ -1346,6 +1355,7 @@
             "freshness-headers.json:freshness_capitalised",
             "freshness-headers.json:freshness_uppercase_stale",
             "freshness-headers.json:freshness_empty",
+            "freshness-headers.json:freshness_nbsp_suffix",
             "freshness-headers.json:freshness_list_fresh_first",
             "freshness-headers.json:freshness_list_fresh_last"
           ],

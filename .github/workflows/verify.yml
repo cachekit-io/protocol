@@ -74,7 +74,7 @@ jobs:
       - name: Cache-key path-encoding verify (stdlib only; mutation self-test first)
         run: python3 tools/path-encoding-verify.py
 
-      - name: SaaS freshness-header verify (stdlib only; mutation self-test first)
+      - name: SaaS freshness-header verify (stdlib only; with a mutation self-test)
         run: python3 tools/freshness-headers-verify.py
 
       # LAB-1202: the mutation suite runs first so the lz4 allocation guard
