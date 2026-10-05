@@ -28,6 +28,8 @@ same text in lowercase. When the keyword is bold, the id goes after the closing 
 
 | Spec file | Prefix |
 | :--- | :--- |
+| [`spec/cache-key-format.md`](../spec/cache-key-format.md) | `KEY` |
+| [`spec/encryption.md`](../spec/encryption.md) | `ENC` |
 | [`spec/file-backend-format.md`](../spec/file-backend-format.md) | `FILE` |
 | [`spec/interop-mode.md`](../spec/interop-mode.md) | `IOP` |
 | [`spec/wire-format.md`](../spec/wire-format.md) | `WIRE` |

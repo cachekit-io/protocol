@@ -232,14 +232,14 @@ Each component is prefixed with a 4-byte big-endian length.
 bytes fed to the cipher). They are stored as cleartext metadata alongside the
 ciphertext so the reader can rebuild the AAD; they are integrity-protected — not
 confidential — because any tampering changes the reconstructed AAD and fails
-authentication. That failure is the intended behavior: readers MUST NOT retry
+authentication. That failure is the intended behavior: readers MUST NOT<sup id="enc-1">ENC-1</sup> retry
 decryption with any alternative AAD input — a different `format` or `compressed`
 value, presence/absence of `original_type`, or a different `cache_key` form (for
 example the key without its namespace or key prefix). A reader that probes AAD variants
 converts an authentication failure into a metadata-tamper oracle. Likewise, the
-post-decryption unenvelope step MUST be selected by the reader's configured
+post-decryption unenvelope step MUST<sup id="enc-2">ENC-2</sup> be selected by the reader's configured
 serializer/mode — never by sniffing the decrypted bytes or falling back between
-containers — and MUST hard-fail on a parse mismatch.
+containers — and MUST<sup id="enc-3">ENC-3</sup> hard-fail on a parse mismatch.
 
 ### `format` tokens
 
@@ -257,11 +257,11 @@ each SDK and mode is specified in [wire-format.md](wire-format.md) and
 [interop-mode.md](interop-mode.md). The `compressed` component (below) — not the
 `format` token — authenticates whether that container applied compression.
 
-New serializers MUST register their token here before shipping. Tokens are
+New serializers MUST<sup id="enc-4">ENC-4</sup> register their token here before shipping. Tokens are
 case-sensitive, and the registry is a **writer-side contract**: readers rebuild the
 AAD verbatim from stored metadata, so nothing structurally rejects an off-registry
 token within the SDK that wrote it — the registry exists so independent
-implementations of the same entry agree on the bytes. Writers MUST emit only
+implementations of the same entry agree on the bytes. Writers MUST<sup id="enc-5">ENC-5</sup> emit only
 registry tokens; readers SHOULD reject tokens outside the registry before attempting
 decryption.
 
@@ -277,7 +277,7 @@ Exactly two legal values — **frozen ASCII byte strings**:
 > [!IMPORTANT]
 > These tokens are **protocol constants**, not a rendering of any language's boolean
 > type. They historically coincide with Python's `str(bool)` output; that coincidence
-> is now frozen. Implementations in every language MUST emit exactly these byte
+> is now frozen. Implementations in every language MUST<sup id="enc-6">ENC-6</sup> emit exactly these byte
 > sequences — `true`, `false`, `TRUE`, `1`, `0`, or a raw byte are all non-conformant
 > and fail AES-GCM authentication against conformant peers.
 
@@ -371,9 +371,9 @@ cannot decrypt (zero-knowledge), so it can never re-encrypt. The mechanism is a
 
 | Rule | Requirement |
 | :--- | :--- |
-| Keyring | One **current** master key (encrypts and decrypts) plus an ordered list of **at most 3 decrypt-only** master keys — typically previous keys; during a [two-phase rollout](../decisions/key-rotation.md#runbooks-normative-for-docs), the incoming key. SDKs MUST reject configuration exceeding the cap at load — never silently truncate. |
+| Keyring | One **current** master key (encrypts and decrypts) plus an ordered list of **at most 3 decrypt-only** master keys — typically previous keys; during a [two-phase rollout](../decisions/key-rotation.md#runbooks-normative-for-docs), the incoming key. SDKs MUST<sup id="enc-7">ENC-7</sup> reject configuration exceeding the cap at load — never silently truncate. |
 | Configuration | Cross-SDK env vars: `CACHEKIT_MASTER_KEY` (current, [as above](#master-key)) and `CACHEKIT_PREVIOUS_MASTER_KEYS` (decrypt-only list, comma-separated hex, same per-key validation). Programmatic naming is SDK-local. |
-| Forward-only current key | A master key that has ever occupied the current (encrypting) slot MUST NOT be re-promoted to current; it may re-appear only in the decrypt-only list. Backing out a rotation means rotating **forward** to a fresh key. Re-promotion resumes a used, unknowable nonce budget and risks catastrophic AES-GCM nonce reuse (plaintext recovery and forgery). Enforcement: a stateless SDK cannot know whether a newly supplied current key was used before, so this invariant is **operator-enforced** (treat retired key material as destroyed); SDKs MUST reject the detectable subset — a configuration where the current key also appears in the decrypt-only list. |
+| Forward-only current key | A master key that has ever occupied the current (encrypting) slot MUST NOT<sup id="enc-8">ENC-8</sup> be re-promoted to current; it may re-appear only in the decrypt-only list. Backing out a rotation means rotating **forward** to a fresh key. Re-promotion resumes a used, unknowable nonce budget and risks catastrophic AES-GCM nonce reuse (plaintext recovery and forgery). Enforcement: a stateless SDK cannot know whether a newly supplied current key was used before, so this invariant is **operator-enforced** (treat retired key material as destroyed); SDKs MUST<sup id="enc-9">ENC-9</sup> reject the detectable subset — a configuration where the current key also appears in the decrypt-only list. |
 | Derivation | Each keyring entry independently derives per-tenant keys via the [HKDF construction above](#key-derivation). Salts, domains, and fingerprints are unchanged. |
 | Encrypt | Always the current key. A new master key yields freshly derived keys with a fresh per-key nonce budget — which is why rotation (always forward, to a *new* key) is the remedy when nonce-exhaustion monitoring fires. |
 | Decrypt — with per-entry key identity | Where the SDK stores a per-entry [key fingerprint](#key-fingerprint) (cachekit-py's CK frame metadata), select the keyring entry by exact fingerprint match; never trial-decrypt across the keyring. **The fingerprint is computed over the HKDF-derived per-tenant encryption key, not the master key**: selection derives the tenant's keys for each keyring entry, fingerprints each derived encryption key, and compares. A match is binding — if the matched key fails AES-GCM authentication, the failure is terminal (straight to the fail-open / fail-closed policy; no further keyring entries). No match → the SDK's existing fingerprint-mismatch semantics (fail-closed raises; fail-open attempts the current key only and treats the authentication failure as a miss). |
@@ -422,7 +422,7 @@ Input: user_data, master_key, tenant_id, cache_key
                // backend applies to address its store are not part of the AAD.
 ```
 
-The AAD inputs in step 4 MUST reflect what steps 1–2 actually produced — e.g.
+The AAD inputs in step 4 MUST<sup id="enc-10">ENC-10</sup> reflect what steps 1–2 actually produced — e.g.
 cachekit-py's default `StandardSerializer` path is
 `("msgpack", true, original_type="msgpack")`; cachekit-ts's default is
 `("msgpack", true)` with no fifth component; interop mode is always
