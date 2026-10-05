@@ -144,6 +144,8 @@ X-CacheKit-L1-Status: miss
 | `X-CacheKit-Freshness` | `fresh` or `stale` — lowercase, case-sensitive tokens. Emitted on every `GET` `200 OK` by servers implementing [stale-while-revalidate](#stale-while-revalidate). For `GET` responses, SDKs MUST<sup id="api-18">API-18</sup> treat an absent header as `fresh` (pre-SWR servers do not emit it) and an unrecognized value as `stale` (revalidation is the conservative action); read behavior is specified in [Stale-While-Revalidate](#stale-while-revalidate). |
 | `X-CacheKit-Fresh-For` | Remaining freshness in whole seconds. Semantics: [Remaining Freshness](#remaining-freshness). |
 
+[`test-vectors/freshness-headers.json`](../test-vectors/freshness-headers.json) pins how an SDK reads both headers as `value → result` rows; its `contract` field defines the row semantics and travels with every vendored copy.
+
 #### Remaining Freshness
 
 > Status: **specified** (LAB-557). Origin: without a remaining-freshness signal, an SDK that backfills a local cache (L1) from a read assigns its full configured TTL from time-of-read — an entry read near the end of its server-side freshness window is then served locally as fresh for up to another full TTL, past the server's `fresh_until` (and, with a [stale-grace window](#stale-while-revalidate), potentially past `evict_at`).

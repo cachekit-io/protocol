@@ -1344,6 +1344,16 @@ REPORT_CASES: list[tuple[str, Mutate, dict[str, list[str]], list[str]]] = [
         ["*Decode \\| bounds*"],
     ),
     (
+        # A tab or line break in a name would show as nothing or end the row; a backtick would end the span.
+        "vector names with a tab, a line break or a backtick stay inside their span and cell",
+        entry(
+            "IOP-13",
+            vectors=["path-encoding.json:.\t.", "path-encoding.json:.\r\n.", 'path-encoding.json:a"b<c>d^e`f{g|h}i'],
+        ),
+        {"IOP-13": ["uncovered (0/3)"] * 3},
+        ['`".\\t."`, `".\\r\\n."`, ``a"b<c>d^e`f{g\\|h}i``'],
+    ),
+    (
         # The quoted sentence, not the whole line, even when a code span holds a comment opener.
         "excerpt picks the keyword's sentence beside a comment opener in code",
         both(

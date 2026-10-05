@@ -1062,6 +1062,23 @@ def cell(text: str) -> str:
     return text.replace("\\|", "|").replace("|", "\\|")
 
 
+def code(text: str) -> str:
+    """A vector name as a Markdown code span that shows it exactly.
+
+    A name is data, so it can hold what a span cannot: a line break ends the table row, a
+    backtick ends the span, and a span drops a space at each end. A name that is not all
+    printable (a tab, a line break, NUL), or that starts or ends with a space, is shown as its
+    JSON string literal, and the fence is one backtick longer than any run inside it.
+    """
+    if not text.isprintable() or text[:1] == " " or text[-1:] == " ":
+        text = json.dumps(text).replace("\x7f", "\\u007f")  # json.dumps leaves DEL raw
+    fence = "`" * (1 + max((len(run) for run in re.findall("`+", text)), default=0))
+    # The span strips the padding again, which keeps a backtick at either end out of the fence.
+    if text[:1] == "`" or text[-1:] == "`":
+        text = f" {text} "
+    return fence + text + fence
+
+
 def excerpt(text: str, start: int, word: str, rows: frozenset[int]) -> str:
     """The text around the keyword at `start`, from its paragraph, list item or table cell, keyword in bold.
 
@@ -1120,7 +1137,7 @@ def evidence(req: Requirement, model: Model) -> str:
         if not sep:
             parts.append(f"`{fixture}` (all {len(model.fixtures[fixture])})")
         else:
-            named.setdefault(fixture, []).append(f"`{name}`" if name else "the empty key")
+            named.setdefault(fixture, []).append(code(name) if name else "the empty key")
     parts.extend(f"`{fixture}`: " + ", ".join(names) for fixture, names in named.items())
     parts.extend(f"`{ref}`" for ref in req.tests)
     if req.gap:
