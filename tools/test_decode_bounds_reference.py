@@ -191,9 +191,12 @@ def main() -> None:
                                              depth=2, slots=2, reasons=["incomplete"])
     results.append(expect_raises("incomplete tag", with_recipes(whole), "incomplete tag mismatch"))
 
-    untagged = copy.deepcopy(good)  # incomplete within the budget, tagged as an overclaim
-    untagged["reject_vectors"][at]["reject_reasons"] = ["overclaim"]
-    results.append(expect_raises("incomplete untagged", with_recipes(untagged), "overclaim tag mismatch"))
+    # Cut short within the budget but tagged only 'depth': every other tag check holds (depth 1026,
+    # 1027 slots against a budget of 1034), so only the incomplete check's reverse direction fires.
+    untagged = copy.deepcopy(good)
+    untagged["reject_vectors"].append(dbr.recipe("t", "", "92", 1, "91" * 1025 + "cf" + "00" * 8,
+                                                 depth=1026, slots=1027, reasons=["depth"]))
+    results.append(expect_raises("incomplete untagged", with_recipes(untagged), "incomplete tag mismatch"))
 
     deep_accept = copy.deepcopy(good)
     deep_accept["accept_vectors"][0] = accept("nested_fixarray_depth_33", "", "91", dbr.MIN_DEPTH_FLOOR + 1, "c0",

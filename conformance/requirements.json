@@ -920,7 +920,8 @@
             "interop-mode.json:reject_nan_nested",
             "interop-mode.json:reject_int_overflow_in_list",
             "interop-mode.json:reject_int_underflow_in_map",
-            "interop-mode.json:set_in_map_normalized"
+            "interop-mode.json:set_in_map_normalized",
+            "interop-mode.json:map_key_proto"
           ],
           "tests": [
             "tools/interop-reference.py:_out_of_model_selftest",
@@ -974,10 +975,13 @@
         "IOP-13": {
           "section": "The Interop Data Model",
           "binds": "sdk",
+          "vectors": [
+            "interop-mode.json:map_key_proto"
+          ],
           "tests": [
             "tools/interop-reference.py:_non_string_key_selftest"
           ],
-          "gap": "Portable JSON object keys are always strings, so no vector carries a non-string key and only the Python reference's self-test rejects one; JavaScript objects have string keys only, and the cross-check rejects a Map as outside the data model (IOP-8)."
+          "gap": "Portable JSON object keys are always strings, so no vector carries a non-string key and only the Python reference's self-test rejects one; map_key_proto pins only that a string key such as __proto__ survives normalization. JavaScript objects have string keys only, and the cross-check rejects a Map as outside the data model (IOP-8)."
         },
         "IOP-14": {
           "section": "The Interop Data Model",
@@ -1004,7 +1008,8 @@
           "vectors": [
             "interop-mode.json:uint64_max",
             "interop-mode.json:int64_min",
-            "interop-mode.json:int_beyond_float64_precision"
+            "interop-mode.json:int_beyond_float64_precision",
+            "interop-mode.json:small_int_as_bigint"
           ]
         },
         "IOP-16": {
@@ -1075,7 +1080,8 @@
           "section": "SDK Implementation Requirements",
           "binds": "sdk",
           "vectors": [
-            "interop-mode.json"
+            "interop-mode.json",
+            "interop-mode.json:small_int_as_bigint"
           ],
           "gap": "The list's demands on segment validation, normalization and hashing share the holes still recorded on IOP-2, IOP-8, IOP-10, IOP-13 and IOP-16; no vector reaches the 32-bit length tier (untested by design); binding named and defaulted arguments to their positions is an SDK API property no vector observes; leaving auto mode unchanged is pinned only where an SDK vendors cache-keys.json or wire-format.json."
         },

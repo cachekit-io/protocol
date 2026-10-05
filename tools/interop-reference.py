@@ -210,18 +210,11 @@ def encode_canonical(value: object, *, collapse_floats: bool = True) -> bytes:
 # ---------------------------------------------------------------------------
 
 class DecodedMap:
-    """A decoded map with a non-string (or repeated) key, kept as its pairs."""
-
-    def __init__(self, pairs: list[tuple[object, object]]) -> None:
-        self.pairs = pairs
+    """A decoded map with a non-string (or repeated) key."""
 
 
 class DecodedExt:
-    """A decoded ext type: its type code and payload."""
-
-    def __init__(self, code: int, data: bytes) -> None:
-        self.code = code
-        self.data = data
+    """A decoded ext type."""
 
 
 def _take(data: bytes, pos: int, n: int) -> tuple[bytes, int]:
@@ -255,9 +248,8 @@ def _decode(data: bytes, pos: int) -> tuple[object, int]:  # noqa: C901, PLR0911
         return _take(data, pos, n)
     if t in (0xC7, 0xC8, 0xC9):
         n, pos = _uint(data, pos, 1 << (t - 0xC7))
-        code, pos = _take(data, pos, 1)
-        payload, pos = _take(data, pos, n)
-        return DecodedExt(int.from_bytes(code, "big", signed=True), payload), pos
+        _, pos = _take(data, pos, 1 + n)  # type byte + payload
+        return DecodedExt(), pos
     if t == 0xCA:
         raw, pos = _take(data, pos, 4)
         return struct.unpack(">f", raw)[0], pos
@@ -270,9 +262,8 @@ def _decode(data: bytes, pos: int) -> tuple[object, int]:  # noqa: C901, PLR0911
         raw, pos = _take(data, pos, 1 << (t - 0xD0))
         return int.from_bytes(raw, "big", signed=True), pos
     if 0xD4 <= t <= 0xD8:
-        code, pos = _take(data, pos, 1)
-        payload, pos = _take(data, pos, 1 << (t - 0xD4))
-        return DecodedExt(int.from_bytes(code, "big", signed=True), payload), pos
+        _, pos = _take(data, pos, 1 + (1 << (t - 0xD4)))  # type byte + payload
+        return DecodedExt(), pos
     if t in (0xD9, 0xDA, 0xDB):
         n, pos = _uint(data, pos, 1 << (t - 0xD9))
         raw, pos = _take(data, pos, n)
@@ -303,7 +294,7 @@ def _decode_map(data: bytes, pos: int, n: int) -> tuple[object, int]:
     keys = [k for k, _ in pairs]
     if all(isinstance(k, str) for k in keys) and len(set(keys)) == len(keys):
         return dict(pairs), pos
-    return DecodedMap(pairs), pos
+    return DecodedMap(), pos
 
 
 def decode_value(data: bytes) -> object:
@@ -1116,25 +1107,25 @@ READER_ACCEPT_VECTORS: list[dict] = [
     {
         "name": "reader_padded_int_widths",
         "description": "Integers in wider forms than the shortest: 42 as uint16, -1 as int32, 1 as uint64",
-        "msgpack_hex": "93cd002ad2ffffffffcf0000000000000001",
+        "input_hex": "93cd002ad2ffffffffcf0000000000000001",
         "value": [42, -1, 1],
     },
     {
         "name": "reader_padded_headers",
         "description": "Headers wider than needed: an array16 of 3 holding 'abc' as str8, {'a': 1} as map16 and 2 bytes as bin16",
-        "msgpack_hex": "dc0003d903616263de0001a16101c50002dead",
+        "input_hex": "dc0003d903616263de0001a16101c50002dead",
         "value": ["abc", {"a": 1}, {"$bytes": "dead"}],
     },
     {
         "name": "reader_unsorted_map_keys",
         "description": "Map keys in the reverse of code point order",
-        "msgpack_hex": "82a16202a16101",
+        "input_hex": "82a16202a16101",
         "value": {"b": 2, "a": 1},
     },
     {
         "name": "reader_float32",
         "description": "1.5 as a float32 (0xca), which canonical writers never emit",
-        "msgpack_hex": "ca3fc00000",
+        "input_hex": "ca3fc00000",
         "value": {"$float": "1.5"},
     },
     {
@@ -1143,12 +1134,12 @@ READER_ACCEPT_VECTORS: list[dict] = [
             "{1: 42}: a map with an integer key. No tagged-JSON value can carry it; a reader must decode it "
             "without error (msgpack-python's unpackb needs strict_map_key=False)"
         ),
-        "msgpack_hex": "81012a",
+        "input_hex": "81012a",
     },
     {
         "name": "reader_ext_type",
         "description": "An application ext type (fixext1, type 1, payload 0x2a). No tagged-JSON value can carry it; a reader must decode it without error",
-        "msgpack_hex": "d4012a",
+        "input_hex": "d4012a",
     },
 ]
 
@@ -1160,7 +1151,7 @@ READER_REJECT_VECTORS: list[dict] = [
             "byte, with no CK frame prefix, so only the general trailing-bytes check rejects it. A reader that "
             "strips trailing NUL padding before a strict decode accepts it, so it fails this vector too"
         ),
-        "msgpack_hex": "82a36167651ea46e616d65a5616c69636500",
+        "input_hex": "82a36167651ea46e616d65a5616c69636500",
         "error": "trailing bytes after one complete document",
     },
 ]
@@ -1355,7 +1346,7 @@ def _reader_check(built: dict) -> None:
     """Every reader accept vector is a well-formed, non-canonical document that decodes to its
     `value`; every reject vector is one complete document followed by trailing bytes."""
     for rv in built["reader_accept_vectors"]:
-        raw = bytes.fromhex(rv["msgpack_hex"])
+        raw = bytes.fromhex(rv["input_hex"])
         decoded = decode_value(raw)
         try:
             canonical = encode_canonical(decoded, collapse_floats=False)
@@ -1371,7 +1362,7 @@ def _reader_check(built: dict) -> None:
         raw = bytes.fromhex(vv["canonical_msgpack_hex"])
         assert encode_canonical(decode_value(raw), collapse_floats=False) == raw, f"{vv['name']} does not read back"
     for rv in built["reader_reject_vectors"]:
-        raw = bytes.fromhex(rv["msgpack_hex"])
+        raw = bytes.fromhex(rv["input_hex"])
         try:
             decode_value(raw)
         except InteropError:
@@ -1480,10 +1471,10 @@ def _self_check(built: dict) -> None:
         # A stock reader agrees with this one about every reader vector (strict_map_key
         # off: a non-string key is well-formed MessagePack).
         for rv in built["reader_accept_vectors"]:
-            msgpack.unpackb(bytes.fromhex(rv["msgpack_hex"]), raw=False, strict_map_key=False)
+            msgpack.unpackb(bytes.fromhex(rv["input_hex"]), raw=False, strict_map_key=False)
         for rv in built["reader_reject_vectors"]:
             try:
-                msgpack.unpackb(bytes.fromhex(rv["msgpack_hex"]), raw=False, strict_map_key=False)
+                msgpack.unpackb(bytes.fromhex(rv["input_hex"]), raw=False, strict_map_key=False)
             except msgpack.ExtraData:
                 continue
             raise AssertionError(f"msgpack-python accepted reader reject vector {rv['name']}")
@@ -1533,7 +1524,7 @@ def main() -> int:
         return 1
     print(
         f"OK: {len(built['key_vectors'])} key, {len(built['value_vectors'])} value, "
-            f"{len(built['reader_accept_vectors'])} reader accept, {len(built['reader_reject_vectors'])} reader reject, "
+        f"{len(built['reader_accept_vectors'])} reader accept, {len(built['reader_reject_vectors'])} reader reject, "
         f"{len(built['error_vectors'])} error, {len(built['aad_vectors'])} AAD, "
         f"{len(built['encryption_vectors'])} encryption vectors all verified"
     )

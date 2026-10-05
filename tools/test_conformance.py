@@ -1394,13 +1394,13 @@ REPORT_CASES: list[tuple[str, Mutate, dict[str, list[str]], list[str]]] = [
             "IOP-17": ["partial (4/6)"] * 3,
             "IOP-2": ["partial (3/19)"] * 3,
             "IOP-10": ["uncovered"] * 3,
-            "IOP-13": ["uncovered"] * 3,
+            "IOP-13": ["uncovered (0/1)"] * 3,
             "ENC-4": ["gap"] * 3,  # no sdk-bound IOP requirement is gap only any more
             "IOP-6": ["n/a"] * 3,
             "IOP-14": ["n/a", "partial (3/7)", "n/a"],
         },
         # Tests-only requirements are uncovered in every SDK, so the summary counts them apart.
-        ["| [`spec/interop-mode.md`](../spec/interop-mode.md) | 36 | 8 | 19 | 5 | 4 |"],
+        ["| [`spec/interop-mode.md`](../spec/interop-mode.md) | 36 | 8 | 20 | 4 | 4 |"],
     ),
     (
         # Every SDK holds every listed vector, identical to this repo's, and no gap is recorded.

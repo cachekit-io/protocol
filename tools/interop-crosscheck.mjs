@@ -242,7 +242,7 @@ function encodeCanonical(v, chunks, { collapseFloats }) {
       encodeStr(k, chunks);
       encodeCanonical(v[k], chunks, { collapseFloats });
     }
-  } else throw new Error(`unsupported: ${typeof v}`);
+  } else throw new OutOfModelError(`outside the data model: ${typeof v}`);
 }
 
 function pushArrayHeader(n, chunks) {
@@ -271,17 +271,11 @@ function encodeToBuffer(v, opts) {
 // Integers decode to BigInt and floats to Float, so the encoder above re-encodes
 // what was read. A map with a non-string or repeated key and an ext type decode
 // to these stand-ins, which the encoder rejects by type.
-class DecodedMap {
-  constructor(pairs) {
-    this.pairs = pairs;
-  }
-}
-class DecodedExt {
-  constructor(type, data) {
-    this.type = type;
-    this.data = data;
-  }
-}
+class DecodedMap {}
+class DecodedExt {}
+// Typed errors, so a check that expects a rejection can tell it from a crash.
+class OutOfModelError extends Error {}
+class TrailingBytesError extends Error {}
 
 function decodeValue(buf) {
   let pos = 0;
@@ -294,15 +288,15 @@ function decodeValue(buf) {
   // ignoreBOM keeps a leading U+FEFF, which the default decoder strips from the value.
   const str = (n) => new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(take(n));
   const ext = (n) => {
-    const type = take(1).readInt8();
-    return new DecodedExt(type, Buffer.from(take(n)));
+    take(1 + n); // type byte + payload
+    return new DecodedExt();
   };
   const array = (n) => Array.from({ length: n }, () => item());
   const map = (n) => {
     const pairs = Array.from({ length: n }, () => [item(), item()]);
     const keys = pairs.map(([k]) => k);
     if (!keys.every((k) => typeof k === "string") || new Set(keys).size !== keys.length) {
-      return new DecodedMap(pairs);
+      return new DecodedMap();
     }
     const out = {};
     for (const [k, v] of pairs) Object.defineProperty(out, k, { value: v, enumerable: true, writable: true });
@@ -368,7 +362,7 @@ function decodeValue(buf) {
     }
   }
   const value = item();
-  if (pos !== buf.length) throw new Error(`${buf.length - pos} trailing byte(s) after one complete document`);
+  if (pos !== buf.length) throw new TrailingBytesError(`${buf.length - pos} trailing byte(s) after one complete document`);
   return value;
 }
 
@@ -431,12 +425,13 @@ for (const v of doc.value_vectors) {
 const encodeOrNull = (value) => {
   try {
     return encodeToBuffer(value, { collapseFloats: false });
-  } catch {
-    return null;
+  } catch (err) {
+    if (err instanceof OutOfModelError) return null;
+    throw err;
   }
 };
 for (const v of doc.reader_accept_vectors) {
-  const raw = Buffer.from(v.msgpack_hex, "hex");
+  const raw = Buffer.from(v.input_hex, "hex");
   let canonical;
   try {
     canonical = encodeOrNull(decodeValue(raw));
@@ -451,11 +446,14 @@ for (const v of doc.reader_accept_vectors) {
 }
 for (const v of doc.reader_reject_vectors) {
   try {
-    decodeValue(Buffer.from(v.msgpack_hex, "hex"));
+    decodeValue(Buffer.from(v.input_hex, "hex"));
     failures++;
     console.error(`FAIL ${v.name}: expected rejection (${v.error}), but the reader decoded it`);
-  } catch {
-    /* expected */
+  } catch (err) {
+    if (!(err instanceof TrailingBytesError)) {
+      failures++;
+      console.error(`FAIL ${v.name}: rejected for the wrong reason (${err.message})`);
+    }
   }
 }
 
@@ -531,8 +529,8 @@ for (const v of doc.error_vectors) {
     encodeToBuffer(args, { collapseFloats: true });
     failures++;
     console.error(`FAIL ${v.name}: expected rejection (${v.error}), but encoding succeeded`);
-  } catch {
-    /* expected */
+  } catch (err) {
+    if (err instanceof TypeError || err instanceof ReferenceError) throw err; // a harness bug, not a rejection
   }
 }
 
@@ -541,7 +539,8 @@ for (const v of doc.error_vectors) {
 function expectRejected(test, label, args) {
   try {
     encodeToBuffer(args, { collapseFloats: true });
-  } catch {
+  } catch (err) {
+    if (err instanceof TypeError || err instanceof ReferenceError) throw err; // a harness bug, not a rejection
     return; // expected
   }
   failures++;

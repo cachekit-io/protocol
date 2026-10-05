@@ -1126,7 +1126,7 @@
     {
       "name": "reader_padded_int_widths",
       "description": "Integers in wider forms than the shortest: 42 as uint16, -1 as int32, 1 as uint64",
-      "msgpack_hex": "93cd002ad2ffffffffcf0000000000000001",
+      "input_hex": "93cd002ad2ffffffffcf0000000000000001",
       "value": [
         42,
         -1,
@@ -1136,7 +1136,7 @@
     {
       "name": "reader_padded_headers",
       "description": "Headers wider than needed: an array16 of 3 holding 'abc' as str8, {'a': 1} as map16 and 2 bytes as bin16",
-      "msgpack_hex": "dc0003d903616263de0001a16101c50002dead",
+      "input_hex": "dc0003d903616263de0001a16101c50002dead",
       "value": [
         "abc",
         {
@@ -1150,7 +1150,7 @@
     {
       "name": "reader_unsorted_map_keys",
       "description": "Map keys in the reverse of code point order",
-      "msgpack_hex": "82a16202a16101",
+      "input_hex": "82a16202a16101",
       "value": {
         "b": 2,
         "a": 1
@@ -1159,7 +1159,7 @@
     {
       "name": "reader_float32",
       "description": "1.5 as a float32 (0xca), which canonical writers never emit",
-      "msgpack_hex": "ca3fc00000",
+      "input_hex": "ca3fc00000",
       "value": {
         "$float": "1.5"
       }
@@ -1167,19 +1167,19 @@
     {
       "name": "reader_non_string_map_key",
       "description": "{1: 42}: a map with an integer key. No tagged-JSON value can carry it; a reader must decode it without error (msgpack-python's unpackb needs strict_map_key=False)",
-      "msgpack_hex": "81012a"
+      "input_hex": "81012a"
     },
     {
       "name": "reader_ext_type",
       "description": "An application ext type (fixext1, type 1, payload 0x2a). No tagged-JSON value can carry it; a reader must decode it without error",
-      "msgpack_hex": "d4012a"
+      "input_hex": "d4012a"
     }
   ],
   "reader_reject_vectors": [
     {
       "name": "reader_trailing_byte",
       "description": "The issue_example_object value followed by one 0x00 byte: a complete document and a trailing byte, with no CK frame prefix, so only the general trailing-bytes check rejects it. A reader that strips trailing NUL padding before a strict decode accepts it, so it fails this vector too",
-      "msgpack_hex": "82a36167651ea46e616d65a5616c69636500",
+      "input_hex": "82a36167651ea46e616d65a5616c69636500",
       "error": "trailing bytes after one complete document"
     }
   ],
