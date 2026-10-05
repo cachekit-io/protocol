@@ -81,17 +81,19 @@ a list, a blockquote or emphasis (`**MUST**`, `_MUST_`) needs an id; one in inli
 inline comment does not. Inline code may cross a line break inside a paragraph, but never
 leave its paragraph or table cell. A backtick inside an HTML tag, an autolink such as
 `<https://example.com/>`, an inline comment or an escape (`\` before it) opens no code span,
-as on GitHub, so it cannot pair with a later backtick and hide the text between them. `check`
-also follows two things GitHub does that CommonMark does not say: a comment ends at its first
-`-->` or `--!>`, and once a run of backticks has closed nothing, a later code span can show as
-plain text. A keyword GitHub shows either way needs an id. `check` reads a link's destination
-and title, a footnote reference and a bare `www.` or `http://` address as plain text, where
-GitHub does not, so keep backticks out of them. A table starts where a header row is followed
-by a delimiter row with the same number of cells (a one-column table needs no pipe), and its
-body runs to the first blank line or the first line that starts another block, such as a
-heading, a list item or an HTML block. An HTML block (a line that opens with a block tag such
-as `<div>` or `<details>`, up to the next blank line) is raw HTML: a keyword in it shows even
-between backticks, and only its comments are hidden.
+as on GitHub, so it cannot pair with a later backtick and hide the text between them. A
+comment, inline or in an HTML block, ends where GitHub shows it ending: at its first `-->` or
+`--!>`. After a run of backticks that closes nothing, or a `<!` or `<?` that is not a closed
+comment, `check` reads the rest of the paragraph or table cell as plain text, so a keyword in
+inline code there needs an id even where GitHub would hide it: close or escape (`` \` ``) the
+stray backtick. `check` reads a link's destination and title, a footnote reference and a bare
+`www.` or `http://` address as plain text, where GitHub does not, so keep backticks out of
+them. A table starts where a header row is followed by a delimiter row with the same number of
+cells (a one-column table needs no pipe), and its body runs to the first blank line or the
+first line that starts another block, such as a heading, a list item or an HTML block. An HTML
+block (a line that opens with a block tag such as `<div>` or `<details>`, up to the next blank
+line) is raw HTML: a keyword in it shows even between backticks, and only its comments are
+hidden.
 
 A keyword inside a code block, or inside an HTML comment block that spans lines, is an error,
 so that a block the checker misreads fails instead of hiding text:
@@ -101,7 +103,8 @@ so that a block the checker misreads fails instead of hiding text:
   requirement in prose. Only a fence that opens at column 0, outside any blockquote, list item
   or HTML block, can be exempted, and an indented code block cannot be.
 - An HTML comment block that spans lines can carry neither an id nor an exemption, so reword
-  the keyword. A comment on one line is hidden like an inline comment, as on GitHub.
+  the keyword. A comment on one line is hidden like an inline comment, as on GitHub. Either
+  ends at its first `-->` or `--!>`, and text after that is read like any other HTML.
 
 Only spaces count as indentation or make a line blank (a line of non-breaking spaces is text).
 A tab, a vertical tab, a form feed or a carriage return that does not end a CRLF line is an
