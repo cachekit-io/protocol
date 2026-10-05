@@ -1169,6 +1169,13 @@ CASES: list[Case] = [
         1,
         f"sits inside the HTML comment opened at line {SPEC_END + 3}",
     ),
+    # The region starts where its comment opens, so a keyword before the comment is the block's text, as GitHub shows it.
+    (
+        "keyword before a comment in an HTML block",
+        append(SPEC, "\n<div>\nReaders MUST reject it.\n<!-- x\ny -->\n</div>\n"),
+        1,
+        f"{SPEC}:{SPEC_END + 3}: this MUST has no id",
+    ),
     # Only an HTML block's own comments are regions: a comment spanning lines of a paragraph between two is inline.
     (
         "inline comment spanning lines between HTML blocks",
