@@ -612,6 +612,13 @@ CASES: list[Case] = [
     ),
     ("MUST NOT across a lazy continuation line", append(SPEC, "\n> Readers MUST\nNOT crash.\n"), 1, "this MUST NOT has no id"),
     ("MUST NOT across a setext heading's lines", append(SPEC, "\nReaders MUST\nNOT crash\n---\n"), 1, "this MUST NOT has no id"),
+    # On one line the words join in any block: IOP-6 is a MUST NOT in a table row.
+    (
+        "MUST NOT in one table cell",
+        append(SPEC, "\n| a | b |\n| - | - |\n| Readers MUST NOT crash | c |\n"),
+        1,
+        "this MUST NOT has no id",
+    ),
     (
         "id after MUST, with NOT opening the next paragraph",
         both(
