@@ -1,6 +1,6 @@
 {
-  "version": "1.2.0",
-  "generator": "extracted from cachekit-rs v0.5.1 + cachekit-ts v0.1.0 (Python ground truth); arrow/orjson/original_type vectors generated with cryptography/OpenSSL (fixed nonces) matching real cachekit-py serializer metadata, verified by tools/encryption-verify.py",
+  "version": "1.3.0",
+  "generator": "extracted from cachekit-rs v0.5.1 + cachekit-ts v0.1.0 (Python ground truth); arrow/orjson/original_type vectors generated with cryptography/OpenSSL (fixed nonces) matching real cachekit-py serializer metadata, verified by tools/encryption-verify.py; master_key_input rows hand-written from one key, the sealed row sealed with the stdlib HKDF + cryptography AES-GCM (fixed nonce)",
   "algorithm": "AES-256-GCM",
   "key_derivation": "HKDF-SHA256 with cachekit_v1_ salt prefix",
   "nonce_size": 12,
@@ -133,6 +133,63 @@
         "compressed": false,
         "aad_hex": "030000000764656661756c740000004f75736572733a6765745f757365723a36313539383731363235353038303038306636343536656230363563326535316261646661613433323062306566653937343639633239636666656538383735000000076d73677061636b0000000546616c7365",
         "ciphertext_hex": "0d0e0f1011121314151617183c29af318238925ee76d081934adce133c0b4a7c5eb5704102b04582dcbf278ffd"
+      }
+    ]
+  },
+  "master_key_input": {
+    "note": "spec/intent-presets.md \u00a7 Master Key Input. Rules 1 and 3: the secure preset takes the master key as a hex string, derives the key bytes as hex_decode(string), the same in every SDK, accepts 32 bytes and refuses fewer. Rule 4: an entry point that takes raw key bytes takes exactly 32. Every row comes from the key 000102\u20261f. An SDK conforms when a hex entry point given an accept row's master_key_hex and no tenant derives the pinned fingerprint and decrypts the sealed entry, when every hex entry point refuses each reject row's master_key_hex, and when every raw-bytes entry point refuses each raw reject row's bytes (raw_key_hex decoded). Rule 1 does not say whether a key may hold uppercase letters, white space or a 0x prefix, so no row does. Each row gets the same verdict whether an SDK accepts exactly 32 bytes or 32 and more, as rule 3 allows either. Each note names the mistakes its row catches. Sealed with the stdlib HKDF and cryptography's AES-GCM (fixed nonce); verified by tools/encryption-verify.py, which also checks that each mistake a note names misjudges its row.",
+    "tenant_id": "default",
+    "accept_vectors": [
+      {
+        "name": "master_key_distinct_bytes",
+        "master_key_hex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+        "derived_key_fingerprint_hex": "1f42496441f47a81c6957e116519f95b",
+        "plaintext_hex": "82a36167651ea46e616d65a5616c696365",
+        "cache_key": "users:get_user:61598716255080080f6456eb065c2e51badfaa4320b0efe97469c29cffee8875",
+        "format": "msgpack",
+        "compressed": false,
+        "aad_hex": "030000000764656661756c740000004f75736572733a6765745f757365723a36313539383731363235353038303038306636343536656230363563326535316261646661613433323062306566653937343639633239636666656538383735000000076d73677061636b0000000546616c7365",
+        "ciphertext_hex": "1e1f202122232425262728296ef9da5dfe979fda05c45024ffc29059e8b83e1475f5354ad6206360dfd72e5a1b",
+        "note": "32 distinct bytes, starting with a 00 byte and holding the hex letters a to f. A decoder that drops the leading zero byte (a big-integer decoder), reverses the bytes, swaps the two digits of each byte or misreads a letter derives another key: its fingerprint differs and the entry does not decrypt. A validator that admits only digits, or only uppercase letters, refuses the key. The entry has the same cache_key and plaintext as default_tenant_interop, sealed under this key and the tenant \"default\": the same interop entry under another master key."
+      }
+    ],
+    "reject_vectors": [
+      {
+        "name": "master_key_odd_length",
+        "master_key_hex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f0",
+        "note": "The accept row's 64 characters followed by a 0: 65 characters, so not hex. A decoder that drops the odd last digit (as Node's Buffer.from does) reads the accept row's key, and one that pads the string with a leading 0 reads 33 bytes, so it accepts the row unless it checks for an odd length. An entry point that requires exactly 64 characters refuses it for its length."
+      },
+      {
+        "name": "master_key_non_hex_digit",
+        "master_key_hex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1g",
+        "note": "The accept row's 64 characters with the last replaced by g. A decoder that reads a character that is not a hex digit as 0 accepts it as 32 bytes. One that stops at that character (as Node's Buffer.from does) accepts the 31 bytes before it when only the string's length is checked, or when no length is checked behind a pattern anchored only at the start (re.match, or /^[0-9a-f]+/ without $), which the last character slips past."
+      },
+      {
+        "name": "master_key_31_bytes",
+        "master_key_hex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e",
+        "note": "The accept row's first 31 bytes (62 characters). An entry point with no length check, one that accepts the 16 bytes HKDF itself needs, or one that pads a short key to 32 bytes accepts it."
+      },
+      {
+        "name": "master_key_16_bytes",
+        "master_key_hex": "000102030405060708090a0b0c0d0e0f",
+        "note": "The accept row's first 16 bytes (32 characters). Besides the mistakes the 31-byte row catches, a validator that admits AES key sizes (16, 24 or 32 bytes) accepts it while refusing 31 bytes."
+      }
+    ],
+    "raw_reject_vectors": [
+      {
+        "name": "raw_key_31_bytes",
+        "raw_key_hex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e",
+        "note": "Raw key bytes: the accept row's first 31 bytes, written in hex only because JSON holds no bytes. A raw-bytes entry point with no length check, or one that pads a short key to 32 bytes, accepts them."
+      },
+      {
+        "name": "raw_key_33_bytes",
+        "raw_key_hex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20",
+        "note": "Raw key bytes: the accept row's 32 bytes and a 20 byte. A raw-bytes entry point that admits 32 bytes or more, as a hex entry point may, accepts them."
+      },
+      {
+        "name": "raw_key_ascii_hex_string",
+        "raw_key_hex": "30303031303230333034303530363037303830393061306230633064306530663130313131323133313431353136313731383139316131623163316431653166",
+        "note": "Raw key bytes: the 64 ASCII bytes of the accept row's hex string. A raw-bytes entry point that admits 32 bytes or more accepts them and derives a key no hex entry point derives; one that hex-decodes 64 hex digits first accepts them as the accept row's key. Both break the rule that a raw-bytes entry point takes exactly 32 bytes."
       }
     ]
   }

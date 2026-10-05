@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Mutation tests for encryption-verify.py's keyring guards.
+"""Mutation tests for encryption-verify.py's keyring, default-tenant and master key input guards.
 
 Same doctrine as test_wire_format_reference.py: a conformance gate is proven by
 poisoning the fixture and watching it go red, not by reading it. Every case below
@@ -62,6 +62,52 @@ def master_fingerprint(doc: dict, key_id: str) -> str:
     return ev.key_fingerprint(bytes.fromhex(entry["master_key_hex"]))
 
 
+def mk(doc: dict, name: str) -> dict:
+    return next(r for table in ev.FROZEN_MASTER_KEY_INPUT_VECTORS for r in doc["master_key_input"][table] if r["name"] == name)
+
+
+def accept_row(doc: dict) -> dict:
+    return mk(doc, "master_key_distinct_bytes")
+
+
+def set_key(name: str, text: str) -> Callable[[dict], None]:
+    return lambda d: mk(d, name).__setitem__("master_key_hex", text)
+
+
+def set_raw(name: str, raw: bytes) -> Callable[[dict], None]:
+    return lambda d: mk(d, name).__setitem__("raw_key_hex", raw.hex())
+
+
+def rekey(key: bytes) -> Callable[[dict], None]:
+    """The accept row under another key with its fingerprint recomputed, so only a property the key lacks can fail it.
+
+    The sealed entry is left as it was, so in the seal lane the decrypt fails as well.
+    """
+
+    def mutate(doc: dict) -> None:
+        accept_row(doc).update(
+            master_key_hex=key.hex(),
+            derived_key_fingerprint_hex=ev.key_fingerprint(ev.derive_encryption_key(key, ev.DEFAULT_TENANT_ID)),
+        )
+
+    return mutate
+
+
+def retenant(doc: dict) -> None:
+    """The master_key_input block moved to another tenant with the accept row's fingerprint and AAD rebuilt for it."""
+    tenant, row = "cross-sdk-test", accept_row(doc)
+    doc["master_key_input"]["tenant_id"] = tenant
+    row["derived_key_fingerprint_hex"] = ev.key_fingerprint(ev.derive_encryption_key(bytes.fromhex(row["master_key_hex"]), tenant))
+    row["aad_hex"] = ev.aad_v3(tenant, row["cache_key"], fmt=row["format"], compressed=row["compressed"]).hex()
+
+
+# The key every master_key_input row comes from.
+D = bytes(range(32))
+# 32 bytes that read the same reversed, with a leading 00 byte and the letters a-f.
+PALINDROME = bytes.fromhex("001a2b3c4d5e6f708192a3b4c5d6e7f8") + bytes.fromhex("001a2b3c4d5e6f708192a3b4c5d6e7f8")[::-1]
+# 32 bytes whose two digits are equal (00, 11, ... ff, twice): swapping them reads the same key.
+EQUAL_DIGITS = bytes(0x11 * (i % 16) for i in range(32))
+
 # The sealed bytes and the AAD that binds them; swapping these between vectors leaves each vector's identity in place.
 PAYLOAD_FIELDS = ("cache_key", "aad_hex", "ciphertext_hex", "plaintext_hex")
 
@@ -100,6 +146,42 @@ STDLIB_CASES: dict[str, Callable[[dict], None]] = {
         "aad_hex", ev.aad_v3("cross-sdk-test", dt(d)["cache_key"], fmt="msgpack", compressed=False).hex()
     ),
     "frozen default_tenant vector renamed": lambda d: dt(d).__setitem__("name", "renamed"),
+    # intent-presets.md § Master Key Input — keys a hex or raw-bytes entry point must accept or refuse.
+    "master_key_input block deleted": lambda d: d.pop("master_key_input"),
+    "unknown vector table": lambda d: d["master_key_input"].__setitem__("legacy_vectors", [{"name": "legacy"}]),
+    # Fingerprint and AAD rebuilt for the other tenant, so only the literal guard rejects it (stdlib lane; in the seal
+    # lane the entry also fails to decrypt).
+    "master_key_input tenant is not the literal": retenant,
+    "accept row fingerprint corrupted": lambda d: accept_row(d).__setitem__("derived_key_fingerprint_hex", "00" * 16),
+    # 33 bytes: a conformant entry point that takes exactly 32 refuses it, and one that takes 32 or more accepts it, so
+    # it can be neither an accept row nor a reject row.
+    "accept row refused by a conformant length rule": rekey(D + b"\x20"),
+    "reject row accepted by a conformant length rule": set_key("master_key_31_bytes", (D + b"\x20").hex()),
+    "raw reject row of exactly 32 bytes": set_raw("raw_key_33_bytes", D),
+    # What rule 1 leaves open, which no row may decide: an uppercase digit, white space, the x of a 0x prefix.
+    "uppercase hex digit in a row": set_key("master_key_non_hex_digit", D.hex()[:-1] + "A"),
+    "white space in a row": set_key("master_key_non_hex_digit", D.hex()[:-1] + "\n"),
+    "0x prefix's x in a row": set_key("master_key_non_hex_digit", D.hex()[:-1] + "x"),
+    "raw_key_hex in uppercase": lambda d: mk(d, "raw_key_33_bytes").__setitem__("raw_key_hex", (D + b"\x20").hex().upper()),
+    "row note blank": lambda d: mk(d, "master_key_16_bytes").__setitem__("note", " "),
+    "unknown field on a row": lambda d: mk(d, "master_key_16_bytes").__setitem__("reject", True),
+    "frozen master_key_input row renamed": lambda d: mk(d, "raw_key_31_bytes").__setitem__("name", "renamed"),
+    "row added with no wrong entry point to show its mistake": lambda d: d["master_key_input"]["reject_vectors"].append(
+        {"name": "master_key_20_bytes", "master_key_hex": D.hex()[:40], "note": "The accept row's first 20 bytes."}
+    ),
+    # Each row edited so that a mistake its note names no longer misjudges it; only the wrong-entry-point check
+    # rejects these.
+    "odd-length row also short": set_key("master_key_odd_length", D.hex()[:63]),
+    "non-hex row also short": set_key("master_key_non_hex_digit", D.hex()[:61] + "g"),
+    "non-hex digit first, where a start-anchored pattern sees it": set_key("master_key_non_hex_digit", "g" + D.hex()[1:]),
+    "31-byte row cut to 30 bytes": set_key("master_key_31_bytes", D.hex()[:60]),
+    "16-byte row grown to 20 bytes": set_key("master_key_16_bytes", D.hex()[:40]),
+    "raw 31-byte row cut to 30 bytes": set_raw("raw_key_31_bytes", D[:30]),
+    "raw ASCII row not a hex string": set_raw("raw_key_ascii_hex_string", b"g" * 64),
+    "accept row without a leading zero byte": rekey(bytes(range(1, 33))),
+    "accept row without hex letters": rekey(bytes.fromhex("0001020304050607080910111213141516171819202122232425262728293031")),
+    "accept row that reads the same reversed": rekey(PALINDROME),
+    "accept row that reads the same with each byte's digits swapped": rekey(EQUAL_DIGITS),
 }
 
 SEAL_CASES: dict[str, Callable[[dict], None]] = {
@@ -114,6 +196,9 @@ SEAL_CASES: dict[str, Callable[[dict], None]] = {
     "default_tenant sealed under another tenant": lambda d: dt(d).__setitem__(
         "ciphertext_hex", next(v for v in d["vectors"] if v["name"] == "basic_bytes")["ciphertext_hex"]
     ),
+    # The same entry sealed under the main master key: its AAD and fingerprint still match, only the decrypt fails.
+    "accept row sealed under another master key": lambda d: accept_row(d).__setitem__("ciphertext_hex", dt(d)["ciphertext_hex"]),
+    "accept row plaintext pinned wrong": lambda d: accept_row(d).__setitem__("plaintext_hex", "00"),
 }
 
 
