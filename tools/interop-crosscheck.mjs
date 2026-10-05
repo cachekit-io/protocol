@@ -41,6 +41,13 @@ class TaggedSet {
     this.elements = elements;
   }
 }
+// A datetime with no UTC offset: outside the data model, so the encoder rejects
+// it where it sits, nested or not, instead of the parser rejecting the vector.
+class NaiveDatetime {
+  constructor(iso) {
+    this.iso = iso;
+  }
+}
 
 function fromTagged(v) {
   if (Array.isArray(v)) return v.map(fromTagged);
@@ -65,8 +72,9 @@ function fromTagged(v) {
           throw new Error(`unknown tag ${keys[0]}`);
       }
     }
+    // defineProperty, not assignment: out["__proto__"] = x would set the prototype.
     const out = {};
-    for (const k of keys) out[k] = fromTagged(v[k]);
+    for (const k of keys) Object.defineProperty(out, k, { value: fromTagged(v[k]), enumerable: true, writable: true });
     return out;
   }
   return v;
@@ -79,7 +87,10 @@ function isoToUnixFloat64(iso) {
   const m = iso.match(
     /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.(\d{1,6}))?(Z|[+-]\d{2}:\d{2})$/,
   );
-  if (!m) throw new Error(`naive or malformed datetime: ${iso}`);
+  if (!m) {
+    if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?$/.test(iso)) return new NaiveDatetime(iso);
+    throw new Error(`malformed datetime: ${iso}`);
+  }
   const [, Y, Mo, D, H, Mi, S, frac, off] = m;
   let ms = Date.UTC(+Y, +Mo - 1, +D, +H, +Mi, +S);
   if (off !== "Z") {
@@ -280,7 +291,8 @@ function decodeValue(buf) {
     return buf.subarray(pos - n, pos);
   };
   const uint = (n) => (n === 8 ? take(8).readBigUInt64BE() : BigInt(take(n).readUIntBE(0, n)));
-  const str = (n) => new TextDecoder("utf-8", { fatal: true }).decode(take(n));
+  // ignoreBOM keeps a leading U+FEFF, which the default decoder strips from the value.
+  const str = (n) => new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(take(n));
   const ext = (n) => {
     const type = take(1).readInt8();
     return new DecodedExt(type, Buffer.from(take(n)));
@@ -408,6 +420,9 @@ for (const v of doc.value_vectors) {
   const value = fromTagged(v.value);
   const bytes = encodeToBuffer(value, { collapseFloats: false });
   check(v.name, "canonical_msgpack_hex", v.canonical_msgpack_hex, bytes.toString("hex"));
+  // The reader below reads every canonical value back to the same bytes.
+  const reread = encodeToBuffer(decodeValue(Buffer.from(v.canonical_msgpack_hex, "hex")), { collapseFloats: false });
+  check(v.name, "read back", v.canonical_msgpack_hex, reread.toString("hex"));
 }
 
 // Reader vectors: this reader must accept every accept vector, re-encode it to the
@@ -508,11 +523,12 @@ for (const v of doc.encryption_vectors ?? []) {
 }
 
 for (const v of doc.error_vectors) {
+  const args = fromTagged(v.args); // outside the try: a vector must fail in the encoder, not in the parser
   try {
     if (v.namespace !== undefined && !segmentsValid(v.namespace, v.operation)) {
       throw new Error("segment rejected");
     }
-    encodeToBuffer(fromTagged(v.args), { collapseFloats: true });
+    encodeToBuffer(args, { collapseFloats: true });
     failures++;
     console.error(`FAIL ${v.name}: expected rejection (${v.error}), but encoding succeeded`);
   } catch {

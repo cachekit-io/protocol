@@ -662,8 +662,75 @@
       "expected_key": "t:op:a6c20006ddbdacea9a7e0307d4f99361c90420d16a82c47407eb5f73f0a4293d"
     },
     {
+      "name": "map_key_sort_shorter_key_later",
+      "description": "Code point order puts 'ab' before the shorter 'b'. A length-first sort (shorter keys first, as canonical CBOR orders them, or by the encoded key with its header) puts 'b' first",
+      "namespace": "t",
+      "operation": "op",
+      "args": [
+        {
+          "b": 1,
+          "ab": 2
+        }
+      ],
+      "canonical_args_hex": "9182a2616202a16201",
+      "args_hash": "2220a1361610d10954ee0e8e100974cc47239b041ca9419f67b6ffb62b2c79dc",
+      "expected_key": "t:op:2220a1361610d10954ee0e8e100974cc47239b041ca9419f67b6ffb62b2c79dc"
+    },
+    {
+      "name": "map_key_sort_supplementary_shorter",
+      "description": "Code point order puts U+FF61 U+FF61 (6 UTF-8 bytes) before the shorter U+10000 (4 bytes). A length-first sort and a UTF-16 code-unit sort both put U+10000 first",
+      "namespace": "t",
+      "operation": "op",
+      "args": [
+        {
+          "\ud800\udc00": 1,
+          "\uff61\uff61": 2
+        }
+      ],
+      "canonical_args_hex": "9182a6efbda1efbda102a4f090808001",
+      "args_hash": "5b4bdc0b139d14dc7e8099efaa9d556867b3d62145a553ad6c0e9913793f98e1",
+      "expected_key": "t:op:5b4bdc0b139d14dc7e8099efaa9d556867b3d62145a553ad6c0e9913793f98e1"
+    },
+    {
+      "name": "map_key_proto",
+      "description": "'__proto__' is an ordinary string key. A JavaScript normalizer that copies keys by assignment (out[k] = v) sets the object's prototype instead, drops the key and mints the key of an empty map",
+      "namespace": "t",
+      "operation": "op",
+      "args": [
+        {
+          "__proto__": 1
+        }
+      ],
+      "canonical_args_hex": "9181a95f5f70726f746f5f5f01",
+      "args_hash": "f3e64f4b2df2a19ce1867746dd0a00a454fbd53aa47e0c245353b10e391174e6",
+      "expected_key": "t:op:f3e64f4b2df2a19ce1867746dd0a00a454fbd53aa47e0c245353b10e391174e6"
+    },
+    {
+      "name": "set_in_map_normalized",
+      "description": "A set inside a map value holding a tz-aware datetime and an uppercase UUID: each element is normalized before it is encoded and sorted (the int timestamp 0xce.. sorts before the str 0xd9..). The valid twin of reject_naive_datetime_nested, so a set path that rejects every datetime fails it",
+      "namespace": "t",
+      "operation": "op",
+      "args": [
+        {
+          "when": {
+            "$set": [
+              {
+                "$uuid": "550E8400-E29B-41D4-A716-446655440000"
+              },
+              {
+                "$datetime": "2024-01-01T00:00:00+00:00"
+              }
+            ]
+          }
+        }
+      ],
+      "canonical_args_hex": "9181a47768656e92ce65920080d92435353065383430302d653239622d343164342d613731362d343436363535343430303030",
+      "args_hash": "0e6034a1e41ef9d5b86c1931ca87b6bc28941dc8d286f5b4ff35914c8cb467a5",
+      "expected_key": "t:op:0e6034a1e41ef9d5b86c1931ca87b6bc28941dc8d286f5b4ff35914c8cb467a5"
+    },
+    {
       "name": "int_beyond_float64_precision",
-      "description": "2^53+1, -(2^53+1) and 2^63-1: integers inside int64 that a float64 cannot hold. A TypeScript SDK that turns a BigInt inside int64 into a Number rounds each one and mints a different key",
+      "description": "2^53+1, -(2^53+1) and 2^63-1, then 2^53+1 again inside a list and a map value: integers inside int64 that a float64 cannot hold. A TypeScript SDK that turns a BigInt inside int64 into a Number rounds each one and mints a different key",
       "namespace": "t",
       "operation": "op",
       "args": [
@@ -675,11 +742,21 @@
         },
         {
           "$int": "9223372036854775807"
+        },
+        [
+          {
+            "$int": "9007199254740993"
+          }
+        ],
+        {
+          "id": {
+            "$int": "9007199254740993"
+          }
         }
       ],
-      "canonical_args_hex": "93cf0020000000000001d3ffdfffffffffffffcf7fffffffffffffff",
-      "args_hash": "4762153dbe34ccf7fe9fcdffff932f7dd6cbbcd4b916e8dd6128fb6c2d8ec759",
-      "expected_key": "t:op:4762153dbe34ccf7fe9fcdffff932f7dd6cbbcd4b916e8dd6128fb6c2d8ec759"
+      "canonical_args_hex": "95cf0020000000000001d3ffdfffffffffffffcf7fffffffffffffff91cf002000000000000181a26964cf0020000000000001",
+      "args_hash": "9b0aeb160d3eff4897861f4304f02348acb15c93b0c3d7f34f1cc923c7cadebe",
+      "expected_key": "t:op:9b0aeb160d3eff4897861f4304f02348acb15c93b0c3d7f34f1cc923c7cadebe"
     },
     {
       "name": "small_int_as_bigint",
@@ -742,6 +819,23 @@
         "value": "2024-01-01T12:30:45.123456+00:00"
       },
       "canonical_msgpack_hex": "82ac5f5f6461746574696d655f5fc3a576616c7565d920323032342d30312d30315431323a33303a34352e3132333435362b30303a3030"
+    },
+    {
+      "name": "proto_key_value",
+      "description": "A map whose key is '__proto__', an ordinary string key. A JavaScript reader or writer that sets keys by assignment changes the object's prototype instead and loses the entry",
+      "value": {
+        "__proto__": 1
+      },
+      "canonical_msgpack_hex": "81a95f5f70726f746f5f5f01"
+    },
+    {
+      "name": "bom_strings_value",
+      "description": "Strings that start with U+FEFF, one short and one of 300 characters: a reader keeps the character. A UTF-8 decoder left at its default (TextDecoder strips a leading BOM) drops it, and some MessagePack decoders use one only for longer strings",
+      "value": [
+        "\ufeffbom",
+        "\ufeffxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+      ],
+      "canonical_msgpack_hex": "92a6efbbbf626f6dda012eefbbbf7878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878"
     }
   ],
   "error_vectors": [
@@ -910,6 +1004,13 @@
       "operation": "caf\u00e9",
       "args": [],
       "error": "U+00E9 is not an ASCII letter (a lowercase or alphanumeric test admits it)"
+    },
+    {
+      "name": "reject_fullwidth_operation",
+      "namespace": "users",
+      "operation": "\uff47\uff45\uff54_user",
+      "args": [],
+      "error": "full-width letters are not ASCII: NFKC folds them to 'get_user', and a segment is never normalized"
     },
     {
       "name": "reject_slash_namespace",

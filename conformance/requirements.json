@@ -842,9 +842,10 @@
             "interop-mode.json:reject_space_operation",
             "interop-mode.json:reject_uppercase_operation",
             "interop-mode.json:reject_colon_in_namespace",
-            "interop-mode.json:reject_trailing_newline_operation"
+            "interop-mode.json:reject_trailing_newline_operation",
+            "interop-mode.json:reject_fullwidth_operation"
           ],
-          "gap": "The character-set vectors each name one character outside the set (an uppercase letter, ':', a newline, a non-ASCII digit and letter, '/', a space), so a validator that bans those characters one by one, instead of admitting only the set, passes them all; no finite list of characters closes that."
+          "gap": "The character-set vectors each name one character outside the set (an uppercase letter, ':', a newline, a non-ASCII digit, an accented and a full-width letter, '/', a space), so a validator that bans those characters one by one, instead of admitting only the set, passes them all; no finite list of characters closes that."
         },
         "IOP-3": {
           "section": "Segment grammar",
@@ -870,7 +871,8 @@
             "interop-mode.json:reject_space_operation",
             "interop-mode.json:reject_uppercase_operation",
             "interop-mode.json:reject_colon_in_namespace",
-            "interop-mode.json:reject_trailing_newline_operation"
+            "interop-mode.json:reject_trailing_newline_operation",
+            "interop-mode.json:reject_fullwidth_operation"
           ],
           "gap": "The vectors drive key derivation, so they share IOP-2's remaining hole (a ban list of the tested characters); rejection at decoration or registration time rather than at the first call, and on every backend, are SDK API properties no vector observes."
         },
@@ -917,7 +919,8 @@
             "interop-mode.json:reject_naive_datetime_nested",
             "interop-mode.json:reject_nan_nested",
             "interop-mode.json:reject_int_overflow_in_list",
-            "interop-mode.json:reject_int_underflow_in_map"
+            "interop-mode.json:reject_int_underflow_in_map",
+            "interop-mode.json:set_in_map_normalized"
           ],
           "tests": [
             "tools/interop-reference.py:_out_of_model_selftest",
@@ -985,7 +988,9 @@
             "interop-mode.json:map_key_sort_ascii",
             "interop-mode.json:nested_map_recursive_sort",
             "interop-mode.json:map_key_sort_case_across_letters",
-            "interop-mode.json:map_key_sort_punctuation"
+            "interop-mode.json:map_key_sort_punctuation",
+            "interop-mode.json:map_key_sort_shorter_key_later",
+            "interop-mode.json:map_key_sort_supplementary_shorter"
           ]
         },
         "IOP-15": {
@@ -1018,7 +1023,9 @@
             "interop-mode.json:issue_example_object",
             "interop-mode.json:float_value_stays_float64",
             "interop-mode.json:mixed_array",
-            "interop-mode.json:datetime_sentinel_value"
+            "interop-mode.json:datetime_sentinel_value",
+            "interop-mode.json:proto_key_value",
+            "interop-mode.json:bom_strings_value"
           ]
         },
         "IOP-18": {
@@ -1029,6 +1036,8 @@
             "interop-mode.json:float_value_stays_float64",
             "interop-mode.json:mixed_array",
             "interop-mode.json:datetime_sentinel_value",
+            "interop-mode.json:proto_key_value",
+            "interop-mode.json:bom_strings_value",
             "decode-bounds.json:nested_fixarray_depth_32",
             "decode-bounds.json:nested_fixmap_depth_32",
             "decode-bounds.json:array16_256_backed_nils",
@@ -1038,7 +1047,8 @@
             "interop-mode.json:reader_float32",
             "interop-mode.json:reader_non_string_map_key",
             "interop-mode.json:reader_ext_type"
-          ]
+          ],
+          "gap": "The reader vectors hold one non-string map key, an integer that fits a fixint, and stock decoders reject other well-formed keys: @msgpack/msgpack 3.1.3 throws on a nil, bool, bin, array or map key and on an integer key written at 64-bit width, and msgpack-python with strict_map_key=False on an array or map key, so a reader built on either passes every vector without accepting every well-formed document."
         },
         "IOP-19": {
           "section": "Interop Value Format",
@@ -1093,6 +1103,7 @@
             "interop-mode.json:reject_empty_operation",
             "interop-mode.json:reject_non_ascii_digit_namespace",
             "interop-mode.json:reject_non_ascii_letter_operation",
+            "interop-mode.json:reject_fullwidth_operation",
             "interop-mode.json:reject_slash_namespace",
             "interop-mode.json:reject_space_operation",
             "interop-mode.json:reject_uppercase_operation",
@@ -1188,9 +1199,10 @@
           "vectors": [
             "decode-bounds.json:fixarray_short_by_one",
             "decode-bounds.json:fixmap_short_by_one",
-            "decode-bounds.json:incomplete_within_slot_budget"
+            "decode-bounds.json:incomplete_within_slot_budget",
+            "decode-bounds.json:incomplete_map_within_slot_budget"
           ],
-          "gap": "Any decoder rejects every mapped vector at end of input, so a verdict cannot show which check rejected it: only an SDK test that asserts its guard's own error (IOP-31) fails a guard that skips the completeness check, which incomplete_within_slot_budget is built for (it fits the slot budget and every header fits)."
+          "gap": "Any decoder rejects every mapped vector at end of input, so a verdict cannot show which check rejected it: only an SDK test that asserts its guard's own error (IOP-31) fails a guard that skips the completeness check, which the two incomplete_*within_slot_budget vectors are built for (each fits the slot budget, every header fits, and the map one passes a check that owes a pair as one item)."
         },
         "IOP-30": {
           "section": "Decode bounds",
@@ -1223,7 +1235,8 @@
             "decode-bounds.json:str32_overclaim",
             "decode-bounds.json:ext32_overclaim",
             "decode-bounds.json:fixarray_short_by_one",
-            "decode-bounds.json:incomplete_within_slot_budget"
+            "decode-bounds.json:incomplete_within_slot_budget",
+            "decode-bounds.json:incomplete_map_within_slot_budget"
           ],
           "gap": "Which entry points an SDK's test drives each vector through, and which error it asserts, is SDK test code no vector can check; sdk-feature-matrix.md's \"Test vectors in CI\" row records it per SDK."
         },
@@ -1248,7 +1261,8 @@
             "decode-bounds.json:str32_overclaim",
             "decode-bounds.json:ext32_overclaim",
             "decode-bounds.json:fixarray_short_by_one",
-            "decode-bounds.json:incomplete_within_slot_budget"
+            "decode-bounds.json:incomplete_within_slot_budget",
+            "decode-bounds.json:incomplete_map_within_slot_budget"
           ],
           "gap": "Which entry points an SDK's test drives each vector through, and which error it asserts, is SDK test code no vector can check; sdk-feature-matrix.md's \"Test vectors in CI\" row records it per SDK."
         },
@@ -1273,7 +1287,8 @@
             "decode-bounds.json:str32_overclaim",
             "decode-bounds.json:ext32_overclaim",
             "decode-bounds.json:fixarray_short_by_one",
-            "decode-bounds.json:incomplete_within_slot_budget"
+            "decode-bounds.json:incomplete_within_slot_budget",
+            "decode-bounds.json:incomplete_map_within_slot_budget"
           ],
           "gap": "These vectors reach only the decode entry points an SDK's test drives them through, while the rule binds every untrusted decode, invalidation events included; which entry points a test covers is SDK test code (IOP-31), recorded per SDK in sdk-feature-matrix.md's \"Test vectors in CI\" row."
         },
@@ -1313,6 +1328,7 @@
             "interop-mode.json:reject_empty_operation",
             "interop-mode.json:reject_non_ascii_digit_namespace",
             "interop-mode.json:reject_non_ascii_letter_operation",
+            "interop-mode.json:reject_fullwidth_operation",
             "interop-mode.json:reject_slash_namespace",
             "interop-mode.json:reject_space_operation",
             "interop-mode.json:reject_uppercase_operation",

@@ -771,14 +771,65 @@ KEY_VECTORS: list[dict] = [
         "args": [{"a_b": 1, "a-b": 2}],
     },
     {
-        "name": "int_beyond_float64_precision",
+        "name": "map_key_sort_shorter_key_later",
         "description": (
-            "2^53+1, -(2^53+1) and 2^63-1: integers inside int64 that a float64 cannot hold. A TypeScript "
-            "SDK that turns a BigInt inside int64 into a Number rounds each one and mints a different key"
+            "Code point order puts 'ab' before the shorter 'b'. A length-first sort (shorter keys first, as "
+            "canonical CBOR orders them, or by the encoded key with its header) puts 'b' first"
         ),
         "namespace": "t",
         "operation": "op",
-        "args": [{"$int": "9007199254740993"}, {"$int": "-9007199254740993"}, {"$int": "9223372036854775807"}],
+        "args": [{"b": 1, "ab": 2}],
+    },
+    {
+        "name": "map_key_sort_supplementary_shorter",
+        "description": (
+            "Code point order puts U+FF61 U+FF61 (6 UTF-8 bytes) before the shorter U+10000 (4 bytes). A "
+            "length-first sort and a UTF-16 code-unit sort both put U+10000 first"
+        ),
+        "namespace": "t",
+        "operation": "op",
+        "args": [{"\U00010000": 1, "\uff61\uff61": 2}],
+    },
+    {
+        "name": "map_key_proto",
+        "description": (
+            "'__proto__' is an ordinary string key. A JavaScript normalizer that copies keys by assignment "
+            "(out[k] = v) sets the object's prototype instead, drops the key and mints the key of an empty map"
+        ),
+        "namespace": "t",
+        "operation": "op",
+        "args": [{"__proto__": 1}],
+    },
+    {
+        "name": "set_in_map_normalized",
+        "description": (
+            "A set inside a map value holding a tz-aware datetime and an uppercase UUID: each element is "
+            "normalized before it is encoded and sorted (the int timestamp 0xce.. sorts before the str 0xd9..). "
+            "The valid twin of reject_naive_datetime_nested, so a set path that rejects every datetime fails it"
+        ),
+        "namespace": "t",
+        "operation": "op",
+        "args": [
+            {"when": {"$set": [{"$uuid": "550E8400-E29B-41D4-A716-446655440000"},
+                               {"$datetime": "2024-01-01T00:00:00+00:00"}]}}
+        ],
+    },
+    {
+        "name": "int_beyond_float64_precision",
+        "description": (
+            "2^53+1, -(2^53+1) and 2^63-1, then 2^53+1 again inside a list and a map value: integers inside "
+            "int64 that a float64 cannot hold. A TypeScript SDK that turns a BigInt inside int64 into a Number "
+            "rounds each one and mints a different key"
+        ),
+        "namespace": "t",
+        "operation": "op",
+        "args": [
+            {"$int": "9007199254740993"},
+            {"$int": "-9007199254740993"},
+            {"$int": "9223372036854775807"},
+            [{"$int": "9007199254740993"}],
+            {"id": {"$int": "9007199254740993"}},
+        ],
     },
     {
         "name": "small_int_as_bigint",
@@ -813,6 +864,23 @@ VALUE_VECTORS: list[dict] = [
         "name": "datetime_sentinel_value",
         "description": "Temporal VALUES use the wire-format.md sentinel map convention",
         "value": {"__datetime__": True, "value": "2024-01-01T12:30:45.123456+00:00"},
+    },
+    {
+        "name": "proto_key_value",
+        "description": (
+            "A map whose key is '__proto__', an ordinary string key. A JavaScript reader or writer that sets "
+            "keys by assignment changes the object's prototype instead and loses the entry"
+        ),
+        "value": {"__proto__": 1},
+    },
+    {
+        "name": "bom_strings_value",
+        "description": (
+            "Strings that start with U+FEFF, one short and one of 300 characters: a reader keeps the "
+            "character. A UTF-8 decoder left at its default (TextDecoder strips a leading BOM) drops it, "
+            "and some MessagePack decoders use one only for longer strings"
+        ),
+        "value": ["\ufeffbom", "\ufeff" + "x" * 299],
     },
 ]
 
@@ -965,6 +1033,13 @@ ERROR_VECTORS: list[dict] = [
         "operation": "caf\u00e9",
         "args": [],
         "error": "U+00E9 is not an ASCII letter (a lowercase or alphanumeric test admits it)",
+    },
+    {
+        "name": "reject_fullwidth_operation",
+        "namespace": "users",
+        "operation": "\uff47\uff45\uff54_user",
+        "args": [],
+        "error": "full-width letters are not ASCII: NFKC folds them to 'get_user', and a segment is never normalized",
     },
     {
         "name": "reject_slash_namespace",
@@ -1281,6 +1356,9 @@ def _reader_check(built: dict) -> None:
         else:
             assert canonical is None, f"{rv['name']} decodes to a value tagged JSON can carry: give it a value"
         assert canonical != raw, f"{rv['name']} is canonical, so it tests nothing value_vectors do not"
+    for vv in built["value_vectors"]:  # every canonical value reads back to the same bytes
+        raw = bytes.fromhex(vv["canonical_msgpack_hex"])
+        assert encode_canonical(decode_value(raw), collapse_floats=False) == raw, f"{vv['name']} does not read back"
     for rv in built["reader_reject_vectors"]:
         raw = bytes.fromhex(rv["msgpack_hex"])
         try:
@@ -1329,7 +1407,8 @@ def _self_check(built: dict) -> None:
     assert len(max_key["namespace"]) == len(max_key["operation"]) == 64 and len(max_key["expected_key"]) == 194, (
         "segment_max_length must hold two 64-character segments, the 194-character maximum key"
     )
-    for name in ("map_key_sort_case_across_letters", "map_key_sort_punctuation"):
+    for name in ("map_key_sort_case_across_letters", "map_key_sort_punctuation", "map_key_sort_shorter_key_later",
+                 "map_key_sort_supplementary_shorter"):
         (arg,) = by_name[name]["args"]
         assert list(arg) != sorted(arg), f"{name} must list its keys out of order, so a no-op sort fails it"
 

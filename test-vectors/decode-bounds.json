@@ -306,6 +306,22 @@
       "reject_reasons": [
         "incomplete"
       ]
+    },
+    {
+      "name": "incomplete_map_within_slot_budget",
+      "description": "Map twin of incomplete_within_slot_budget: a fixmap claiming 2 pairs that holds one pair (an empty map16 key and a nil value) and nothing else. 4 declared slots fit the budget of 4, and every header fits the bytes after it; a completeness check that counts a pair as one owed item finds it complete.",
+      "construction": {
+        "repeat_hex": "82",
+        "count": 1,
+        "suffix_hex": "de0000c0"
+      },
+      "input_hex": "82de0000c0",
+      "input_len": 5,
+      "nesting_depth": 2,
+      "declared_slots": 4,
+      "reject_reasons": [
+        "incomplete"
+      ]
     }
   ],
   "accept_vectors": [

@@ -135,6 +135,11 @@ def walk_table() -> list[str | None]:
     for hx, want in (("92dc0000", True), ("dc00", True), ("cf00", True), ("a3", True), ("c0c0", False), ("90", False)):
         got = dbr.walk(bytes.fromhex(hx))["truncated"]
         out.append(None if got == want else f"walk truncated {hx}: {got} != {want}")
+    # pair_as_one_complete: owing a map one item per pair, the root completes early.
+    for hx, want in (("82de0000c0", True), ("81a0c0", False), ("82a0c0", True), ("c0", True), ("9181a0c0", False),
+                     ("92dc0000", False)):
+        got = dbr.walk(bytes.fromhex(hx))["pair_as_one_complete"]
+        out.append(None if got == want else f"walk pair_as_one_complete {hx}: {got} != {want}")
     out.append(expect_raises("walk 0xc1", lambda: dbr.walk(b"\xc1"), "never used"))
     return out
 
@@ -237,8 +242,14 @@ def main() -> None:
                          ("nested_fixmap_depth_1025_complete", "complete map spine"),
                          ("fixmap_short_by_one", "map pair as one slot"),
                          ("ext32_overclaim", "does not count ext lengths"),
-                         ("incomplete_within_slot_budget", "incomplete within the slot budget")):
+                         ("incomplete_map_within_slot_budget", "pair-as-one-item completeness check")):
         results.append(expect_raises(f"coverage: drop {name}", with_recipes(without(name)), needle))
+    # Either incomplete vector alone keeps the plain completeness guard bound; only dropping both fires it.
+    no_incomplete = without("incomplete_within_slot_budget")
+    no_incomplete["reject_vectors"] = [v for v in no_incomplete["reject_vectors"]
+                                       if v["name"] != "incomplete_map_within_slot_budget"]
+    results.append(expect_raises("coverage: drop both incomplete vectors", with_recipes(no_incomplete),
+                                 "incomplete within the slot budget"))
     # bin32 and str32 are twins: each alone catches the str/bin model, so only dropping both fires.
     no_str_bin = without("bin32_overclaim")
     no_str_bin["reject_vectors"] = [v for v in no_str_bin["reject_vectors"] if v["name"] != "str32_overclaim"]
@@ -297,7 +308,7 @@ def main() -> None:
 
     # Negative controls: a near-miss model forced to always pass must be caught.
     real_walk = dbr.walk
-    for flag in FLAGS:
+    for flag in (*FLAGS, "pair_as_one_complete"):
         def forced(data: bytes, flag: str = flag) -> dict:
             return {**real_walk(data), flag: True}
         with patch.object(dbr, "walk", forced):
