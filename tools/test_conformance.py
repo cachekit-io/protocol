@@ -658,6 +658,17 @@ CASES: list[Case] = [
         0,
         OK,
     ),
+    # Within a paragraph a line break renders as a space, so the id after a NOT on the next line marks the MUST NOT.
+    (
+        "id after NOT on the line after MUST",
+        both(
+            append(SPEC, f"\n## Phrase\n\nReaders MUST\nNOT{marker('IOP-37')} crash.\n"),
+            new_requirement("IOP-37", "Phrase"),
+            report,
+        ),
+        0,
+        OK,
+    ),
     # Pipe-led lines with no delimiter row are a paragraph, so this span runs from the first line
     # to the third and the keyword is inside it, as GitHub renders it.
     (
