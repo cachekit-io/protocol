@@ -376,7 +376,7 @@
             "interop-mode.json:interop_encryption_roundtrip",
             "encryption.json"
           ],
-          "gap": "Only default_tenant_interop is a stored entry a secure preset can read with no tenant argument; the others are sealed under named tenants, so they reach a preset only where it takes one, and whether an SDK's test passes the hex string to its secure preset at all, which a preset that takes only raw bytes fails, rather than decoding it first for a lower-level API, is SDK test code no vector can check."
+          "gap": "Whether an SDK's test passes the hex string to its secure preset (which a preset that takes only raw bytes fails), rather than decoding it first for a lower-level API, is SDK test code no vector can check. Only default_tenant_interop reaches a preset that takes no tenant; the others are sealed under named tenants. Every key is all-digit hex with no zero byte, so a preset that rejects a key with hex letters in either case, or a 32-byte key with a leading zero byte, passes."
         },
         "PRE-17": {
           "section": "Master Key Input",
@@ -394,7 +394,7 @@
             "interop-mode.json:interop_encryption_roundtrip",
             "encryption.json"
           ],
-          "gap": "Every master key the vectors hold is exactly 32 bytes of well-formed, all-digit hex repeating one nonzero byte, so SDKs that disagree on a hex letter, its case, a leading zero byte or a key longer than 32 bytes all pass, and nothing pins whether every SDK treats a malformed string alike; whether each test feeds the string through its SDK's own preset path is SDK test code."
+          "gap": "As PRE-17: SDKs that disagree on a hex letter, its case, a leading zero byte, a key longer than 32 bytes or a malformed string each pass, and whether each test feeds the string through its SDK's own preset path is SDK test code."
         },
         "PRE-19": {
           "section": "Master Key Input",
@@ -402,7 +402,7 @@
           "vectors": [
             "encryption.json:default_tenant_interop"
           ],
-          "gap": "The vector is an entry any secure preset can read with no arguments, so it catches a preset that ignores CACHEKIT_MASTER_KEY only when an SDK's test supplies the key through that variable and passes no key argument, which is SDK test code no vector can check."
+          "gap": "The vector is an entry any secure preset can read with no key or tenant argument, so it catches a preset that ignores CACHEKIT_MASTER_KEY only when an SDK's test supplies the key through that variable and passes no key argument, which is SDK test code no vector can check."
         },
         "PRE-20": {
           "section": "Master Key Input",
@@ -421,7 +421,7 @@
             "interop-mode.json:interop_encryption_roundtrip",
             "encryption.json"
           ],
-          "gap": "Every vector's key is exactly 32 bytes, so a preset that refuses that length fails them only when an SDK's test drives them through it, and only default_tenant_interop is an entry a preset can read with no tenant argument; whether a test does so is SDK test code no vector can check."
+          "gap": "A preset that refuses a 32-byte key fails the vectors only when an SDK's test drives them through it, and only default_tenant_interop reaches a preset that takes no tenant; that is SDK test code no vector can check. Every key is all-digit hex with no zero byte, so a preset that rejects a key with hex letters in either case, or a 32-byte key with a leading zero byte, passes."
         },
         "PRE-23": {
           "section": "Master Key Input",
@@ -436,7 +436,11 @@
         "PRE-25": {
           "section": "Master Key Input",
           "binds": "sdk",
-          "gap": "Which entry points take a hex key is API surface no vector can observe, so nothing here catches a preset that takes the key only as bytes while a lower-level builder takes hex."
+          "vectors": [
+            "interop-mode.json:interop_encryption_roundtrip",
+            "encryption.json"
+          ],
+          "gap": "As PRE-16, when the test hands the hex string to the preset itself: a preset that takes the key only as bytes, while a lower-level builder takes hex, passes a test that drives the builder."
         },
         "PRE-26": {
           "section": "Master Key Input",
@@ -448,7 +452,7 @@
           "vectors": [
             "interop-mode.json:interop_encryption_roundtrip"
           ],
-          "gap": "The vector's key is exactly 32 bytes, so it catches a raw-bytes entry point that refuses that length; no vector holds a raw key of another length, so nothing here catches one that accepts the 64 ASCII bytes of a hex string, the case the spec names."
+          "gap": "The vector's key is exactly 32 bytes, so it catches a raw-bytes entry point that refuses that length only when an SDK's test drives the vector through that entry point; no vector holds a raw key of another length, so nothing here catches one that accepts the 64 ASCII bytes of a hex string, the case the spec names."
         },
         "PRE-27": {
           "section": "Master Key Input",
@@ -472,7 +476,7 @@
             "tools/encryption-verify.py:verify_sealed_vector",
             "tools/encryption-verify.py:verify_default_tenant"
           ],
-          "gap": "The vectors fail a reader whose key and AAD use different tenants, the default or a named one, only when its test drives the SDK's own key derivation and AAD builder from one resolved tenant; a test that compares the AAD with a vector's aad_hex, or hands the tenant to each step itself, passes a reader that derives under \"default\" and builds the AAD under \"\", and a writer whose two tenants differ shows only when another SDK reads what it wrote."
+          "gap": "The vectors fail a reader whose key and AAD use different tenants, the default or a named one, only when its test drives the SDK's own key derivation and AAD builder from one resolved tenant; a test that compares the AAD with a vector's aad_hex, or hands the tenant to each step itself, passes a reader that derives under \"default\" and builds the AAD under \"\". The writer side is PRE-29's gap."
         },
         "PRE-29": {
           "section": "Master Key Input",
@@ -488,25 +492,27 @@
         "PRE-30": {
           "section": "Encryption Activation",
           "binds": "sdk",
-          "gap": "Whether a client encrypts, and why, is decided at construction, which no vector reaches, so nothing here catches encryption switched on by anything other than the secure preset or an explicit option."
+          "gap": "Whether a client encrypts is decided at construction: a planted plaintext entry catches activation by CACHEKIT_MASTER_KEY's presence (PRE-34's case), but nothing here catches activation by any other implicit signal, which a test must know of to provoke."
         },
         "PRE-31": {
           "section": "Encryption Activation",
           "binds": "sdk",
           "vectors": [
             "interop-mode.json:interop_encryption_roundtrip",
-            "encryption.json:default_tenant_interop"
+            "encryption.json:default_tenant_interop",
+            "interop-mode.json:issue_example_object"
           ],
-          "gap": "The vectors are stored interop ciphertext a test can plant and read through a client built with an explicit encryption option, which a read path that ignores the option fails; which read paths a test drives is SDK test code, and no vector shows what a write path stores, since no SDK can seal with a fixed nonce."
+          "gap": "The ciphertext vectors are stored interop entries a test can plant and read through a client built with an explicit encryption option, which a read path that ignores the option fails. Only a test that plants issue_example_object under that client and expects a miss or an error catches a read path that also serves plaintext. Which read paths a test drives is SDK test code, and no vector shows what a write path stores, since no SDK can seal with a fixed nonce."
         },
         "PRE-32": {
           "section": "Encryption Activation",
           "binds": "sdk",
           "vectors": [
             "interop-mode.json:interop_encryption_roundtrip",
-            "encryption.json:default_tenant_interop"
+            "encryption.json:default_tenant_interop",
+            "interop-mode.json:issue_example_object"
           ],
-          "gap": "The vectors are stored interop ciphertext a test can plant and read, which a read path that ignores an accepted option fails; no vector shows what a write path stores (no SDK can seal with a fixed nonce), which read paths a test drives is SDK test code, and a build without the encryption capability is reached only by a test run in that build."
+          "gap": "As PRE-31, for an option that is accepted and then ignored on some path, or a read path that also serves plaintext; a build without the encryption capability is reached only by a test run in that build."
         },
         "PRE-33": {
           "section": "Encryption Activation",
@@ -519,7 +525,7 @@
           "vectors": [
             "interop-mode.json:issue_example_object"
           ],
-          "gap": "The vector's bytes are a plaintext interop entry a test can plant and read through minimal, production or io built with CACHEKIT_MASTER_KEY set, which a client that encrypts because the variable is present fails; only a test that sets the variable and plants the entry does so, which is SDK test code no vector can check."
+          "gap": "The vector's bytes are a plaintext interop entry a test can plant and read through minimal, production or io built with CACHEKIT_MASTER_KEY set, which a client that decrypts its reads because the variable is present fails. That is the read path only: a client that encrypts its writes because of the variable, and reads by trying to decrypt and falling back to plaintext, passes. The vector also gives the bytes a non-encrypting write must store, so only a test that writes through the client with the variable set and inspects the stored bytes catches it; a test that drives the encoder alone does not, and setting the variable at all is SDK test code no vector can check."
         },
         "PRE-35": {
           "section": "Encryption Activation",
@@ -530,7 +536,7 @@
           "vectors": [
             "interop-mode.json:issue_example_object"
           ],
-          "gap": "The vector's bytes are a plaintext interop entry a test can plant and read through a configure-from-environment constructor with CACHEKIT_MASTER_KEY set, which one that turns encryption on from the variable fails; only a test that sets the variable and plants the entry does so, which is SDK test code no vector can check."
+          "gap": "As PRE-34, for a configure-from-environment constructor with CACHEKIT_MASTER_KEY set."
         },
         "PRE-36": {
           "section": "Encryption Activation",
@@ -538,7 +544,7 @@
           "vectors": [
             "interop-mode.json:issue_example_object"
           ],
-          "gap": "The vector's bytes are a plaintext interop entry a test can plant and read through a client built with an explicit opt-out while CACHEKIT_MASTER_KEY is set, which a client that encrypts anyway fails; only a test that sets the variable and plants the entry does so, which is SDK test code no vector can check."
+          "gap": "As PRE-34, for a client built with an explicit opt-out while CACHEKIT_MASTER_KEY is set."
         },
         "PRE-37": {
           "section": "Encryption Activation",
@@ -620,7 +626,7 @@
           "vectors": [
             "interop-mode.json:issue_example_object"
           ],
-          "gap": "The vector's bytes are a plaintext interop entry a test can plant and read through io built with CACHEKIT_MASTER_KEY set, which an io that encrypts because the variable is present fails; only a test that sets the variable and plants the entry does so, which is SDK test code no vector can check."
+          "gap": "As PRE-34, for io built with CACHEKIT_MASTER_KEY set."
         },
         "PRE-48": {
           "section": "Explicit Configuration",
@@ -635,7 +641,7 @@
         "PRE-50": {
           "section": "Explicit Configuration",
           "binds": "sdk",
-          "gap": "No vector reaches construction, so nothing here catches a secure or io preset that constructs without its key and fails only on first use."
+          "gap": "As PRE-20 for secure and PRE-46 for io."
         },
         "PRE-51": {
           "section": "Explicit Configuration",
@@ -646,7 +652,7 @@
           "vectors": [
             "encryption.json:default_tenant_interop"
           ],
-          "gap": "The vector catches a secure companion that does not read CACHEKIT_MASTER_KEY only when a test supplies the key through that variable; no vector is an entry sealed under a previous key that a default-tenant client can read (the keyring vectors use the tenant keyring-conformance), so nothing here catches one that ignores CACHEKIT_PREVIOUS_MASTER_KEYS, and nothing observes an io companion that reads more than CACHEKIT_API_KEY."
+          "gap": "The vector catches a secure companion that does not read CACHEKIT_MASTER_KEY only when a test supplies the key through that variable. No vector is a default-tenant entry sealed under a previous key (the keyring vectors use the tenant keyring-conformance), so nothing here catches one that ignores CACHEKIT_PREVIOUS_MASTER_KEYS; and apart from CACHEKIT_MASTER_KEY, which PRE-53's planted entry reaches, nothing observes an io companion that reads a variable besides CACHEKIT_API_KEY."
         },
         "PRE-52": {
           "section": "Explicit Configuration",
@@ -654,7 +660,7 @@
           "sdks": [
             "cachekit-rs"
           ],
-          "gap": "The rule asks for a construction error, which no vector observes, and an entry sealed under a previous key fails to read the same way whether the companion refused the variable or ignored it."
+          "gap": "The rule asks for a construction error, which no vector observes; no vector is a default-tenant entry sealed under a previous key (see PRE-51)."
         },
         "PRE-53": {
           "section": "Explicit Configuration",
@@ -665,7 +671,7 @@
           "vectors": [
             "interop-mode.json:issue_example_object"
           ],
-          "gap": "The vector's bytes are a plaintext interop entry a test can plant and read through the io companion with CACHEKIT_MASTER_KEY set, which a companion that turns encryption on from it fails; a variable that would turn a secure companion's encryption off is reached only by a test that sets it, which is SDK test code no vector can check."
+          "gap": "As PRE-34, for the io companion with CACHEKIT_MASTER_KEY set; a variable that would turn a secure companion's encryption off is reached only by a test that sets it."
         },
         "PRE-54": {
           "section": "SDK-Local Presets",
