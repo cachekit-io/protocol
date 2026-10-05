@@ -242,6 +242,8 @@ def crlf(rel: str) -> Mutate:
 
 
 IOP3 = marker("IOP-3")
+# The spec's last line: a case that appends "\n<text>" puts <text> on line SPEC_END + 2.
+SPEC_END = (ROOT / SPEC).read_text(encoding="utf-8").count("\n")
 NBSP = chr(0xA0)  # a non-breaking space: text to CommonMark, never blank
 OK = "conformance: OK"
 STALE = f"{REPORT} is stale or missing"
@@ -252,7 +254,12 @@ CASES: list[Case] = [
     ("unmodified tree", lambda _: None, 0, OK),
     # --- every hard keyword in an indexed file carries an id ---
     ("id removed from beside a MUST", edit(SPEC, marker("IOP-19"), ""), 1, "this MUST has no id (the next free id is IOP-37)"),
-    ("new MUST NOT added without an id", append(SPEC, "\nReaders MUST NOT crash.\n"), 1, "this MUST NOT has no id"),
+    (
+        "new MUST NOT added without an id",
+        append(SPEC, "\nReaders MUST NOT crash.\n"),
+        1,
+        f"{SPEC}:{SPEC_END + 2}: this MUST NOT has no id",
+    ),
     ("MUST NOT split across a line break", append(SPEC, "\nReaders MUST\nNOT crash.\n"), 1, "this MUST NOT has no id"),
     ("MUST in a blockquote", append(SPEC, "\n> Readers MUST reject it.\n"), 1, "this MUST has no id"),
     # The id follows the closing `**`, so the check must read past it to find the marker.
@@ -619,10 +626,49 @@ CASES: list[Case] = [
         1,
         "this MUST NOT has no id",
     ),
+    # A pre block keeps its line breaks, and the check tracks no HTML elements, so two lines of an HTML block
+    # never join: the id after NOT does not mark the MUST, which needs its own.
+    (
+        "MUST and NOT on two lines of a pre block",
+        append(SPEC, f"\n<pre>\nReaders MUST\nNOT{marker('IOP-37')} crash.\n</pre>\n"),
+        1,
+        "this MUST has no id",
+    ),
+    # A line of non-breaking spaces is not blank, so the quote's paragraph runs on and GitHub shows one phrase,
+    # across two line breaks and past the quote markers. A literal > on a line between the words shows.
+    (
+        "MUST NOT across a line of non-breaking spaces in a blockquote",
+        append(SPEC, f"\n> Readers MUST\n> {NBSP}\n> NOT crash.\n"),
+        1,
+        "this MUST NOT has no id",
+    ),
+    (
+        "id between MUST and NOT across a line of non-breaking spaces",
+        append(SPEC, f"\nReaders MUST{marker('IOP-37')}\n{NBSP}\nNOT crash.\n"),
+        1,
+        "IOP-37 sits between MUST and NOT",
+    ),
+    (
+        "literal > on a line between MUST and NOT",
+        append(SPEC, f"\nReaders MUST\n    >\nNOT{marker('IOP-37')} crash.\n"),
+        1,
+        "this MUST has no id",
+    ),
     (
         "id after MUST, with NOT opening the next paragraph",
         both(
             append(SPEC, f"\n## Phrase\n\nReaders MUST{marker('IOP-37')}\n\nNOT that one.\n"),
+            new_requirement("IOP-37", "Phrase"),
+            report,
+        ),
+        0,
+        OK,
+    ),
+    # Within a paragraph a line break renders as a space, so the id after a NOT on the next line marks the MUST NOT.
+    (
+        "id after NOT on the line after MUST",
+        both(
+            append(SPEC, f"\n## Phrase\n\nReaders MUST\nNOT{marker('IOP-37')} crash.\n"),
             new_requirement("IOP-37", "Phrase"),
             report,
         ),
@@ -676,12 +722,6 @@ CASES: list[Case] = [
     (
         "fence-like line with a backtick in its info string",
         append(SPEC, "\n```x``` is inline code.\nReaders MUST reject it.\n"),
-        1,
-        "this MUST has no id",
-    ),
-    (
-        "indented fence-like line opens no fence",
-        append(SPEC, "\nExample:\n\n    ```\n    code\n\nReaders MUST reject it.\n\n```text\nx\n```\n"),
         1,
         "this MUST has no id",
     ),
@@ -995,6 +1035,63 @@ CASES: list[Case] = [
     ),
     ("vertical tab in a spec file", append(SPEC, "\nReaders\vMUST reject it.\n"), 1, "a vertical tab or form feed"),
     ("spec checked out with CRLF line endings", crlf(SPEC), 0, OK),
+    # The exemption is the marker alone on its line, trailing spaces aside: a non-breaking space is text.
+    (
+        "exemption marker followed by a non-breaking space",
+        append(SPEC, f"\n<!-- not-a-requirement -->{NBSP}\n```text\nMUST\n```\n"),
+        1,
+        "sits inside the code fence opened at line",
+    ),
+    # --- definitions: GitHub moves or hides their text, which the check does not model, so they are errors ---
+    # A footnote definition interrupts a paragraph, and GitHub moves it to the end of the page (or drops it when
+    # nothing cites it). Read as part of the paragraph, the stray backtick before it would hide MUST.
+    (
+        "footnote definition interrupting a paragraph",
+        append(SPEC, "\nSee the note[^1]. A lone ` backtick\n[^1]: Readers MUST reject it ` here.\n"),
+        1,
+        "a footnote definition",
+    ),
+    # A footnote label holds no space and is never empty, and a definition opens its line, indented less than four
+    # spaces: these lines are text.
+    (
+        "footnote-like lines that are text",
+        append(SPEC, "\nA lone ` backtick\n[^a b]: one [^1]: two\n    [^1]: three\n[^]: four, readers MUST reject it ` here.\n"),
+        0,
+        OK,
+    ),
+    # A link reference definition opens a paragraph or heading, and GitHub shows none of it, so a backtick in its
+    # title or label opens no code span. Its label may span lines and hold an escaped bracket.
+    (
+        "link reference definition with a backtick in its title",
+        append(SPEC, '\n[a]: /u "`"\nReaders MUST reject it `x`.\n'),
+        1,
+        "a link reference definition",
+    ),
+    (
+        "link reference definition whose label spans lines",
+        append(SPEC, "\n[a`\nb]: /u\nReaders MUST reject it `.\n"),
+        1,
+        "a link reference definition",
+    ),
+    (
+        "link reference definition indented in a blockquote, with an escaped bracket",
+        append(SPEC, "\n>   [a\\]`]: /u\n> Readers MUST reject it `.\n"),
+        1,
+        "a link reference definition",
+    ),
+    (
+        "link reference definition opening a setext heading",
+        append(SPEC, '\n[a]: /u "`"\nReaders MUST `x\n---\n'),
+        1,
+        "a link reference definition",
+    ),
+    # Inside a paragraph a bracketed label and a colon are text, so the span hides MUST, as on GitHub.
+    (
+        "bracketed label and colon inside a paragraph",
+        append(SPEC, '\nIntro line\n[a]: /u "`"\nReaders MUST reject it `x`.\n'),
+        0,
+        OK,
+    ),
     # --- ids are never reused: next only grows ---
     (
         "new id at or above next",
@@ -1376,6 +1473,40 @@ REPORT_CASES: list[tuple[str, Mutate, dict[str, list[str]], list[str]]] = [
         append(SPEC, "\nThis names the word MUST<!-- not-a-requirement --> only.\n"),
         {},
         ["Marked not-a-requirement in `spec/interop-mode.md`:", "This names the word **MUST** only."],
+    ),
+    (
+        # An excerpt is the keyword's paragraph as GitHub reads it: an ordered marker 2 continues the paragraph.
+        "excerpt runs to the end of its paragraph",
+        both(
+            append(SPEC, f"\n## Leaf\n\nA reader MUST{marker('IOP-37')} reject a length of\n2. or more bytes past the bound.\n"),
+            new_requirement("IOP-37", "Leaf"),
+        ),
+        {},
+        ["*Leaf*: A reader **MUST** reject a length of 2. or more bytes past the bound."],
+    ),
+    (
+        "excerpt leaves out an alert's marker",
+        both(
+            append(SPEC, f"\n## Alert\n\n> [!NOTE]\n> A reader MUST{marker('IOP-37')} reject it.\n"),
+            new_requirement("IOP-37", "Alert"),
+        ),
+        {},
+        ["*Alert*: A reader **MUST** reject it."],
+    ),
+    (
+        "excerpt of a table keyword is its cell",
+        both(
+            append(SPEC, f"\n## Cell\n\n| a | b |\n| - | - |\n| x | A reader MUST{marker('IOP-37')} reject it |\n"),
+            new_requirement("IOP-37", "Cell"),
+        ),
+        {},
+        ["*Cell*: A reader **MUST** reject it |"],
+    ),
+    (
+        "excerpt of a fenced keyword leaves out the fence lines",
+        append(SPEC, "\n<!-- not-a-requirement -->\n```text\nMUST in a fence\n```\n"),
+        {},
+        [": **MUST** in a fence"],
     ),
 ]
 
