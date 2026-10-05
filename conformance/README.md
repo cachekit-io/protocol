@@ -70,9 +70,9 @@ inline comment does not. Inline code may cross a line break inside a paragraph, 
 leave its paragraph or table cell. A table starts where a header row is followed by a
 delimiter row with the same number of cells (a one-column table needs no pipe), and its body
 runs to the first blank line or the first line that starts another block, such as a heading,
-a list item or an HTML block. An HTML block (a line that opens with a block tag such as `<div>` or
-`<details>`, up to the next blank line) is raw HTML: a keyword in it shows even between
-backticks, and only its comments are hidden.
+a list item or an HTML block. An HTML block (a line that opens with a block tag such as
+`<div>` or `<details>`, up to the next blank line) is raw HTML: a keyword in it shows even
+between backticks, and only its comments are hidden.
 
 A keyword inside a code block or an HTML comment block is an error, so that a block the
 checker misreads fails instead of hiding text:

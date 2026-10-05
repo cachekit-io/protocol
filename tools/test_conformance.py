@@ -819,6 +819,8 @@ CASES: list[Case] = [
     # A table takes the paragraph's last line as its header; the lines before it stay a paragraph.
     ("table header row leaves its paragraph", append(SPEC, "\nReaders ` MUST reject it\n| b ` | c |\n| - | - |\n"), 1, "this MUST has no id"),
     ("trailing pipe on one table row only", append(SPEC, "\n| a ` | b\n| - | - |\n| MUST ` | c\n"), 1, "this MUST has no id"),
+    # A delimiter row inside a blockquote the line opens cannot turn the paragraph before it into a table.
+    ("delimiter row inside a new blockquote", append(SPEC, "\n| a ` | MUST ` |\n> | - | - |\n"), 0, OK),
     # A closing fence is indented at most 3 spaces and holds nothing but the fence.
     ("fence closer indented four spaces", append(SPEC, "\n```text\ncode\n    ```\nMUST inside\n```\n"), 1, "sits inside the code fence opened at line"),
     ("fence closer with an info string", append(SPEC, "\n```text\n``` inner\nMUST inside\n```\n"), 1, "sits inside the code fence opened at line"),
