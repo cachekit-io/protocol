@@ -275,8 +275,8 @@ Marked not-a-requirement in `spec/intent-presets.md`:
 
 Marked not-a-requirement in `spec/saas-api.md`:
 
-- line 87: … token to a different route (CWE-22 — cachekit-py shipped exactly that until cachekit-py#279). **MUST**, MUST NOT, SHOULD and MAY are used as in RFC 2119.
-- line 87: … to a different route (CWE-22 — cachekit-py shipped exactly that until cachekit-py#279). MUST, **MUST NOT**, SHOULD and MAY are used as in RFC 2119.
+- line 88: … token to a different route (CWE-22 — cachekit-py shipped exactly that until cachekit-py#279). **MUST**, MUST NOT, SHOULD and MAY are used as in RFC 2119.
+- line 88: … to a different route (CWE-22 — cachekit-py shipped exactly that until cachekit-py#279). MUST, **MUST NOT**, SHOULD and MAY are used as in RFC 2119.
 
 ## spec/wire-format.md
 

@@ -20,6 +20,7 @@
 - [Cache-Key Path Encoding](#cache-key-path-encoding)
 - [Cache Endpoints](#cache-endpoints)
 - [Stale-While-Revalidate](#stale-while-revalidate)
+- [Consistency](#consistency)
 - [Lock Endpoints](#lock-endpoints)
 - [TTL Endpoints](#ttl-endpoints)
 - [Health Endpoint](#health-endpoint)
@@ -143,6 +144,8 @@ X-CacheKit-L1-Status: miss
 | :--- | :--- |
 | `X-CacheKit-Freshness` | `fresh` or `stale` — lowercase, case-sensitive tokens. Emitted on every `GET` `200 OK` by servers implementing [stale-while-revalidate](#stale-while-revalidate). For `GET` responses, SDKs MUST<sup id="api-18">API-18</sup> treat an absent header as `fresh` (pre-SWR servers do not emit it) and an unrecognized value as `stale` (revalidation is the conservative action); read behavior is specified in [Stale-While-Revalidate](#stale-while-revalidate). |
 | `X-CacheKit-Fresh-For` | Remaining freshness in whole seconds. Semantics: [Remaining Freshness](#remaining-freshness). |
+| `X-CacheKit-Store-Source` | Which part of the service answered the read. Informational; see [Consistency](#consistency). |
+| `Age` | Present when an edge copy answered the read: the copy's age in whole seconds. See [Consistency](#consistency). |
 
 [`test-vectors/freshness-headers.json`](../test-vectors/freshness-headers.json) pins how an SDK reads both headers as `value → result` rows; its `contract` field defines the row semantics and travels with every vendored copy.
 
@@ -364,6 +367,24 @@ An SDK that serves a stale hit and owns revalidation (the recompute is the wrapp
 - **Zero-knowledge:** no change to the wire format, ByteStorage envelope, encryption, or AAD; the value bytes remain opaque.
 - **`GET /v1/cache/{key}/ttl`:** the returned `ttl` is the remaining seconds until **eviction** (`evict_at`), or `null` for a no-expiry entry (mixed-reader caveat under [GET /v1/cache/{key}/ttl](#get-v1cachekeyttl)).
 - **Compatibility:** additive for servers — a pre-SWR server ignores `X-CacheKit-Stale-TTL` (the entry evicts at `fresh_until`, no freshness header is emitted) and SDK behavior is exactly pre-SWR. It is **not** transparent to mixed readers: enabling `stale_ttl` on a key affects every reader of that key, and a pre-SWR SDK will consume stale-window values as fresh (`200`, no header) where it previously saw a miss. Deployments MUST NOT<sup id="api-64">API-64</sup> enable `stale_ttl` on keys whose readers rely on hard TTL expiry (pre-SWR SDKs or security-sensitive consumers).
+
+---
+
+## Consistency
+
+<!-- This section is mirrored word for word on docs.cachekit.io's Consistency and Deletion page. Edit both together. -->
+
+This section is informative: it places no requirement on SDKs, and the [Remaining Freshness](#remaining-freshness) rules still govern an SDK's own local cache.
+
+Every namespace has an edge budget: 5 seconds by default. A read answered by the CacheKit service may come from a copy held at the edge location that received it, but only if that copy was read from or written to the store within the budget, and only while the entry is fresh. So by default such a read reflects every write and delete that completed more than 5 seconds earlier, from any region, but not necessarily a more recent one, even one made through the same edge location. When two writes to the same key race, either value may be returned for up to the budget after the later write completes. Keys without an `ns:{name}:` or `nsapi:{name}:` prefix belong to the `default` namespace: cachekit-py's `namespace=` option writes `ns:{name}:` keys, while keys that cachekit-ts and cachekit-rs generate, whatever their namespace setting, and interop-mode keys from any SDK belong to `default`.
+
+A budget of 0 sends every read to the store. A higher budget, up to 300 seconds, serves more reads from the nearest edge location, and such a read may return a value overwritten or deleted up to that many seconds earlier. An edge copy is never served past the TTL it was made under. Writes, deletes and TTL changes are not pushed between edge locations, so a `PATCH` of an entry's TTL reaches copies held at other locations only within the budget. A lowered budget usually applies within about 15 seconds, and within about 7 minutes under steady traffic; a request that reaches an edge location idle for a long time can still use the old budget for up to about 17 minutes, and reads keep the old budget's guarantee until the new one applies.
+
+After a project is deleted, its API keys stop working normally within seconds and usually within about 40 seconds. A request that races the delete can keep them working for up to about 7 minutes under steady traffic, and a request that reaches an edge location idle for a long time can still be accepted up to about 17 minutes after the delete. Reads and writes accepted in that time succeed. A later cleanup normally removes the data they write within an hour, but removal is not guaranteed; once the keys stop working, that data can no longer be read. An edge copy is served only to a key that still works, and a copy made before the project's data was wiped is served for at most the namespace's budget after the wipe, which normally follows the delete within seconds.
+
+Not-found results are held for at most 5 seconds or the namespace's budget, whichever is lower, and values read in their `stale_ttl` window are never held as edge copies. Every `GET` of a cache key that returns a value or a not-found says where it came from (`X-CacheKit-Store-Source`) and, for an edge copy, how old it is (`Age`).
+
+Your SDK's in-process L1 cache is separate and is not told about other processes' writes. When a response carries `X-CacheKit-Fresh-For`, SDKs that honour it (cachekit-py 0.19.0 and later, cachekit-rs 0.9.0 and later) keep a copy for at most that many seconds; otherwise the L1 copy keeps its own configured TTL. Edge age and L1 life add up.
 
 ---
 
