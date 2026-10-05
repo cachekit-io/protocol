@@ -1429,8 +1429,10 @@ def test_code_spans() -> bool:
     def shown(cell: str) -> str:
         """What GitHub shows for a cell that is one code span: \\| unescaped, then the fence and one pad space dropped."""
         text = re.sub(r"\\\|", "|", cell)
-        fence = re.match("`+", text)[0]
-        inner = text[len(fence) : -len(fence)]
+        fence = re.match("`+", text)
+        if fence is None:  # no code span at all: returned as is, so the comparison below reports a FAIL, not a crash
+            return text
+        inner = text[len(fence[0]) : -len(fence[0])]
         return inner[1:-1] if inner.startswith(" ") and inner.endswith(" ") and inner.strip(" ") else inner
 
     # name -> what the report must show for it
