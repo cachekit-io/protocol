@@ -44,9 +44,10 @@ each one through every entry point a requirement names or assert the error it re
 and `next` going down; it cannot tell an existing id moved onto a different rule.
 
 Fails closed: an unreadable or malformed file, a duplicate JSON key, a duplicate vector name,
-a tab in a spec file (indentation is read in spaces only), a code fence open at the end of the
-file, an HTML block that leaves a comment open, an index that lists no spec file, or a vendored
-sha256 that matches no revision of its fixture is an error, not a pass. A guard that silently checks
+a tab, vertical tab, form feed or lone carriage return in a spec file (only spaces and line
+feeds are modelled), a code fence open at the end of the file, an HTML block that leaves a
+comment open, an index that lists no spec file, or a vendored sha256 that matches no revision
+of its fixture is an error, not a pass. A guard that silently checks
 nothing is worse than no guard. Uses explicit failures rather than `assert`, so it cannot be
 defanged by `-O`.
 
@@ -211,9 +212,19 @@ def indentation(text: str) -> int:
     return len(text) - len(text.lstrip(" "))
 
 
+def is_blank(text: str) -> bool:
+    """Whether a line, past its containers, is blank: CommonMark counts only spaces and tabs (and a tab is an
+    error here), so a non-breaking space or a form feed is text, not blank."""
+    return not text.strip(" ")
+
+
 def cells(row: str) -> int:
-    """How many cells a table row has: one more than its unescaped pipes, outer pipes aside."""
-    row = row.strip()
+    """How many cells a table row has: one more than its unescaped pipes, outer pipes aside.
+
+    Only spaces around the row are trimmed: GitHub reads a non-breaking space after the last
+    pipe as one more cell.
+    """
+    row = row.strip(" ")
     row = row.removeprefix("|")
     row = row[:-1] if row.endswith("|") and not row.endswith("\\|") else row
     return len(PIPE.findall(row)) + 1
@@ -242,8 +253,9 @@ def layout(lines: list[str]) -> list[Leaf]:
     open table or starts a paragraph. Only a list item that holds text and, if ordered, starts
     at 1 interrupts a paragraph, and an HTML block of type 7 never does; a setext underline or
     a table's delimiter row acts only on a paragraph whose containers the line continues. Only
-    spaces are read as indentation, so a tab is an error, and so is a code fence still open at
-    the end of the file.
+    spaces are read as indentation and only spaces make a line blank, so a tab, a vertical tab,
+    a form feed and a lone carriage return are errors, and so is a code fence still open at the
+    end of the file.
     """
     stack: list[object] = []  # open containers, outermost first: QUOTE or an Item
     leaves: list[Leaf] = []
@@ -254,15 +266,25 @@ def layout(lines: list[str]) -> list[Leaf]:
                 f"line {i + 1}: a tab; indent with spaces (how far a tab indents depends on its column, "
                 "which this check does not model)"
             )
+        if "\r" in line:
+            raise Defect(
+                f"line {i + 1}: a carriage return that does not end a CRLF line; GitHub ends a line there, "
+                "and this check reads only LF and CRLF line endings"
+            )
+        if "\v" in line or "\f" in line:
+            raise Defect(
+                f"line {i + 1}: a vertical tab or form feed; remove it (GitHub reads it as a space in table rows "
+                "and HTML tags but as text elsewhere, which this check does not model)"
+            )
         pos = matched = 0
         for container in stack:
             rest = line[pos:]
             indent = indentation(rest)
             if container is QUOTE and indent < 4 and rest[indent:].startswith(">"):
                 pos += indent + 1 + rest[indent + 1 : indent + 2].count(" ")
-            elif isinstance(container, Item) and rest.strip() and indent >= container.width:
+            elif isinstance(container, Item) and not is_blank(rest) and indent >= container.width:
                 pos += container.width
-            elif isinstance(container, Item) and not rest.strip() and container.filled:
+            elif isinstance(container, Item) and is_blank(rest) and container.filled:
                 pos = len(line)
             else:
                 break
@@ -277,15 +299,15 @@ def layout(lines: list[str]) -> list[Leaf]:
                 if closes(rest, leaf.fence):
                     leaf = None
                 continue
-            if leaf.kind == "html" and (leaf.end or rest.strip()):
+            if leaf.kind == "html" and (leaf.end or not is_blank(rest)):
                 leaf.add(i, pos)
                 if leaf.end and leaf.end.search(rest):
                     leaf = None
                 continue
-            if leaf.kind == "indented code block" and (not rest.strip() or indentation(rest) >= 4):
+            if leaf.kind == "indented code block" and (is_blank(rest) or indentation(rest) >= 4):
                 leaf.add(i, pos)
                 continue
-        if not rest.strip():
+        if is_blank(rest):
             # A blank line closes any other leaf, and every container it did not continue.
             del stack[matched:]
             leaf = None
@@ -322,11 +344,11 @@ def layout(lines: list[str]) -> list[Leaf]:
             elif THEMATIC_BREAK.fullmatch(body):
                 kind = "break"
             elif item and not (
-                interrupts and (not body[item.end() :].strip() or (item.group(1) is not None and int(item.group(1)) != 1))
+                interrupts and (is_blank(body[item.end() :]) or (item.group(1) is not None and int(item.group(1)) != 1))
             ):
                 # The content starts 1 to 4 spaces past the marker; past more, or with none, 1 space past it.
                 gap = indentation(body[item.end() :])
-                width = item.end() + (gap if body[item.end() :].strip() and gap <= 4 else 1)
+                width = item.end() + (gap if not is_blank(body[item.end() :]) and gap <= 4 else 1)
                 container, step = Item(indent + width), indent + min(width, item.end() + gap)
             elif interrupts and not leaf.tried and DELIMITER_ROW.fullmatch(body):
                 if cells(lines[leaf.lines[-1]][leaf.starts[-1] :]) == cells(body):
@@ -368,7 +390,7 @@ def layout(lines: list[str]) -> list[Leaf]:
                 continue
         if not opened:
             del stack[matched:]
-        if not rest.strip():
+        if is_blank(rest):
             leaf = None  # a line of container markers alone opens no leaf
             continue
         if stack and isinstance(stack[-1], Item):

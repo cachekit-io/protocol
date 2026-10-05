@@ -86,9 +86,11 @@ checker misreads fails instead of hiding text:
   block, can be exempted, and an indented code block cannot be.
 - An HTML comment block can carry neither an id nor an exemption, so reword the keyword.
 
-Indentation is read in spaces, so a tab is an error. So is a code fence still open at the end
-of the file, or an HTML block that leaves a comment open: either would turn the rest of the
-file into code or hide it.
+Only spaces count as indentation or make a line blank (a line of non-breaking spaces is text).
+A tab, a vertical tab, a form feed or a carriage return that does not end a CRLF line is an
+error anywhere in a spec file, because GitHub reads each differently in different places. So
+is a code fence still open at the end of the file, or an HTML block that leaves a comment open:
+either would turn the rest of the file into code or hide it.
 
 ## The index
 

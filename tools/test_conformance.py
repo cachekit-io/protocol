@@ -231,7 +231,18 @@ def vendored_from_unmerged_commit(root: Path) -> None:
     sdks(lambda d: d["cachekit-rs"]["fixtures"].__setitem__("file-backend.json", hashlib.sha256(unmerged).hexdigest()))(root)
 
 
+def crlf(rel: str) -> Mutate:
+    """Convert a file to CRLF line endings, as a Windows checkout would."""
+
+    def mutate(root: Path) -> None:
+        path = root / rel
+        path.write_bytes(path.read_bytes().replace(b"\n", b"\r\n"))
+
+    return mutate
+
+
 IOP3 = marker("IOP-3")
+NBSP = chr(0xA0)  # a non-breaking space: text to CommonMark, never blank
 OK = "conformance: OK"
 STALE = f"{REPORT} is stale or missing"
 
@@ -942,6 +953,41 @@ CASES: list[Case] = [
         "unclosed HTML comment",
     ),
     ("tab in a spec file", append(SPEC, "\n\tReaders MUST reject it.\n"), 1, "a tab; indent with spaces"),
+    # Only spaces make a line blank, so a line of non-breaking spaces keeps an HTML block open and is a table row.
+    (
+        "line of non-breaking spaces in an HTML block",
+        append(SPEC, f"\n<div>\n{NBSP}\n`MUST`\n</div>\n"),
+        1,
+        "this MUST has no id",
+    ),
+    (
+        "line of non-breaking spaces in a table body",
+        append(SPEC, f"\n| a | b |\n| - | - |\n{NBSP}\n| `MUST | x` |\n"),
+        1,
+        "this MUST has no id",
+    ),
+    # A non-breaking space after a header row's last pipe is one more cell, so no table forms and the span hides MUST.
+    (
+        "non-breaking space after a header row's last pipe",
+        append(SPEC, f"\n| a ` | b |{NBSP}\n| - | - |\n| MUST ` | c |\n"),
+        0,
+        OK,
+    ),
+    # GitHub ends a line at a lone carriage return, and reads a form feed or vertical tab as space only in some places.
+    (
+        "lone carriage return",
+        append(SPEC, "\nIntro text\r<div>\r`x MUST y`\n"),
+        1,
+        "a carriage return that does not end a CRLF line",
+    ),
+    (
+        "form feed after a delimiter row",
+        append(SPEC, "\n| a ` | b |\n| - | - |\f\n| MUST ` | c |\n"),
+        1,
+        "a vertical tab or form feed",
+    ),
+    ("vertical tab in a spec file", append(SPEC, "\nReaders\vMUST reject it.\n"), 1, "a vertical tab or form feed"),
+    ("spec checked out with CRLF line endings", crlf(SPEC), 0, OK),
     # --- ids are never reused: next only grows ---
     (
         "new id at or above next",
