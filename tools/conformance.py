@@ -26,13 +26,14 @@ Keywords are found the way GitHub renders them. The file is read into blocks by 
 parsing strategy as GitHub's cmark-gfm applies it: blockquotes and list items, lazy
 continuation lines, HTML blocks, and GFM tables. Inline code and inline comments are skipped
 within one paragraph, heading or table cell, so a code span may cross a line break but never
-a block or cell boundary. MUST NOT is one keyword only where both words sit in one paragraph
-or heading with nothing a reader sees between them, so an id after a NOT in another block, or
-past a literal >, never marks the MUST before it. An HTML block is raw HTML, so only its
-comments are hidden. A
-keyword inside a code block or an HTML comment block is an error, unless the block is a fence
-that opens at column 0, outside every container, with <!-- not-a-requirement --> on the line
-before it: if a block were misread, an error fails closed where skipping would hide text.
+a block or cell boundary. MUST NOT is one keyword only where a reader sees one phrase: both
+words on one line, or across a line break inside one paragraph or heading, with nothing a
+reader sees between them. So an id after a NOT in another block, or past a literal >, never
+marks the MUST before it. An HTML block is raw HTML, so only its comments are hidden. A
+keyword inside a code block, or inside an HTML comment block that spans lines, is an error
+(a comment on one line is hidden like an inline one), unless the block is a fence that opens
+at column 0, outside every container, with <!-- not-a-requirement --> on the line before it:
+if a block were misread, an error fails closed where skipping would hide text.
 
 **What this does NOT catch.** It checks that a mapping exists and that it names real vectors
 and tests. It cannot check that they exercise the requirement: whether a plausible wrong
@@ -494,8 +495,9 @@ def scan(text: str) -> Spec:
     def one_phrase(gap_start: int, gap_end: int) -> bool:
         """Whether the text between MUST and a NOT after it renders as space, so the two read as one MUST NOT.
 
-        Both words must sit in one paragraph or heading, and a > between them must be one of the
-        container markers that open a continuation line; anywhere else a renderer shows it.
+        On one line the words join in any block unless a > parts them. Across lines, both words must
+        sit in one paragraph or heading, and a > between them must be one of the container markers
+        that open a continuation line; anywhere else a renderer shows it.
         """
         first = bisect_right(line_starts, gap_start) - 1
         last = bisect_right(line_starts, gap_end) - 1
@@ -950,8 +952,10 @@ def js_code(source: str) -> str:
     """JavaScript source with its comments, strings, template literals and regular expressions blanked.
 
     A `/` opens a regular expression after an operator, an opening bracket, a keyword such as
-    `return`, or at the start; after an operand it divides. A misread only ever blanks more
-    code: it can hide a real declaration, never reveal one written in a comment.
+    `return`, or at the start; after an operand it divides. This is a heuristic, not a parser:
+    it does not track `${…}` substitutions, and it can read a regular expression as division
+    (after `)`, say). A backtick met in the wrong state flips what counts as code, so contrived
+    source can reveal a declaration written in a comment or a template literal.
     """
     out: list[str] = []
     operand = False  # the last token was an operand, so a `/` divides

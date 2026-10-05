@@ -33,10 +33,13 @@ same text in lowercase. When the keyword is bold, the id goes after the closing 
 | [`spec/wire-format.md`](../spec/wire-format.md) | `WIRE` |
 
 Each keyword occurrence is one requirement. A sentence with two keywords carries two ids.
-MUST NOT is one keyword, with its id after NOT, only where a reader sees one phrase: both
-words in one paragraph or heading, parted by nothing but spaces, a line break or emphasis. A
-MUST whose NOT starts another block, or sits past a literal `>`, stands alone and carries its
-own id. A keyword that introduces a list ("An SDK implementation of interop mode MUST:") carries one id,
+MUST NOT is one keyword, with its id after NOT, only where a reader sees one phrase: the two
+words parted only by white space, after any emphasis that closes on MUST (`**MUST** NOT`).
+On one line that holds in any block, a table row included. Across a line break, both words
+must sit in one paragraph or heading, and a `>` between them must be one of the quote markers
+that continue it. A MUST whose NOT starts another block, sits past a literal `>`, or opens
+emphasis of its own (`MUST **NOT**`) stands alone and carries its own id. A keyword that
+introduces a list ("An SDK implementation of interop mode MUST:") carries one id,
 and a keyword inside one of the list's items carries its own; the lead-in's *gap* records only
 what no item's id owns. A capitalised keyword used as a word rather than as a requirement
 carries `<!-- not-a-requirement -->` in place of an id. Lowercase "must", SHOULD and MAY carry
@@ -77,14 +80,15 @@ a list item or an HTML block. An HTML block (a line that opens with a block tag 
 `<div>` or `<details>`, up to the next blank line) is raw HTML: a keyword in it shows even
 between backticks, and only its comments are hidden.
 
-A keyword inside a code block or an HTML comment block is an error, so that a block the
-checker misreads fails instead of hiding text:
+A keyword inside a code block, or inside an HTML comment block that spans lines, is an error,
+so that a block the checker misreads fails instead of hiding text:
 
 - A code block cannot carry an id. If a fence's keywords state no requirement, put
   `<!-- not-a-requirement -->` on the line right before it; if they do, state the requirement
   in prose. Only a fence that opens at column 0, outside any blockquote, list item or HTML
   block, can be exempted, and an indented code block cannot be.
-- An HTML comment block can carry neither an id nor an exemption, so reword the keyword.
+- An HTML comment block that spans lines can carry neither an id nor an exemption, so reword
+  the keyword. A comment on one line is hidden like an inline comment, as on GitHub.
 
 Only spaces count as indentation or make a line blank (a line of non-breaking spaces is text).
 A tab, a vertical tab, a form feed or a carriage return that does not end a CRLF line is an
