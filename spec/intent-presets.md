@@ -503,6 +503,13 @@ door.
 environment variable, not Rust's type preferences; a raw-bytes API remains fine as long
 as it is not the only door.
 
-**No test vectors.** Nothing here is byte-level. The
-[Canonical Preset Table](#canonical-preset-table) is the fixture; SDK test suites assert
-the four TTLs and the postures directly.
+**Vectors only for the key bytes.** Master Key Input's hex and length rules are byte-level
+(one string, one key, in every SDK), so they have vectors in
+[`test-vectors/encryption.json`](../test-vectors/encryption.json): `default_tenant` for
+rule 5, and `master_key_input` for rules 1, 3 and 4. The rest of this specification is
+behaviour each SDK expresses through its own constructors, with no bytes to compare, so it
+has no fixture: the [Canonical Preset Table](#canonical-preset-table) is the table, and SDK
+test suites assert the four TTLs, the postures and the construction rules directly. A shared
+table of construction cases was rejected: each SDK would still need an adapter from abstract
+arguments to its own constructors, which is where such a test's logic and its mistakes would
+live, and a row reaches construction only, not what a client then stores.
