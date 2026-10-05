@@ -1148,6 +1148,13 @@ CASES: list[Case] = [
         1,
         "this MUST has no id",
     ),
+    # A comment block ends on its --> line, so the paragraph after it is Markdown again and its inline code is hidden.
+    (
+        "inline code after a comment block",
+        append(SPEC, "\n<!--\nnote\n-->\n\nThe keyword `MUST` is written in capitals.\n"),
+        0,
+        OK,
+    ),
     # --- ids are never reused: next only grows ---
     (
         "new id at or above next",
