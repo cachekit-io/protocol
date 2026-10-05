@@ -95,16 +95,17 @@ block (a line that opens with a block tag such as `<div>` or `<details>`, up to 
 line) is raw HTML: a keyword in it shows even between backticks, and only its comments are
 hidden.
 
-A keyword inside a code block, or inside an HTML comment block that spans lines, is an error,
-so that a block the checker misreads fails instead of hiding text:
+A keyword inside a code block, or inside an HTML comment that spans lines of an HTML block, is
+an error, so that a block the checker misreads fails instead of hiding text:
 
 - A code block cannot carry an id. If a fence's keywords state no requirement, put
   `<!-- not-a-requirement -->` alone on the line right before it; if they do, state the
   requirement in prose. Only a fence that opens at column 0, outside any blockquote, list item
   or HTML block, can be exempted, and an indented code block cannot be.
-- An HTML comment block that spans lines can carry neither an id nor an exemption, so reword
-  the keyword. A comment on one line is hidden like an inline comment, as on GitHub. Either
-  ends at its first `-->` or `--!>`, and text after that is read like any other HTML.
+- An HTML comment that spans lines, wherever it sits in an HTML block, can carry neither an id
+  nor an exemption, so reword the keyword. A comment on one line is hidden like an inline
+  comment, as on GitHub. Either ends at its first `-->` or `--!>`, and text after that is read
+  like any other HTML.
 
 Only spaces count as indentation or make a line blank (a line of non-breaking spaces is text).
 A tab, a vertical tab, a form feed or a carriage return that does not end a CRLF line is an

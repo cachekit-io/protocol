@@ -259,7 +259,6 @@ class Leaf:
     starts: list[int] = field(default_factory=list)  # where each one's text starts, past its containers' prefixes
     fence: str = ""  # a code fence's opening run of backticks or tildes
     end: re.Pattern[str] | None = None  # what ends an HTML block of types 1 to 5
-    comment: bool = False  # an HTML block that opens with <!--
     tried: bool = False  # a paragraph that a delimiter row failed to make a table; cmark-gfm tries once
 
     def add(self, line: int, start: int) -> None:
@@ -470,7 +469,6 @@ def layout(lines: list[str]) -> list[Leaf]:
             leaf.fence = FENCE_OPEN.match(rest.lstrip(" ")).group(0)
         elif kind == "html":
             leaf.end = HTML_BLOCKS[html - 1][1] if html <= len(HTML_BLOCKS) else None
-            leaf.comment = html == 2
             if leaf.end and leaf.end.search(rest):
                 leaf = None
         elif kind in ("heading", "break"):
@@ -599,13 +597,11 @@ def mask(text: str) -> Masked:
                 raise Defect(f"line {first + 1}: unclosed HTML comment (the rest of the file would be hidden)")
             for i, part in zip(leaf.lines, raw.split("\n")):
                 masked[i] = part
-            if leaf.comment:
-                # A comment block: the comment the block opens with, if it spans lines, up to where the sanitizer
-                # ends it. That may be before the block's last line, the first to hold -->, or there may be none.
-                opened = at[first] + lines[first].index("<!--")
-                comment = COMMENT.match(text, opened, at[last] + len(lines[last]))
+            # Each comment that spans lines, up to where the sanitizer ends it, is a region a keyword cannot sit in.
+            for comment in COMMENT.finditer(text, at[first], at[last] + len(lines[last])):
                 if "\n" in comment.group(0):
-                    found.append(Block("HTML comment", opened, comment.end(), first + 1, False))
+                    opened = bisect_right(at, comment.start())  # the line it opens on, counted from 1
+                    found.append(Block("HTML comment", comment.start(), comment.end(), opened, False))
     return Masked("\n".join(masked), found, headings, at, leaf_of_line)
 
 

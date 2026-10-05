@@ -1155,6 +1155,27 @@ CASES: list[Case] = [
         0,
         OK,
     ),
+    # Every comment that spans lines of an HTML block is a region a keyword cannot sit in, not just the one a comment
+    # block opens with: here the block runs on past --!> to its --> line, and a second comment opens inside it.
+    (
+        "second comment in a comment block",
+        append(SPEC, "\nIntro.\n\n<!-- a --!>\n<!-- x\nReaders MUST reject it.\n-->\n"),
+        1,
+        f"sits inside the HTML comment opened at line {SPEC_END + 5}",
+    ),
+    (
+        "comment spanning lines in an HTML block",
+        append(SPEC, "\n<div>\n<!-- x\nReaders MUST reject it.\n-->\n</div>\n"),
+        1,
+        f"sits inside the HTML comment opened at line {SPEC_END + 3}",
+    ),
+    # Only an HTML block's own comments are regions: a comment spanning lines of a paragraph between two is inline.
+    (
+        "inline comment spanning lines between HTML blocks",
+        append(SPEC, "\n<div>\n</div>\n\nA note <!-- that\nMUST stay --> hidden.\n\n<div>\n</div>\n"),
+        0,
+        OK,
+    ),
     # --- ids are never reused: next only grows ---
     (
         "new id at or above next",
