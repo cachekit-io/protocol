@@ -219,7 +219,8 @@
           "tests": [
             "tools/encryption-verify.py:verify_sealed_vector",
             "tools/interop-crosscheck.mjs:aadV3"
-          ]
+          ],
+          "gap": "The vectors pin the bytes a renderer emits for a JSON boolean, not the AAD an SDK's write path emits: an SDK whose writer spells the token itself, in stored metadata or on a second code path, and whose reader rebuilds the AAD from that spelling round-trips with itself and passes them through whichever renderer its test drives; no SDK can seal with a fixed nonce, so only a test that captures the AAD its write path emits catches it."
         },
         "ENC-7": {
           "section": "Key Rotation (Keyring)",
