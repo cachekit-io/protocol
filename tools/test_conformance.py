@@ -1657,6 +1657,7 @@ INLINE_LINES: list[tuple[str, bool]] = [
     ("a <`@-a.b> MUST `y`", False),
     ("a <`@a_b.c> MUST `y`", False),
     ("a <!--@x.y> MUST --> b", True),
+    ("a <!--`@x.y> ` MUST `", False),
     # comments: to the renderer, <!--> and <!---> are whole and ---> closes none, which decides the backticks a comment
     # holds; GitHub's sanitizer then shows what follows a comment's first --> or --!> past its <!--
     ("a <!--> MUST -->", True),
