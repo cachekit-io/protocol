@@ -12,6 +12,7 @@ Run: python3 tools/test_conformance.py     (exit 1 on any failure)
 
 from __future__ import annotations
 
+import importlib.util
 import json
 import os
 import re
@@ -1122,12 +1123,22 @@ CASES: list[Case] = [
     ),
     # GitHub opens no code span with a run of more than 80 backticks.
     ("runs of 81 backticks", append(SPEC, f"\na {'`' * 81} MUST {'`' * 81} b\n"), 1, "this MUST has no id"),
+    # Once a run has found no closer, GitHub's renderer remembers where it last saw a run of each length; the span
+    # around c moves that record back, so the run before MUST is taken to have no closer and shows as text.
+    (
+        "code span after a run that closes nothing and a span",
+        append(SPEC, "\na `` b `c` d `MUST` e\n"),
+        1,
+        "this MUST has no id",
+    ),
     # <!--> and <!---> are whole comments, and a comment's text may not end in a dash: a ---> closes nothing.
     ("comment closed by <!-->", append(SPEC, "\na <!--> MUST -->\n"), 1, "this MUST has no id"),
     ("comment closed by <!--->", append(SPEC, "\na <!---> MUST -->\n"), 1, "this MUST has no id"),
     ("comment text ending in a dash", append(SPEC, "\na <!-- MUST ---> b\n"), 1, "this MUST has no id"),
     ("comment closed after ---> by a later -->", append(SPEC, "\na <!-- MUST ---> b --> c\n"), 0, OK),
     ("comment ends at its first -->", append(SPEC, "\na <!-- x --> MUST --> b\n"), 1, "this MUST has no id"),
+    # The renderer's comment runs on past --->, but GitHub's HTML sanitizer ends it there and shows the rest.
+    ("comment the sanitizer ends at --->", append(SPEC, "\na <!-- x ---> MUST --> b\n"), 1, "this MUST has no id"),
     ("backtick in a processing instruction", append(SPEC, "\na <?x `?> MUST `y`\n"), 1, "this MUST has no id"),
     # In ??> the first ? pairs with the second, so the instruction runs on to a later ?>.
     ("processing instruction closed past ??>", append(SPEC, "\na <?a??> ` MUST ` ?> b\n"), 1, "this MUST has no id"),
@@ -1619,6 +1630,99 @@ def test_strip(tmp: Path) -> bool:
     return bool(good)
 
 
+B80 = "`" * 80
+# Documents of one paragraph each, and whether GitHub shows the MUST in it: the edges of the inline grammar that no
+# case above reaches, each checked against GitHub's renderer.
+INLINE_LINES: list[tuple[str, bool]] = [
+    # tags: space may hold a line break; names, attribute names and unquoted values have their own characters
+    ("a <span title\n= '`'>MUST</span> `y`", True),
+    ("a <span title =\n'`'>MUST</span> `y`", True),
+    ("a <br title='`'\n/> MUST `y`", True),
+    ("a <span title='\n`'>MUST</span> `x`", True),
+    ('a <span title="\n`">MUST</span> `x`', True),
+    ("a <1a title='`'> MUST `y`", False),
+    ("a <x-1 title='`'>MUST</x-1> `y`", True),
+    ("a <span 1a='`'> MUST `y`", False),
+    ("a <span _:a.b-c='`'>MUST</span> `y`", True),
+    ("a <span a b='`'> MUST `y`", True),
+    ("a <br title='`'/> MUST `y`", True),
+    ("a <span a=b=c d='`'> MUST `y`", False),
+    ("a <span a=b'c d='`'> MUST `y`", False),
+    ("a <span a=b<1 d='`'> MUST `y`", False),
+    ("a <span a=b>c d='`'> MUST `y`", False),
+    # code spans: a run of 80 still opens one; after a run that closes nothing, a run opens one only if the renderer's
+    # record of where it last saw a run of that length lies past it
+    (f"a {B80} MUST {B80} b", False),
+    ("a ` b ``c`` d ``MUST`` e", True),
+    ("a `` b `c` d ``` e `MUST` f", True),
+    ("a `c` d `MUST` e ``", False),
+    ("a `` b `c` d ```MUST``` e", False),
+    ("a `` b `MUST` c", False),
+    # autolinks: a scheme of 2 to 32 characters, then no space, < or >; email domain labels of 1 to 63 characters
+    ("a <a:`> MUST `y`", False),
+    ("a <1a:`> MUST `y`", False),
+    ("a <a+b.c-d:`> MUST `y`", True),
+    ("a <" + "a" * 32 + ":`> MUST `y`", True),
+    ("a <" + "a" * 33 + ":`> MUST `y`", False),
+    ("a <http://x `y> MUST `z`", False),
+    ("a <http://x>`>MUST `y`", False),
+    ("a <http://x<`> MUST `y`", False),
+    ("a <b`c@" + "d" * 63 + ".e> MUST `y`", True),
+    ("a <b`c@" + "d" * 64 + ".e> MUST `y`", False),
+    ("a <b`c@d." + "e" * 64 + "> MUST `y`", False),
+    ("a <`@a-.b> MUST `y`", False),
+    ("a <`@a.b-> MUST `y`", False),
+    ("a <`@-a.b> MUST `y`", False),
+    ("a <`@a_b.c> MUST `y`", False),
+    # comments, instructions, CDATA sections and declarations: each ends at the first end its grammar allows, and
+    # GitHub's sanitizer shows what follows a comment's first --> or --!> past its <!--
+    ("a <!-- MUST-x --> b", False),
+    ("a <!-- x --!> MUST --> b", True),
+    ("a <!-- x ----> MUST --> b", True),
+    ("a <!-- MUST --!--> b", False),
+    ("a <!-- x ---> <b>MUST</b> --> b", True),
+    ("a <!--!> MUST --> b", False),
+    ("a <!----!> MUST --> b", True),
+    ("a <?a?b`?> MUST `y`", True),
+    ("a <?x>`?> MUST `y`", True),
+    ("a <?x?> ` MUST ` ?> b", False),
+    ("a <![CDATA[ a]b ` ]]> MUST `y`", True),
+    ("a <![CDATA[ a]]b ` ]]> MUST `y`", True),
+    ("a <![CDATA[ x ]]> ` MUST ` ]]> b", False),
+    ("a <!X`> MUST `y`", False),
+    ("a <!X\n`> MUST `y`", True),
+    ("a <!X1 a`> MUST `y`", False),
+    ("a <!X a> ` MUST ` b>", False),
+    # after a <!-- that closes no comment: no CDATA, but code spans, escapes, autolinks, tags and instructions as before
+    ("a <!-- x <![CDATA[ ` ]]> MUST `y`", False),
+    ("a <!-- x ---> ` MUST `", False),
+    ("a <!-- x ---> \\` MUST `y`", True),
+    ("a <!-- x ---> <http://`> MUST `y`", True),
+    ("a <!-- x ---> <!--`@x.y> MUST `y`", True),
+    ("a <!-- x ---> <b c='`'> MUST `y`", True),
+    ("a <!-- x ---> <?x `?> MUST `y`", True),
+]
+
+
+def test_inline() -> bool:
+    """The checker shows the MUST in each of INLINE_LINES exactly where GitHub does. It loads CHECKER in process."""
+    spec = importlib.util.spec_from_file_location("checker_under_test", CHECKER)
+    checker = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = checker  # its dataclasses look their module up while it loads
+    spec.loader.exec_module(checker)
+
+    def shows(text: str) -> bool | None:
+        try:
+            return bool(checker.scan(text + "\n").keywords)
+        except checker.Defect:
+            return None
+
+    wrong = [text for text, shown in INLINE_LINES if shows(text) is not shown]
+    print(f"  {'ok  ' if not wrong else 'FAIL'} inline markup read as GitHub reads it in {len(INLINE_LINES)} lines", end="")
+    print(f": {wrong}" if wrong else "")
+    return not wrong
+
+
 def test_code_spans() -> bool:
     """The report shows each vector name exactly: every branch of code(), read back the way a GFM table cell reads it."""
     sys.path.insert(0, str(HERE))
@@ -1680,6 +1784,7 @@ def main() -> int:
         results += [run_report_case(Path(tmp), n, case) for n, case in enumerate(REPORT_CASES)]
         results.append(test_optimized())
         results.append(test_strip(Path(tmp)))
+        results.append(test_inline())
         results.append(test_code_spans())
     failed = results.count(False)
     if failed:

@@ -77,7 +77,7 @@ from __future__ import annotations
 import argparse
 import ast
 import hashlib
-from bisect import bisect_right
+from bisect import bisect_left, bisect_right
 import json
 import re
 import subprocess
@@ -164,11 +164,9 @@ PIPE = re.compile(r"(?<!\\)\|")
 # its whole extent from where it opens: a backtick inside a tag, an autolink, a comment or an escape opens no code
 # span, and a < inside a code span opens nothing. Each unclosed_ kind is an opener that finds no end, which is text.
 INLINE = (
-    # A run of up to 80 backticks opens a code span, which the next run of the same length closes.
-    ("code", r"(?P<run>`{1,80})(?!`).+?(?<!`)(?P=run)(?!`)"),
-    ("backticks", r"`+"),  # a run that closes no code span, or one too long to open one
+    ("ticks", r"`+"),  # a run of backticks, which may open a code span (inline() looks for its closer)
     ("escape", r"\\[!-/:-@\[-`{-~]"),  # ASCII punctuation after a backslash
-    ("autolink", r"<[A-Za-z][A-Za-z0-9.+-]{1,31}:[^\x01-\x20<>]*>"),  # cmark-gfm reads NUL as U+FFFD
+    ("autolink", r"<[A-Za-z][A-Za-z0-9.+-]{1,31}:[^\x00-\x20<>]*>"),
     (
         "email",
         r"<[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?"
@@ -193,6 +191,10 @@ UNCLOSED = {
     "unclosed_declaration": {"declaration", "unclosed_declaration"},
     "unclosed_instruction": {"instruction", "unclosed_instruction"},
 }
+TICKS = re.compile(r"`+")
+MAX_TICKS = 80  # cmark-gfm opens no code span with a longer run
+# Where GitHub's HTML sanitizer, reading a comment again as HTML, ends it: the first --> or --!> past its <!--.
+HTML_COMMENT_END = re.compile(r"--!?>")
 # An HTML block is raw HTML: a renderer hides its comments and nothing else.
 COMMENT = re.compile(r"<!--.*?-->", re.DOTALL)
 # The first line of a GitHub alert, which GitHub shows as the alert's title instead.
@@ -491,8 +493,13 @@ def layout(lines: list[str]) -> list[Leaf]:
     return leaves
 
 
+def spaces(text: str) -> str:
+    """`text` blanked but for its line breaks, so every offset in it still maps back."""
+    return re.sub(r"[^\n]", " ", text)
+
+
 def blank(match: re.Match[str]) -> str:
-    return re.sub(r"[^\n]", " ", match.group(0))
+    return spaces(match.group(0))
 
 
 @cache
@@ -504,17 +511,46 @@ def inline_pattern(skip: frozenset[str]) -> re.Pattern[str]:
 def inline(text: str) -> str:
     """One paragraph, heading or table cell with its code spans and comments blanked, read as GitHub reads it.
 
-    Nothing else is blanked: a keyword inside a tag or an instruction, which GitHub does not show, is
-    still read, which fails closed. An unclosed opener stops the kinds UNCLOSED names being tried in the
-    rest of `text`.
+    Two quirks of GitHub's renderer are kept, because each decides what a reader sees. A run of backticks
+    looks for its closer as cmark-gfm's scan_to_closing_backticks does: once one scan has run to the end
+    unclosed, a run opens no code span if the scans last saw a run of its length before it, even where a
+    closer follows. And GitHub's HTML sanitizer ends a comment at its first --> or --!>, so the rest of a
+    longer cmark-gfm comment shows. Nothing else is blanked: a keyword inside a tag or an instruction,
+    which GitHub does not show, is still read, which fails closed. An unclosed opener stops the kinds
+    UNCLOSED names being tried in the rest of `text`.
     """
+    runs = [(m.start(), m.end()) for m in TICKS.finditer(text)]
+    seen: dict[int, int] = {}  # where the closer scans last saw a run of each length (cmark-gfm's backticks[])
+    scanned = False  # a closer scan has run to the end of `text`
+
+    def closer(start: int, end: int) -> int | None:
+        """Where the code span the run text[start:end] opens ends, or None when the run is text."""
+        nonlocal scanned
+        if end - start > MAX_TICKS or (scanned and seen.get(end - start, 0) <= end):
+            return None
+        for i in range(bisect_left(runs, (end,)), len(runs)):
+            run_start, run_end = runs[i]
+            if run_end - run_start <= MAX_TICKS:
+                seen[run_end - run_start] = run_start
+            if run_end - run_start == end - start:
+                return run_end
+        scanned = True
+        return None
+
     out: list[str] = []
     pos = 0
     skip: frozenset[str] = frozenset()
     while m := inline_pattern(skip).search(text, pos):
+        start, end = m.span()
+        hide = start  # the construct is blanked from start to hide
+        if m.lastgroup == "ticks" and (span_end := closer(start, end)) is not None:
+            end = hide = span_end
+        elif m.lastgroup == "comment":
+            first = HTML_COMMENT_END.search(text, start + 4, end)
+            hide = first.end() if first else end
         skip |= UNCLOSED.get(m.lastgroup, set())
-        out += [text[pos : m.start()], blank(m) if m.lastgroup in ("code", "comment") else m.group(0)]
-        pos = m.end()
+        out += [text[pos:start], spaces(text[start:hide]), text[hide:end]]
+        pos = end
     return "".join(out) + text[pos:]
 
 
