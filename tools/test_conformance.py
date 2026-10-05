@@ -626,27 +626,25 @@ CASES: list[Case] = [
         1,
         "this MUST NOT has no id",
     ),
-    # GitHub passes an HTML block through as it stands, and a browser shows its line break as a space, so the
-    # words join across one; in a pre block a blank line shows, so they part there.
+    # A pre block keeps its line breaks, and the check tracks no HTML elements, so two lines of an HTML block
+    # never join: the id after NOT does not mark the MUST, which needs its own.
     (
-        "MUST and NOT across lines of an HTML block",
-        both(
-            append(SPEC, f"\n## Phrase\n\n<div>\nReaders MUST\nNOT{marker('IOP-37')} crash.\n</div>\n"),
-            new_requirement("IOP-37", "Phrase"),
-            report,
-        ),
-        0,
-        OK,
-    ),
-    (
-        "id between MUST and NOT across lines of an HTML block",
-        append(SPEC, f"\n<div>\nReaders MUST{marker('IOP-37')}\nNOT crash.\n</div>\n"),
+        "MUST and NOT on two lines of a pre block",
+        append(SPEC, f"\n<pre>\nReaders MUST\nNOT{marker('IOP-37')} crash.\n</pre>\n"),
         1,
-        "IOP-37 sits between MUST and NOT",
+        "this MUST has no id",
+    ),
+    # A line of non-breaking spaces is not blank, so the quote's paragraph runs on and GitHub shows one phrase,
+    # across two line breaks and past the quote markers. A literal > on a line between the words shows.
+    (
+        "MUST NOT across a line of non-breaking spaces in a blockquote",
+        append(SPEC, f"\n> Readers MUST\n> {NBSP}\n> NOT crash.\n"),
+        1,
+        "this MUST NOT has no id",
     ),
     (
-        "MUST and NOT parted by a blank line in a pre block",
-        append(SPEC, f"\n<pre>\nReaders MUST\n\nNOT{marker('IOP-37')} crash.\n</pre>\n"),
+        "literal > on a line between MUST and NOT",
+        append(SPEC, f"\nReaders MUST\n    >\nNOT{marker('IOP-37')} crash.\n"),
         1,
         "this MUST has no id",
     ),

@@ -40,10 +40,11 @@ Each keyword occurrence is one requirement. A sentence with two keywords carries
 MUST NOT is one keyword, with its id after NOT, only where a reader sees one phrase: the two
 words parted only by white space, after any emphasis that closes on MUST (`**MUST** NOT`).
 On one line that holds in any block, a table row included. Across a line break, both words
-must sit on consecutive lines of one paragraph, heading or HTML block, and a `>` between them
-must be one of the quote markers that continue it. A MUST whose NOT starts another block,
-sits past a literal `>`, or opens emphasis of its own (`MUST **NOT**`) stands alone and
-carries its own id. A keyword that
+must sit in one paragraph or heading, and a `>` between them must be one of the quote markers
+that continue it. In an HTML block a line break parts them, because a `<pre>` element keeps it
+and `check` does not track elements, so keep MUST NOT on one line there. A MUST whose NOT
+starts another block, sits past a literal `>`, or opens emphasis of its own (`MUST **NOT**`)
+stands alone and carries its own id. A keyword that
 introduces a list ("An SDK implementation of interop mode MUST:") carries one id,
 and a keyword inside one of the list's items carries its own; the lead-in's *gap* records only
 what no item's id owns. A capitalised keyword used as a word rather than as a requirement

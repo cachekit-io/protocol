@@ -27,9 +27,9 @@ parsing strategy as GitHub's cmark-gfm applies it: blockquotes and list items, l
 continuation lines, HTML blocks, and GFM tables. Inline code and inline comments are skipped
 within one paragraph, heading or table cell, so a code span may cross a line break but never
 a block or cell boundary. MUST NOT is one keyword only where a reader sees one phrase: both
-words on one line, or across one line break inside one paragraph, heading or HTML block, with
-nothing a reader sees between them. So an id after a NOT in another block, or past a literal >,
-never marks the MUST before it. An HTML block is raw HTML, so only its comments are hidden. A
+words on one line, or across a line break inside one paragraph or heading, with nothing a
+reader sees between them. So an id after a NOT in another block, or past a literal >, never
+marks the MUST before it. An HTML block is raw HTML, so only its comments are hidden. A
 keyword inside a code block, or inside an HTML comment block that spans lines, is an error
 (a comment on one line is hidden like an inline one), unless the block is a fence that opens
 at column 0, outside every container, with <!-- not-a-requirement --> on the line before it:
@@ -546,20 +546,22 @@ def scan(text: str) -> Spec:
     def one_phrase(gap_start: int, gap_end: int) -> bool:
         """Whether the text between MUST and a NOT after it renders as space, so the two read as one MUST NOT.
 
-        On one line the words join in any block unless a > parts them. Across lines, the gap may hold one
-        line break, inside one paragraph, heading or HTML block, and a > only as a container marker that
-        opens NOT's line; anywhere else a renderer shows a >.
+        On one line the words join in any block unless a > parts them. Across lines, both must sit in one
+        paragraph or heading, whose line breaks render as spaces, and a > on a later line only as one of
+        the container markers before its text; anywhere else a renderer shows a >. An HTML block can keep
+        its line breaks (inside <pre>), and elements are not tracked, so two of its lines never join.
         """
         first, last = line_of(gap_start), line_of(gap_end)
         if first == last:
             return ">" not in text[gap_start:gap_end]
-        (leaf, _), (other, column) = masked.leaf_of_line[first], masked.leaf_of_line[last]
-        return (
-            last == first + 1
-            and leaf is other
-            and leaf.kind in ("paragraph", "heading", "html")
-            and ">" not in text[gap_start : masked.at[last]] + text[masked.at[last] + column : gap_end]
-        )
+        leaf = masked.leaf_of_line[first][0]
+        if leaf.kind not in ("paragraph", "heading") or masked.leaf_of_line[last][0] is not leaf:
+            return False
+        # What a reader sees of the gap: the rest of MUST's line, and each later line past its container markers.
+        shown = [text[gap_start : masked.at[first + 1]]]
+        for i in range(first + 1, last + 1):
+            shown.append(text[masked.at[i] + masked.leaf_of_line[i][1] : min(masked.at[i + 1], gap_end)])
+        return ">" not in "".join(shown)
 
     markers = {m.start(): m for m in MARKER.finditer(masked.text)}
     used: set[int] = set()
