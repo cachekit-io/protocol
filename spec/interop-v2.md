@@ -199,8 +199,8 @@ Encoding rules:
   cause an allocation for them; it does catch a 5-byte forged `bin32` header, which
   must not cause a 4 GiB allocation either. The reference parser (`parse_container` in
   `tools/interop-v2-reference.py`) is a three-field hand parser that meets rules 1 and
-  2 and the remaining-bytes check without a separate walk. Pinned by the
-  `reject_count_*`, `reject_container_*` and `reject_truncated_*` vectors and
+  2 and the remaining-bytes check without a separate walk. Step 2's length check, the count check and the
+  remaining-bytes check are pinned by the `reject_count_*`, `reject_container_*` and `reject_truncated_*` vectors and
   `reject_forged_bin32_length_within_caps`.
 
 The container is deliberately **not** the ByteStorage envelope: no xxHash3-64
@@ -576,25 +576,26 @@ An SDK implementation of interop/v2 MUST:
    each interop/v2 read entry point, in every binding the SDK ships, below any point
    where the SDK wraps, maps or drops the error. For each vector that steps 2 to 4 of
    the [Reader Algorithm](#reader-algorithm-normative-order) reject, it MUST assert an
-   error from a check that steps 2 to 4 make before any allocation sized from the body:
-   for example the container check, the count or element-type check, the depth bound,
-   the remaining-bytes check, the declared-length budget, the trailing-bytes check or
-   a Security Limits check. An error raised while the reader fills storage it sized
-   from a declared `bin`, `str` or `ext` length or an `array` or `map` count does not
-   count, whether it is an end-of-input or an allocation failure. A bounds-checked
-   read of a fixed-width field (a marker, an integer, or a length or count field) that
-   fails at end of input is the remaining-bytes check, and counts.
-   `reject_forged_bin32_length_within_caps` passes every Security Limit, so only the
-   remaining-bytes check or the declared-length budget can reject it. Calling a check
+   error from a step 2 to 4 check: for example the container check, the count or
+   element-type check, the depth bound, the remaining-bytes check, the declared-length
+   budget, the trailing-bytes check or a Security Limits check. An error raised while
+   the reader fills storage it sized from a declared `bin`, `str` or `ext` length, or
+   an `array` or `map` count, that has not yet passed the declared-length budget does
+   not count, whether it is an end-of-input or an allocation failure. Outside such
+   storage, a bounds-checked read of a fixed-width field (a marker, an integer, or a
+   length or count field) that fails at end of input is the remaining-bytes check, and
+   counts. The test runs every vector at this spec's limits, not at a stricter
+   deployment limit, so `reject_forged_bin32_length_within_caps`, which passes every
+   Security Limit, can be rejected only by the remaining-bytes check or the
+   declared-length budget. Calling a check
    directly as well is fine, but on its own does not show that the read entry point
    runs it. An implementation supports a 32-bit target (such as `wasm32`)
    when it publishes artifacts for that target, builds for it in its own CI or
    release process, or names it as supported in its documentation or package
    metadata. Such an implementation MUST, in its own CI, pass every vector in
-   `reject_vectors` and `lz4_ratio_product_wraps_32_bits` on each such target, built
+   `reject_vectors` under the assertion above and `lz4_ratio_product_wraps_32_bits` on each such target, built
    as its consumers get it: the artifact it distributes or, for source-distributed
-   code, a build of its published source for that target. It runs the vectors at
-   this spec's limits, not at a stricter deployment limit. For
+   code, a build of its published source for that target. For
    `lz4_ratio_product_wraps_32_bits`, anything other than decoding to the
    constructed value (a rejection for any reason, a skip, a crash) is a failure.
    A package that distributes a build of an interop/v2
@@ -629,7 +630,7 @@ An SDK implementation of interop/v2 MUST:
 | `constructed_container_vectors` | Accept vectors too large to pin as hex. Each vector has `method`, `original_size`, `payload_len`, `container_len`, and two segment lists, `container_construction` and `value_construction`. To build the bytes, repeat each segment's `hex` `count` times and concatenate the segments in order (`construction_note`). This list form generalises `decode-bounds.json`'s `{repeat_hex, count, suffix_hex}`, which is the two-segment case. Readers MUST decode the constructed container to the constructed value. The group holds one vector, `lz4_ratio_product_wraps_32_bits`. It is a `method 1` container with a 4,294,968 B payload: an LZ4 block of a `bin32` of zeros, a literal run followed by an offset-1 match of zeros and then the 5-literal final run, with an `original_size` of 8,523,079 B. It is the file's vector for the ratio product's width: a reader that computes the product in 32 bits rejects it, signed or unsigned, and so does one that rejects on 32-bit overflow, or a 32-bit one that skips the product when `original_size` is at most the payload length (see [Security Limits](#security-limits-decompression-bounds) for why it has this shape). It is also the file's only multi-megabyte decode, so a failure on it alone does not prove a 32-bit product: check the rejection reason. Every other vector in this file is under 300 B. [SDK Implementation Requirements](#sdk-implementation-requirements), item 7, says who runs it, on which targets, and at which limits. |
 | `aad_vectors` | The v2 AAD (`compressed = "True"`) over the same tenant and cache key as v1's `interop_key_aad` — the two AAD hex strings differ only in the final component (`"True"` vs `"False"`), pinned side-by-side. |
 | `encryption_vectors` | Full compressed+encrypted round-trip: HKDF-SHA256 (same master key and tenant as v1 / `encryption.json`, so the derived-key fingerprint `96179a9b…` is the published one), AES-256-GCM over the v2 container with the v2 AAD and a fixed nonce; decrypt-verified on every cross-check run. |
-| `reject_vectors` | Structural must-rejects, including: bad magic (a bare v1 value fed to a v2 reader), bad container version, unknown method, signed-family integer markers (incl. a negative `original_size`), non-`bin` payloads (the array-of-ints leniency decision, pinned, and a `str` payload), forged `bin32` length header (4 GiB declared, input ends), `reject_forged_bin32_length_within_caps` (a `bin32` length and `original_size` of 2²⁹ − 1, inside every Security Limit, with no data: only the remaining-bytes check or the declared-length budget rejects it), body array counts other than 3 followed by three complete elements and a 1-byte value (`reject_count_array16_forged`, `reject_count_array32_forged`, `reject_count_four`: a reader that skips the count check accepts all three, through step 6), containers shorter than 2 bytes (`reject_container_empty`, `reject_container_magic_only`), bodies that are empty or truncated inside the method field, the `array16` count, the `bin32` length or before the payload (`reject_truncated_*`), `method 0` size mismatch, trailing bytes, declared-size bomb (1 TiB), `reject_declared_size_wraps_32_bits` and `reject_declared_size_joins_32_bits` (a reader that truncates `original_size` to 32 bits, or joins its halves in 32-bit arithmetic, accepts at least one of them), ratio bomb (1000:1), zero-length compressed payload, malformed LZ4 (zero offset), truncated LZ4, and decompressed-length mismatch. Each MUST error no later than the step the [Reader Algorithm](#reader-algorithm-normative-order) assigns it ([check order](#check-order)); the `error` text is a maintainer note, not normative. |
+| `reject_vectors` | Structural must-rejects, including: bad magic (a bare v1 value fed to a v2 reader), bad container version, unknown method, signed-family integer markers (incl. a negative `original_size`), non-`bin` payloads (the array-of-ints leniency decision, pinned, and a `str` payload), forged `bin32` length header (4 GiB declared, input ends), `reject_forged_bin32_length_within_caps` (a `bin32` length and `original_size` of 2²⁹ − 1, inside every Security Limit, with no data: only the remaining-bytes check or the declared-length budget rejects it), body array counts other than 3 followed by three complete elements whose payload is the 1-byte value `c0` (`reject_count_array16_forged`, `reject_count_array32_forged`, `reject_count_four`: a reader that skips the count check accepts all three, through step 6), containers shorter than 2 bytes (`reject_container_empty`, `reject_container_magic_only`), bodies that are empty or truncated inside the method field, the `array16` count, the `bin32` length or before the payload (`reject_truncated_*`), `method 0` size mismatch, trailing bytes, declared-size bomb (1 TiB), `reject_declared_size_wraps_32_bits` and `reject_declared_size_joins_32_bits` (a reader that truncates `original_size` to 32 bits, or joins its halves in 32-bit arithmetic, accepts at least one of them), ratio bomb (1000:1), zero-length compressed payload, malformed LZ4 (zero offset), truncated LZ4, and decompressed-length mismatch. Each MUST error no later than the step the [Reader Algorithm](#reader-algorithm-normative-order) assigns it ([check order](#check-order)); the `error` text is a maintainer note, not normative. |
 | `crypto_reject_vectors` | `reject_v2_ciphertext_with_v1_aad` and `reject_v1_ciphertext_with_v2_aad` — both cross-mode AAD combinations MUST fail AES-GCM authentication (mode separation), pinned against real ciphertexts from this file and the v1 file. |
 
 Regenerate / verify:

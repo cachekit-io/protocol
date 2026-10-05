@@ -346,6 +346,7 @@ COUNT_ARRAY16_VECTOR = "reject_count_array16_forged"
 COUNT_ARRAY32_VECTOR = "reject_count_array32_forged"
 COUNT_FOUR_VECTOR = "reject_count_four"
 COUNT_VECTORS = [COUNT_ARRAY16_VECTOR, COUNT_ARRAY32_VECTOR, COUNT_FOUR_VECTOR]
+WITHIN_CAPS_VECTOR = "reject_forged_bin32_length_within_caps"
 
 
 def _size_mutant(decode_size: Callable[[int], int]) -> type[_Reader]:
@@ -754,7 +755,7 @@ def _build_reject_vectors(containers: dict[str, dict]) -> list[dict]:
             "error": "container body must be a 3-element array",
         },
         {
-            "name": "reject_forged_bin32_length_within_caps",
+            "name": WITHIN_CAPS_VECTOR,
             "description": (
                 "method 0, original_size and bin32 length both 2^29 - 1 (inside every Security Limit, "
                 "and equal), no data following. Only the remaining-bytes check or the declared-length "
@@ -1079,6 +1080,23 @@ def _self_check(built: dict) -> None:
     # Every structural reject vector must raise.
     for rv in built["reject_vectors"]:
         _expect_structural_reject(rv)
+
+    # The within-caps vector must pass every Security Limit, so that only the
+    # remaining-bytes check or the declared-length budget can reject it.
+    caps = bytes.fromhex(next(rv for rv in built["reject_vectors"] if rv["name"] == WITHIN_CAPS_VECTOR)["container_hex"])
+    r = _Reader(caps[2:])
+    _require(r.read_array_header() == 3 and r.read_uint() == METHOD_NONE, f"{WITHIN_CAPS_VECTOR}: not a method 0 body")
+    declared_size = r.read_uint()
+    _require(r._take(1)[0] == 0xC6, f"{WITHIN_CAPS_VECTOR}: payload is not bin32")
+    declared_len = int.from_bytes(r._take(4), "big")
+    _require(
+        declared_size == declared_len and declared_size <= MAX_UNCOMPRESSED and declared_len <= MAX_COMPRESSED,
+        f"{WITHIN_CAPS_VECTOR}: a Security Limit would reject it",
+    )
+    try:
+        decode_container(caps)
+    except V2Error as e:
+        _require(str(e) == "bin length header exceeds remaining input", f"{WITHIN_CAPS_VECTOR}: rejected by '{e}'")
 
     # A 32-bit original_size decode fails open, and the 1 TiB declared-size bomb cannot
     # show it: its low 32 bits are 0, so such a reader still rejects it. A count-blind
