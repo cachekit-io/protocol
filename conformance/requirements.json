@@ -1150,12 +1150,19 @@
           "vectors": [
             "path-encoding.json:default:../../admin",
             "path-encoding.json:x/../../health",
-            "path-encoding.json:k?x=1#f"
+            "path-encoding.json:k?x=1#f",
+            "path-encoding.json:a\\..\\health",
+            "path-encoding.json:.\t.",
+            "path-encoding.json:.\r\n.",
+            "path-encoding.json:.. ",
+            "path-encoding.json:health\u000b",
+            "path-encoding.json:%2e%2e",
+            "path-encoding.json:‥"
           ],
           "tests": [
             "tools/path-encoding-verify.py:verify"
           ],
-          "gap": "No row holds a backslash, which a WHATWG URL parser reads as '/' (an encoder that leaves it raw passes every row, and the key `a\\..\\health` then reaches /v1/cache/health), a raw tab, LF or CR, which the parser strips (so `.<TAB>.` arrives as `..`), or an existing percent-escape, which an encoder that keeps escapes raw (API-7) sends unchanged, so the key `%2e%2e` becomes a dot segment and /v1/cache/%2e%2e/ttl becomes /v1/ttl; and the rows pin the encoder, not the request path (API-15)."
+          "gap": "The rows pin the encoder, not the request path (API-15)."
         },
         "API-5": {
           "section": "Encoding rules",
@@ -1169,12 +1176,26 @@
             "path-encoding.json:100%",
             "path-encoding.json:a:..",
             "path-encoding.json:ns:key",
-            "path-encoding.json:f(x)!*'"
+            "path-encoding.json:f(x)!*'",
+            "path-encoding.json:a\\..\\health",
+            "path-encoding.json:.\t.",
+            "path-encoding.json:.\r\n.",
+            "path-encoding.json:.. ",
+            "path-encoding.json:health\u000b",
+            "path-encoding.json:a\u0000b\u001fc\u007fd",
+            "path-encoding.json:%2e%2e",
+            "path-encoding.json:User%3AKey",
+            "path-encoding.json:café",
+            "path-encoding.json:😀",
+            "path-encoding.json:‥",
+            "path-encoding.json:User:Key",
+            "path-encoding.json:a+b&c;d,e@f$g[h]i",
+            "path-encoding.json:a\"b<c>d^e`f{g|h}i"
           ],
           "tests": [
             "tools/path-encoding-verify.py:verify"
           ],
-          "gap": "No row holds a byte outside ASCII, an existing percent-escape, or any ASCII character API-7's gap names, so an encoder that escapes Latin-1 or UTF-16 code units instead of UTF-8 bytes, leaves a backslash raw, or keeps an existing escape raw (API-7) passes; and the rows pin the encoder, not the request path (API-15)."
+          "gap": "The rows pin the encoder, not the request path (API-15), and a test that reads only the parsed path cannot see a raw byte the URL parser encodes itself (API-7)."
         },
         "API-6": {
           "section": "Encoding rules",
@@ -1184,12 +1205,14 @@
             "path-encoding.json:default:../../admin",
             "path-encoding.json:x/../../health",
             "path-encoding.json:a:..",
-            "path-encoding.json:..a"
+            "path-encoding.json:..a",
+            "path-encoding.json:a-b~c",
+            "path-encoding.json:User:Key"
           ],
           "tests": [
             "tools/path-encoding-verify.py:verify"
           ],
-          "gap": "No row holds an uppercase letter, '-' or '~', so an encoder whose safe set is lowercase-only, or that escapes '-' or '~', passes; uppercase letters and '-' are in the server's key charset, so escaping them changes the wire bytes the spec promises are identical across SDKs for every key the server accepts; and the rows pin the encoder, not the request path (API-15)."
+          "gap": "The rows pin the encoder, not the request path (API-15)."
         },
         "API-7": {
           "section": "Encoding rules",
@@ -1203,12 +1226,25 @@
             "path-encoding.json:100%",
             "path-encoding.json:a:..",
             "path-encoding.json:ns:key",
-            "path-encoding.json:f(x)!*'"
+            "path-encoding.json:f(x)!*'",
+            "path-encoding.json:a\\..\\health",
+            "path-encoding.json:.\t.",
+            "path-encoding.json:.\r\n.",
+            "path-encoding.json:.. ",
+            "path-encoding.json:health\u000b",
+            "path-encoding.json:a\u0000b\u001fc\u007fd",
+            "path-encoding.json:%2e%2e",
+            "path-encoding.json:User%3AKey",
+            "path-encoding.json:café",
+            "path-encoding.json:😀",
+            "path-encoding.json:‥",
+            "path-encoding.json:a+b&c;d,e@f$g[h]i",
+            "path-encoding.json:a\"b<c>d^e`f{g|h}i"
           ],
           "tests": [
             "tools/path-encoding-verify.py:verify"
           ],
-          "gap": "No row holds a backslash (API-4), a backtick, any of '\"', '$', '&', '+', ',', ';', '<', '>', '@', '[', ']', '^', '{', '|' and '}', a control character, a byte of 0x80 or above (API-5), or an existing percent-escape. So an encoder that escapes only the characters the rows hold passes, and so does one that keeps an existing escape raw, as never-double-encode encoders do: the key `ns%3Akey` then reaches the server as `ns:key`, and `%2e%2e` as a dot segment (API-4). And the rows pin the encoder, not the request path (API-15)."
+          "gap": "The rows pin the encoder, not the request path (API-15), and a test that reads only the parsed path cannot tell a raw byte the URL parser encodes itself (a space or a C0 control other than tab, LF and CR inside the key, DEL, a byte of 0x80 or above, `\"<>^{}` or the backtick) from the encoder's `%HH`, though the parser then sends the same bytes."
         },
         "API-8": {
           "section": "Encoding rules",
@@ -1300,17 +1336,33 @@
           "binds": "sdk",
           "vectors": [
             "path-encoding.json:100%",
-            "path-encoding.json:ns:key"
+            "path-encoding.json:ns:key",
+            "path-encoding.json:%2e%2e",
+            "path-encoding.json:User%3AKey"
           ],
           "tests": [
             "tools/path-encoding-verify.py:verify"
           ],
-          "gap": "The rows pin one call of the encoder: a client that hands the encoded segment to a URL builder that escapes '%' again, turning ns%3Akey into ns%253Akey, passes them unless its test asserts on the parsed request path (API-15). No row holds an existing percent-escape, so the opposite mistake passes too: an encoder that avoids double-encoding by keeping an existing escape raw (API-7)."
+          "gap": "The rows pin one call of the encoder: a client that hands the encoded segment to a URL builder that escapes '%' again, turning ns%3Akey into ns%253Akey, passes them unless its test asserts on the parsed request path (API-15)."
         },
         "API-18": {
           "section": "GET /v1/cache/{key}",
           "binds": "sdk",
-          "gap": "No vector presents a response, so nothing here catches an SDK that treats an unrecognized X-CacheKit-Freshness token as fresh, or reads 'Fresh' as fresh by matching case-insensitively; the difference shows where it backfills a local cache (API-58), revalidates, or treats a stale hit as a miss."
+          "vectors": [
+            "freshness-headers.json:freshness_absent",
+            "freshness-headers.json:freshness_fresh",
+            "freshness-headers.json:freshness_stale",
+            "freshness-headers.json:freshness_capitalised",
+            "freshness-headers.json:freshness_uppercase_stale",
+            "freshness-headers.json:freshness_empty",
+            "freshness-headers.json:freshness_nbsp_suffix",
+            "freshness-headers.json:freshness_list_fresh_first",
+            "freshness-headers.json:freshness_list_fresh_last"
+          ],
+          "tests": [
+            "tools/freshness-headers-verify.py:verify"
+          ],
+          "gap": "The rows reach the parser an SDK's test hands each value, not its read path: whether it applies the result to the GET 200 it received where it backfills a local cache (API-58), revalidates or treats a stale hit as a miss, and what it does with two field lines of the header, which the rows hold only combined into one value."
         },
         "API-19": {
           "section": "Remaining Freshness",
@@ -1370,7 +1422,13 @@
         "API-30": {
           "section": "Remaining Freshness",
           "binds": "sdk",
-          "gap": "As API-29, for an SDK that backfills a fresh response whose X-CacheKit-Fresh-For is 0."
+          "vectors": [
+            "freshness-headers.json:fresh_for_zero"
+          ],
+          "tests": [
+            "tools/freshness-headers-verify.py:verify"
+          ],
+          "gap": "The row reaches the parser an SDK's test hands the value: a parser that reads 0 as no value fails it, but no vector reaches the local cache, so nothing here catches an SDK that parses 0 and backfills anyway (API-29)."
         },
         "API-31": {
           "section": "Remaining Freshness",
@@ -1385,12 +1443,43 @@
         "API-33": {
           "section": "Remaining Freshness",
           "binds": "sdk",
-          "gap": "No vector holds a header value, so nothing here catches a parser that accepts a sign, white space inside the value, a decimal point, eight or more digits, or a value over the cap."
+          "vectors": [
+            "freshness-headers.json:fresh_for_empty",
+            "freshness-headers.json:fresh_for_negative",
+            "freshness-headers.json:fresh_for_plus_sign",
+            "freshness-headers.json:fresh_for_decimal",
+            "freshness-headers.json:fresh_for_exponent",
+            "freshness-headers.json:fresh_for_hex",
+            "freshness-headers.json:fresh_for_digit_separator",
+            "freshness-headers.json:fresh_for_inner_space",
+            "freshness-headers.json:fresh_for_nbsp_prefix",
+            "freshness-headers.json:fresh_for_eight_digits",
+            "freshness-headers.json:fresh_for_over_cap",
+            "freshness-headers.json:fresh_for_wraps_32_bit",
+            "freshness-headers.json:fresh_for_over_64_bits",
+            "freshness-headers.json:fresh_for_4301_digits",
+            "freshness-headers.json:fresh_for_superscript_two",
+            "freshness-headers.json:fresh_for_arabic_indic_one",
+            "freshness-headers.json:fresh_for_list"
+          ],
+          "tests": [
+            "tools/freshness-headers-verify.py:verify"
+          ],
+          "gap": "The rows reach the parser an SDK's test hands each value, not its read path: whether the GET 200's header reaches it as its HTTP stack delivers the bytes and the result bounds the backfill (API-29), and what it does with two field lines of the header, which the rows hold only combined into one value."
         },
         "API-34": {
           "section": "Remaining Freshness",
           "binds": "sdk",
-          "gap": "As API-33, for a parser that converts to a wrapping fixed-width integer before it checks the length, so 4297559296 reads as 2,592,000."
+          "vectors": [
+            "freshness-headers.json:fresh_for_eight_digits",
+            "freshness-headers.json:fresh_for_wraps_32_bit",
+            "freshness-headers.json:fresh_for_over_64_bits",
+            "freshness-headers.json:fresh_for_4301_digits"
+          ],
+          "tests": [
+            "tools/freshness-headers-verify.py:verify"
+          ],
+          "gap": "A parser that converts first, with arithmetic that neither wraps nor fails on a long value, and checks the length after returns the same values, so the order shows only through the conversions the rows break (32- and 64-bit integers, CPython's 4,300-digit limit); and the rows reach the parser, not the read path (API-33)."
         },
         "API-35": {
           "section": "Remaining Freshness",
@@ -1460,7 +1549,7 @@
         "API-48": {
           "section": "HEAD /v1/cache/{key}",
           "binds": "sdk",
-          "gap": "No vector presents a response, so nothing here catches a client that reports a key absent when its HEAD response is labelled stale."
+          "gap": "No vector presents a HEAD response, so nothing here catches a client that reports a key absent when its HEAD response is labelled stale."
         },
         "API-49": {
           "section": "HEAD /v1/cache/{key}",
@@ -1485,7 +1574,7 @@
         "API-53": {
           "section": "Entry lifecycle",
           "binds": "sdk",
-          "gap": "No vector presents a response, so nothing here catches an SDK that computes an entry's freshness from its own clock and the TTL it wrote, instead of the server's label."
+          "gap": "No vector drives an SDK's read path, so nothing here catches an SDK that computes an entry's freshness from its own clock and the TTL it wrote, instead of the server's label."
         },
         "API-54": {
           "section": "Validation",
@@ -1511,7 +1600,13 @@
         "API-57": {
           "section": "Reading a stale entry",
           "binds": "sdk",
-          "gap": "No vector presents a response, so nothing here catches a client that raises on a stale label it does not expect."
+          "vectors": [
+            "freshness-headers.json:freshness_stale"
+          ],
+          "tests": [
+            "tools/freshness-headers-verify.py:verify"
+          ],
+          "gap": "The row reaches the parser an SDK's test hands the value, not its read path: a parser that raises on `stale` fails it, but nothing here catches a read path that classifies the GET 200 as stale and then raises instead of serving it or taking its local miss policy."
         },
         "API-58": {
           "section": "Reading a stale entry",

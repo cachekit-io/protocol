@@ -1344,6 +1344,16 @@ REPORT_CASES: list[tuple[str, Mutate, dict[str, list[str]], list[str]]] = [
         ["*Decode \\| bounds*"],
     ),
     (
+        # A tab or line break in a name would show as nothing or end the row; a backtick would end the span.
+        "vector names with a tab, a line break or a backtick stay inside their span and cell",
+        entry(
+            "IOP-13",
+            vectors=["path-encoding.json:.\t.", "path-encoding.json:.\r\n.", 'path-encoding.json:a"b<c>d^e`f{g|h}i'],
+        ),
+        {"IOP-13": ["uncovered (0/3)"] * 3},
+        ['`".\\t."`, `".\\r\\n."`, ``a"b<c>d^e`f{g\\|h}i``'],
+    ),
+    (
         # The quoted sentence, not the whole line, even when a code span holds a comment opener.
         "excerpt picks the keyword's sentence beside a comment opener in code",
         both(
@@ -1411,6 +1421,39 @@ def test_strip(tmp: Path) -> bool:
     return bool(good)
 
 
+def test_code_spans() -> bool:
+    """The report shows each vector name exactly: every branch of code(), read back the way a GFM table cell reads it."""
+    sys.path.insert(0, str(HERE))
+    import conformance
+
+    def shown(cell: str) -> str:
+        """What GitHub shows for a cell that is one code span: \\| unescaped, then the fence and one pad space dropped."""
+        text = re.sub(r"\\\|", "|", cell)
+        fence = re.match("`+", text)
+        if fence is None:  # no code span at all: returned as is, so the comparison below reports a FAIL, not a crash
+            return text
+        inner = text[len(fence[0]) : -len(fence[0])]
+        return inner[1:-1] if inner.startswith(" ") and inner.endswith(" ") and inner.strip(" ") else inner
+
+    # name -> what the report must show for it
+    cases = {
+        "ns:key": "ns:key",
+        "a|b": "a|b",
+        "a\\|b": "a\\|b",  # its own backslash survives the pipe escaping
+        "a`b": "a`b",  # a longer fence
+        "`a`": "`a`",  # padded, so the end backticks stay out of the fence
+        ".\t.": '".\\t."',  # not printable: its JSON string literal
+        "a\x7fb": '"a\\u007fb"',  # DEL, which json.dumps leaves raw
+        " a": '" a"',  # a span would drop the space
+        '".\\t."': '"\\".\\\\t.\\""',  # printable, but it would pass for the tab key
+        "cafe\u0301": '"cafe\\u0301"',  # decomposed, so it would pass for the precomposed spelling
+    }
+    wrong = {name: shown(conformance.cell(conformance.code(name))) for name in cases}
+    wrong = {name: got for name, got in wrong.items() if got != cases[name]}
+    print(f"  {'ok  ' if not wrong else 'FAIL'} report shows each vector name exactly{f': {wrong}' if wrong else ''}")
+    return not wrong
+
+
 def test_optimized() -> bool:
     """`python -OO` strips docstrings; the checker must not depend on its own."""
     proc = subprocess.run(
@@ -1439,6 +1482,7 @@ def main() -> int:
         results += [run_report_case(Path(tmp), n, case) for n, case in enumerate(REPORT_CASES)]
         results.append(test_optimized())
         results.append(test_strip(Path(tmp)))
+        results.append(test_code_spans())
     failed = results.count(False)
     if failed:
         print(f"\n{failed}/{len(results)} case(s) failed", file=sys.stderr)
