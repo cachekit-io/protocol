@@ -9,7 +9,7 @@ Usage:
     verify    (default) stdlib-only. Checks the file equals the recipes below,
               derives each vector's depth and declared slots with a header-only
               structural walk (never trusting the hand-entered tags), checks the
-              reject reasons against them, checks the set still holds a vector
+              reject reasons (depth, overclaim, incomplete) against them, checks the set still holds a vector
               each named near-miss structural guard would pass, and checks it holds
               accept vectors at exactly the depth floor. When `msgpack`
               (msgpack-python) is importable, additionally checks the real decoder
@@ -131,6 +131,13 @@ def build() -> dict:
         recipe("fixarray_short_by_one",
                "fixarray claiming 5 elements with 4 present: the minimal truncated document.",
                "95", 1, "c0c0c0c0", depth=1, slots=5, reasons=["overclaim"]),
+        recipe("incomplete_within_slot_budget",
+               "fixarray claiming 2 elements that holds one empty array16 and nothing else: 2 declared slots "
+               "against a budget of 3, and every header fits the bytes after it, so neither the sum nor a "
+               "per-header check rejects it. Only a walk that finds the root still owed an element does. Any "
+               "decoder rejects it at end of input, so only an SDK test asserting its guard's rejection can tell "
+               "a guard that skips the completeness check apart.",
+               "92", 1, "dc0000", depth=2, slots=2, reasons=["incomplete"]),
     ]
     accept = [
         recipe("nested_fixarray_depth_32",
@@ -148,7 +155,7 @@ def build() -> dict:
     for v in accept:
         del v["reject_reasons"]
     return {
-        "version": "1.1.0",
+        "version": "1.2.0",
         "spec": "spec/interop-mode.md#decode-bounds",
         "generator": "tools/decode-bounds-reference.py generate (CPython stdlib)",
         "scope": "Any untrusted MessagePack decode in any SDK: interop/v1 values, the ByteStorage envelope bytes "
@@ -161,12 +168,14 @@ def build() -> dict:
             "overclaim": "Readers MUST NOT pre-allocate beyond what the input can back (each element or byte needs "
                          ">= 1 input byte): declared slots summed over the whole document MUST NOT exceed "
                          "input_len - 1, checked before anything is materialised. Checking each header against the "
-                         "remaining input does not satisfy this. Readers MUST reject a structurally incomplete "
-                         "document. Every reject vector tagged 'overclaim' has "
+                         "remaining input does not satisfy this. Every reject vector tagged 'overclaim' has "
                          "declared_slots > input_len - 1 (the root header is the only byte that is not an element). "
                          "A map pair counts as two slots (key + value). Every per-header term and the running sum "
                          "MUST be computed in >= 64 bits or with checked/saturating arithmetic; an overflow is "
                          "itself a rejection.",
+            "incomplete": "Readers MUST reject a structurally incomplete document (one whose root item is not "
+                          "complete at the end of the input) even when its declared slots fit the budget. Every "
+                          "reject vector tagged 'incomplete' fits the budget and ends before its root item does.",
             "failure_mode": "Rejection MUST surface as a catchable decode error that the SDK read path turns "
                             "into a cache miss (fail-closed), never an uncaught crash or an OOM abort.",
         },
@@ -204,6 +213,7 @@ def walk(data: bytes) -> dict:
     Reads headers in document order and skips str/bin/ext payloads; stops at the end of the
     root item or of the input. `complete` is framing only (one root item, nothing owed, no
     trailing bytes): it does not check str UTF-8 or ext contents, so `a1ff` is complete.
+    `truncated` means the input ended before the root item did; trailing bytes are not truncation.
 
     Also reports what seven near-miss structural guards conclude, for the coverage checks:
     `per_header_fits` (every claim <= the bytes after its header), `u32_add_fits` (a 32-bit
@@ -218,7 +228,7 @@ def walk(data: bytes) -> dict:
     pos = depth = array_depth = arrays_open = slots = sum_add32 = sum_mul = 0
     sum_pair_as_one = sum_no_ext = sum_no_str_bin = 0
     per_header_fits = u32_add_fits = u32_mul_fits = True
-    complete = False
+    complete = finished = False
     owed: list[list[int]] = []  # [children still owed, 1 if array] per open collection
     while pos < len(data):
         t = data[pos]
@@ -273,9 +283,10 @@ def walk(data: bytes) -> dict:
                 break
             arrays_open -= owed.pop()[1]
         if not owed:
-            complete = pos == len(data)
+            finished, complete = pos <= len(data), pos == len(data)  # pos past the end: a payload cut short
             break
-    return {"nesting_depth": depth, "declared_slots": slots, "complete": complete, "array_depth": array_depth,
+    return {"nesting_depth": depth, "declared_slots": slots, "complete": complete, "truncated": not finished,
+            "array_depth": array_depth,
             "per_header_fits": per_header_fits, "u32_add_fits": u32_add_fits, "u32_mul_fits": u32_mul_fits,
             "pair_as_one_fits": sum_pair_as_one <= budget, "ext_uncounted_fits": sum_no_ext <= budget,
             "str_bin_uncounted_fits": sum_no_str_bin <= budget}
@@ -294,8 +305,8 @@ def verify(document: dict, *, require_extras: bool = False) -> tuple[int, str]:
     # above already proves them; the hand-entered tags are checked against the walk.
     for v in document["reject_vectors"]:  # its own loop: a reject vector equal to an accept vector is still checked
         reasons = v.get("reject_reasons", [])
-        check(bool(reasons) and set(reasons) <= {"depth", "overclaim"}, v["name"],
-              "reject_reasons must name at least one rule, each depth or overclaim")
+        check(bool(reasons) and set(reasons) <= {"depth", "overclaim", "incomplete"}, v["name"],
+              "reject_reasons must name at least one rule, each depth, overclaim or incomplete")
     names = [v["name"] for v in document["reject_vectors"] + document["accept_vectors"]]
     check(len(names) == len(set(names)), "document", "duplicate vector names (the walk index is keyed by name)")
     walked = {}
@@ -308,6 +319,10 @@ def verify(document: dict, *, require_extras: bool = False) -> tuple[int, str]:
         # Slot budget: every declared element (including a nested header) costs >= 1 input
         # byte; only the root header is not itself an element. So sum(declared) <= len - 1.
         check(("overclaim" in reasons) == (v["declared_slots"] > v["input_len"] - 1), v["name"], "overclaim tag mismatch")
+        # An overclaiming document is always cut short, so 'incomplete' marks only the ones within the budget.
+        if reasons:
+            check(("incomplete" in reasons) == (w["truncated"] and v["declared_slots"] <= v["input_len"] - 1),
+                  v["name"], "incomplete tag mismatch")
         if not reasons:
             check(v["nesting_depth"] <= MIN_DEPTH_FLOOR, v["name"], "accept vector deeper than the floor")
             check(w["complete"], v["name"], "accept vector is not one complete document")
@@ -330,6 +345,8 @@ def verify(document: dict, *, require_extras: bool = False) -> tuple[int, str]:
           "coverage", "no reject vector passes a sum that does not count ext lengths")
     check(some_reject(lambda v, w: v["reject_reasons"] == ["overclaim"] and w["str_bin_uncounted_fits"]),
           "coverage", "no reject vector passes a sum that does not count str/bin lengths")
+    check(some_reject(lambda v, w: v["reject_reasons"] == ["incomplete"] and w["per_header_fits"]),
+          "coverage", "no reject vector is incomplete within the slot budget with every header fitting")
     check(some_reject(lambda v, w: v["reject_reasons"] == ["depth"] and w["complete"]
                       and w["array_depth"] == MAX_DEPTH_CEILING + 1),
           "coverage", "no complete array spine one level past the depth ceiling")

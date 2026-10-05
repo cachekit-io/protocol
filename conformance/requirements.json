@@ -827,9 +827,24 @@
           "vectors": [
             "interop-mode.json:reject_uppercase_namespace",
             "interop-mode.json:reject_colon_in_operation",
-            "interop-mode.json:reject_trailing_newline"
+            "interop-mode.json:reject_trailing_newline",
+            "interop-mode.json:segment_max_length",
+            "interop-mode.json:reject_namespace_too_long",
+            "interop-mode.json:reject_operation_too_long",
+            "interop-mode.json:reject_leading_dot_namespace",
+            "interop-mode.json:reject_leading_hyphen_operation",
+            "interop-mode.json:reject_leading_underscore_operation",
+            "interop-mode.json:reject_empty_namespace",
+            "interop-mode.json:reject_empty_operation",
+            "interop-mode.json:reject_non_ascii_digit_namespace",
+            "interop-mode.json:reject_non_ascii_letter_operation",
+            "interop-mode.json:reject_slash_namespace",
+            "interop-mode.json:reject_space_operation",
+            "interop-mode.json:reject_uppercase_operation",
+            "interop-mode.json:reject_colon_in_namespace",
+            "interop-mode.json:reject_trailing_newline_operation"
           ],
-          "gap": "No vector pins the 64-character limit, the leading-character rule (a segment starting with '.', '_' or '-'), an empty segment, or a character outside the set other than an uppercase letter, ':' and a newline (a non-ASCII digit, 'é', '/', a space); each rule is tested on one segment only (uppercase and the newline on the namespace, ':' on the operation)."
+          "gap": "The character-set vectors each name one character outside the set (an uppercase letter, ':', a newline, a non-ASCII digit and letter, '/', a space), so a validator that bans those characters one by one, instead of admitting only the set, passes them all; no finite list of characters closes that."
         },
         "IOP-3": {
           "section": "Segment grammar",
@@ -841,9 +856,23 @@
             "interop-mode.json:reject_reserved_namespace_ns",
             "interop-mode.json:reject_reserved_namespace_nsapi",
             "interop-mode.json:reject_double_dot_namespace",
-            "interop-mode.json:reject_double_dot_operation"
+            "interop-mode.json:reject_double_dot_operation",
+            "interop-mode.json:reject_namespace_too_long",
+            "interop-mode.json:reject_operation_too_long",
+            "interop-mode.json:reject_leading_dot_namespace",
+            "interop-mode.json:reject_leading_hyphen_operation",
+            "interop-mode.json:reject_leading_underscore_operation",
+            "interop-mode.json:reject_empty_namespace",
+            "interop-mode.json:reject_empty_operation",
+            "interop-mode.json:reject_non_ascii_digit_namespace",
+            "interop-mode.json:reject_non_ascii_letter_operation",
+            "interop-mode.json:reject_slash_namespace",
+            "interop-mode.json:reject_space_operation",
+            "interop-mode.json:reject_uppercase_operation",
+            "interop-mode.json:reject_colon_in_namespace",
+            "interop-mode.json:reject_trailing_newline_operation"
           ],
-          "gap": "The vectors drive key derivation, so they share IOP-2's holes; rejection at decoration or registration time rather than at the first call, and on every backend, are SDK API properties no vector observes."
+          "gap": "The vectors drive key derivation, so they share IOP-2's remaining hole (a ban list of the tested characters); rejection at decoration or registration time rather than at the first call, and on every backend, are SDK API properties no vector observes."
         },
         "IOP-4": {
           "section": "Segment grammar",
@@ -884,9 +913,17 @@
             "interop-mode.json:reject_negative_infinity",
             "interop-mode.json:reject_int_overflow",
             "interop-mode.json:reject_int_underflow",
-            "interop-mode.json:reject_naive_datetime"
+            "interop-mode.json:reject_naive_datetime",
+            "interop-mode.json:reject_naive_datetime_nested",
+            "interop-mode.json:reject_nan_nested",
+            "interop-mode.json:reject_int_overflow_in_list",
+            "interop-mode.json:reject_int_underflow_in_map"
           ],
-          "gap": "Portable JSON cannot express a value whose type is outside the data model (an arbitrary object, a non-string map key), and every error vector puts the bad value at the top of the argument list, so a check that skips nested values (a set's elements, a map's values) passes them all."
+          "tests": [
+            "tools/interop-reference.py:_out_of_model_selftest",
+            "tools/interop-crosscheck.mjs:outOfModelSelftest"
+          ],
+          "gap": "Portable JSON cannot express a value whose type is outside the data model (an arbitrary object, a non-string map key), so only the reference tools' self-tests reject one; no vector reaches an SDK with it."
         },
         "IOP-9": {
           "section": "The Interop Data Model",
@@ -895,27 +932,28 @@
             "interop-mode.json:reject_int_overflow",
             "interop-mode.json:reject_int_underflow",
             "interop-mode.json:uint64_max",
-            "interop-mode.json:int64_min"
-          ],
-          "gap": "Every out-of-range vector puts the integer at the top of the argument list, so a range check that never reaches a nested value (an integer inside a list or a map) passes all four; no vector nests one."
+            "interop-mode.json:int64_min",
+            "interop-mode.json:reject_int_overflow_in_list",
+            "interop-mode.json:reject_int_underflow_in_map"
+          ]
         },
         "IOP-10": {
           "section": "The Interop Data Model",
           "binds": "sdk",
           "tests": [
-            "tools/interop-reference.py:_self_check",
+            "tools/interop-reference.py:_surrogate_selftest",
             "tools/interop-crosscheck.mjs:loneSurrogateSelftest"
           ],
-          "gap": "Both self-tests use one lone high surrogate (U+D800) as a whole argument; a lone low surrogate, or one inside a map key or a nested value, is untested, and portable JSON cannot carry any of them."
+          "gap": "The self-tests reject a lone high or low surrogate as an argument, in a map key, in a nested value and in a set, but only in the reference tools: portable JSON cannot carry a lone surrogate, so no vector reaches an SDK."
         },
         "IOP-11": {
           "section": "The Interop Data Model",
           "binds": "sdk",
           "tests": [
-            "tools/interop-reference.py:_self_check",
+            "tools/interop-reference.py:_surrogate_selftest",
             "tools/interop-crosscheck.mjs:loneSurrogateSelftest"
           ],
-          "gap": "Both self-tests use one lone high surrogate (U+D800) as a whole argument; a lone low surrogate, or one inside a map key or a nested value, is untested, and portable JSON cannot carry any of them."
+          "gap": "The self-tests reject a lone high or low surrogate as an argument, in a map key, in a nested value and in a set, but only in the reference tools: portable JSON cannot carry a lone surrogate, so no vector reaches an SDK."
         },
         "IOP-12": {
           "section": "The Interop Data Model",
@@ -931,7 +969,10 @@
         "IOP-13": {
           "section": "The Interop Data Model",
           "binds": "sdk",
-          "gap": "Portable JSON object keys are always strings, so no vector carries a non-string key, and neither reference tool self-tests one."
+          "tests": [
+            "tools/interop-reference.py:_non_string_key_selftest"
+          ],
+          "gap": "Portable JSON object keys are always strings, so no vector carries a non-string key and only the Python reference's self-test rejects one; JavaScript objects have string keys only, and the cross-check rejects a Map as outside the data model (IOP-8)."
         },
         "IOP-14": {
           "section": "The Interop Data Model",
@@ -942,9 +983,10 @@
           "vectors": [
             "interop-mode.json:map_key_sort_supplementary",
             "interop-mode.json:map_key_sort_ascii",
-            "interop-mode.json:nested_map_recursive_sort"
-          ],
-          "gap": "A collator sort with uppercase first (Intl.Collator with caseFirst 'upper') passes all three vectors, yet it departs from code-point order wherever case differs across letters (it puts a before B; code points put B first) or punctuation is involved (a-b against a_b), and no vector holds either."
+            "interop-mode.json:nested_map_recursive_sort",
+            "interop-mode.json:map_key_sort_case_across_letters",
+            "interop-mode.json:map_key_sort_punctuation"
+          ]
         },
         "IOP-15": {
           "section": "Number canonicalization",
@@ -954,9 +996,9 @@
           ],
           "vectors": [
             "interop-mode.json:uint64_max",
-            "interop-mode.json:int64_min"
-          ],
-          "gap": "int64_min is exact in a float64 and uint64_max lies outside int64, so a TypeScript SDK that turns any BigInt inside int64 into a Number passes both and silently rounds 2^53+1; no vector holds an integer between 2^53 and 2^63."
+            "interop-mode.json:int64_min",
+            "interop-mode.json:int_beyond_float64_precision"
+          ]
         },
         "IOP-16": {
           "section": "Number canonicalization",
@@ -964,7 +1006,10 @@
           "sdks": [
             "cachekit-ts"
           ],
-          "gap": "The vectors spell integers beyond 2^53 as {\"$int\": ...} (a BigInt) or {\"$float\": ...} (an explicit float, which cachekit-ts's harness wraps so the SDK can tell it from a bare Number); no vector or reference test passes a bare Number beyond 2^53, and neither the spec nor the fixture's tagged_json note documents the float wrapper."
+          "tests": [
+            "tools/interop-crosscheck.mjs:unsafeNumberSelftest"
+          ],
+          "gap": "The self-test exercises the reference cross-check, not cachekit-ts: Python and Rust read a bare JSON integer beyond 2^53 exactly, so no shared vector can carry the unsafe Number only JavaScript would see."
         },
         "IOP-17": {
           "section": "Interop Value Format",
@@ -986,17 +1031,22 @@
             "interop-mode.json:datetime_sentinel_value",
             "decode-bounds.json:nested_fixarray_depth_32",
             "decode-bounds.json:nested_fixmap_depth_32",
-            "decode-bounds.json:array16_256_backed_nils"
-          ],
-          "gap": "No vector an SDK feeds to its interop reader holds a non-canonical document (a padded integer width, unsorted map keys, a float32), a map with non-string keys, or an ext type, all of which readers must accept; python-frame.json's frame payloads hold unsorted keys but are not read as interop values."
+            "decode-bounds.json:array16_256_backed_nils",
+            "interop-mode.json:reader_padded_int_widths",
+            "interop-mode.json:reader_padded_headers",
+            "interop-mode.json:reader_unsorted_map_keys",
+            "interop-mode.json:reader_float32",
+            "interop-mode.json:reader_non_string_map_key",
+            "interop-mode.json:reader_ext_type"
+          ]
         },
         "IOP-19": {
           "section": "Interop Value Format",
           "binds": "sdk",
           "vectors": [
+            "interop-mode.json:reader_trailing_byte",
             "python-frame.json:ck_frame_fed_to_interop_reader"
-          ],
-          "gap": "The one trailing-bytes vector is a CK frame, so a reader that rejects only a 0x43 0x4B prefix, not any trailing byte, passes it."
+          ]
         },
         "IOP-20": {
           "section": "Interop Value Format",
@@ -1005,9 +1055,9 @@
             "cachekit-rs"
           ],
           "vectors": [
+            "interop-mode.json:reader_trailing_byte",
             "python-frame.json:ck_frame_fed_to_interop_reader"
-          ],
-          "gap": "The one trailing-bytes vector is a CK frame, so a reader that rejects only a 0x43 0x4B prefix, not any trailing byte, passes it."
+          ]
         },
         "IOP-21": {
           "section": "SDK Implementation Requirements",
@@ -1015,7 +1065,7 @@
           "vectors": [
             "interop-mode.json"
           ],
-          "gap": "The list's demands on segment validation, normalization and hashing share the holes recorded on IOP-2, IOP-8, IOP-10, IOP-13 and IOP-16; no vector reaches the 32-bit length tier (untested by design) or passes a small integer as {\"$int\": ...}, so an encoder that always writes a BigInt at full width passes; binding named and defaulted arguments to their positions is an SDK API property no vector observes; leaving auto mode unchanged is pinned only where an SDK vendors cache-keys.json or wire-format.json."
+          "gap": "The list's demands on segment validation, normalization and hashing share the holes still recorded on IOP-2, IOP-8, IOP-10, IOP-13 and IOP-16; no vector reaches the 32-bit length tier (untested by design); binding named and defaulted arguments to their positions is an SDK API property no vector observes; leaving auto mode unchanged is pinned only where an SDK vendors cache-keys.json or wire-format.json."
         },
         "IOP-22": {
           "section": "SDK Implementation Requirements",
@@ -1033,7 +1083,25 @@
             "interop-mode.json:reject_reserved_namespace_ns",
             "interop-mode.json:reject_reserved_namespace_nsapi",
             "interop-mode.json:reject_double_dot_namespace",
-            "interop-mode.json:reject_double_dot_operation"
+            "interop-mode.json:reject_double_dot_operation",
+            "interop-mode.json:reject_namespace_too_long",
+            "interop-mode.json:reject_operation_too_long",
+            "interop-mode.json:reject_leading_dot_namespace",
+            "interop-mode.json:reject_leading_hyphen_operation",
+            "interop-mode.json:reject_leading_underscore_operation",
+            "interop-mode.json:reject_empty_namespace",
+            "interop-mode.json:reject_empty_operation",
+            "interop-mode.json:reject_non_ascii_digit_namespace",
+            "interop-mode.json:reject_non_ascii_letter_operation",
+            "interop-mode.json:reject_slash_namespace",
+            "interop-mode.json:reject_space_operation",
+            "interop-mode.json:reject_uppercase_operation",
+            "interop-mode.json:reject_colon_in_namespace",
+            "interop-mode.json:reject_trailing_newline_operation",
+            "interop-mode.json:reject_naive_datetime_nested",
+            "interop-mode.json:reject_nan_nested",
+            "interop-mode.json:reject_int_overflow_in_list",
+            "interop-mode.json:reject_int_underflow_in_map"
           ]
         },
         "IOP-23": {
@@ -1119,9 +1187,10 @@
           "binds": "sdk",
           "vectors": [
             "decode-bounds.json:fixarray_short_by_one",
-            "decode-bounds.json:fixmap_short_by_one"
+            "decode-bounds.json:fixmap_short_by_one",
+            "decode-bounds.json:incomplete_within_slot_budget"
           ],
-          "gap": "Both mapped vectors also overclaim, so a sum-only guard rejects them, and no reject vector is incomplete within the slot budget (the spec's own 92 dc 00 00, or 92 cb and one float64); even such a vector fails only an SDK test that asserts the guard's own error (IOP-31), since any decoder rejects it at end of input."
+          "gap": "Any decoder rejects every mapped vector at end of input, so a verdict cannot show which check rejected it: only an SDK test that asserts its guard's own error (IOP-31) fails a guard that skips the completeness check, which incomplete_within_slot_budget is built for (it fits the slot budget and every header fits)."
         },
         "IOP-30": {
           "section": "Decode bounds",
@@ -1153,7 +1222,8 @@
             "decode-bounds.json:bin32_overclaim",
             "decode-bounds.json:str32_overclaim",
             "decode-bounds.json:ext32_overclaim",
-            "decode-bounds.json:fixarray_short_by_one"
+            "decode-bounds.json:fixarray_short_by_one",
+            "decode-bounds.json:incomplete_within_slot_budget"
           ],
           "gap": "Which entry points an SDK's test drives each vector through, and which error it asserts, is SDK test code no vector can check; sdk-feature-matrix.md's \"Test vectors in CI\" row records it per SDK."
         },
@@ -1177,7 +1247,8 @@
             "decode-bounds.json:bin32_overclaim",
             "decode-bounds.json:str32_overclaim",
             "decode-bounds.json:ext32_overclaim",
-            "decode-bounds.json:fixarray_short_by_one"
+            "decode-bounds.json:fixarray_short_by_one",
+            "decode-bounds.json:incomplete_within_slot_budget"
           ],
           "gap": "Which entry points an SDK's test drives each vector through, and which error it asserts, is SDK test code no vector can check; sdk-feature-matrix.md's \"Test vectors in CI\" row records it per SDK."
         },
@@ -1201,7 +1272,8 @@
             "decode-bounds.json:bin32_overclaim",
             "decode-bounds.json:str32_overclaim",
             "decode-bounds.json:ext32_overclaim",
-            "decode-bounds.json:fixarray_short_by_one"
+            "decode-bounds.json:fixarray_short_by_one",
+            "decode-bounds.json:incomplete_within_slot_budget"
           ],
           "gap": "These vectors reach only the decode entry points an SDK's test drives them through, while the rule binds every untrusted decode, invalidation events included; which entry points a test covers is SDK test code (IOP-31), recorded per SDK in sdk-feature-matrix.md's \"Test vectors in CI\" row."
         },
@@ -1231,7 +1303,25 @@
             "interop-mode.json:reject_reserved_namespace_ns",
             "interop-mode.json:reject_reserved_namespace_nsapi",
             "interop-mode.json:reject_double_dot_namespace",
-            "interop-mode.json:reject_double_dot_operation"
+            "interop-mode.json:reject_double_dot_operation",
+            "interop-mode.json:reject_namespace_too_long",
+            "interop-mode.json:reject_operation_too_long",
+            "interop-mode.json:reject_leading_dot_namespace",
+            "interop-mode.json:reject_leading_hyphen_operation",
+            "interop-mode.json:reject_leading_underscore_operation",
+            "interop-mode.json:reject_empty_namespace",
+            "interop-mode.json:reject_empty_operation",
+            "interop-mode.json:reject_non_ascii_digit_namespace",
+            "interop-mode.json:reject_non_ascii_letter_operation",
+            "interop-mode.json:reject_slash_namespace",
+            "interop-mode.json:reject_space_operation",
+            "interop-mode.json:reject_uppercase_operation",
+            "interop-mode.json:reject_colon_in_namespace",
+            "interop-mode.json:reject_trailing_newline_operation",
+            "interop-mode.json:reject_naive_datetime_nested",
+            "interop-mode.json:reject_nan_nested",
+            "interop-mode.json:reject_int_overflow_in_list",
+            "interop-mode.json:reject_int_underflow_in_map"
           ]
         },
         "IOP-36": {

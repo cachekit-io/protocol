@@ -571,11 +571,13 @@ not re-litigated by accident.
 
 | Group | Count | Verifies |
 | :--- | :---: | :--- |
-| `key_vectors` | 35 | Canonical argument bytes (exact hex), args hash, full key — the `2.0`≡`2` collapse pair, supplementary-plane key sorting, heterogeneous and mixed-sign sets (byte order ≠ natural order), set dedupe (`{2, 2.0}` → `[2]`), datetime edge cases incl. pre-epoch, both collapse-range endpoints, every `*16`-tier width boundary (uint/int ladders, str/bin/array/map headers, root array16), the reservation's exact-match, namespace-only scope (`nsapix` namespace, `nsapi` operation), and lone dots, which stay valid (`app.` namespace, `users.fetch.by_id` operation) |
+| `key_vectors` | 40 | Canonical argument bytes (exact hex), args hash, full key — the `2.0`≡`2` collapse pair, supplementary-plane key sorting, key sorting a collator gets wrong (`B` before `a`, `a-b` before `a_b`), heterogeneous and mixed-sign sets (byte order ≠ natural order), set dedupe (`{2, 2.0}` → `[2]`), datetime edge cases incl. pre-epoch, both collapse-range endpoints, integers inside int64 that a float64 cannot hold (2⁵³+1), small integers passed as `{"$int": …}`, every `*16`-tier width boundary (uint/int ladders, str/bin/array/map headers, root array16), both segments at 64 characters, the reservation's exact-match, namespace-only scope (`nsapix` namespace, `nsapi` operation), and lone dots, which stay valid (`app.` namespace, `users.fetch.by_id` operation) |
 | `value_vectors` | 4 | Plain-MessagePack value bytes (exact hex), float64 preservation in the value profile, temporal sentinel maps |
+| `reader_accept_vectors` | 6 | Well-formed documents no canonical writer emits, which a value reader accepts: padded integer widths, padded str/bin/array/map headers, unsorted map keys, a float32, an integer map key, an ext type |
+| `reader_reject_vectors` | 1 | A complete document followed by one trailing byte, with no CK frame prefix |
 | `aad_vectors` | 1 | AAD v0x03 bytes over an interop key (`format=msgpack`, `compressed=False`) |
 | `encryption_vectors` | 1 | Full HKDF-SHA256 → AES-256-GCM round-trip over plain-msgpack plaintext with the interop AAD (fixed nonce; decrypt-verified) |
-| `error_vectors` | 13 | Inputs that MUST<sup id="iop-35">IOP-35</sup> be rejected (NaN, +Inf and −Inf as independent vectors, int overflow/underflow, naive datetime, bad segments incl. trailing newline, the reserved namespaces `ns` and `nsapi`, `..` in either segment). The `error` text is a maintainer note, not a normative message |
+| `error_vectors` | 31 | Inputs that MUST<sup id="iop-35">IOP-35</sup> be rejected (NaN, +Inf and −Inf as independent vectors, int overflow/underflow, naive datetime, then NaN, both integer bounds and a naive datetime again nested in a list, a map value or a set, bad segments rule by rule on both segments — over 64 characters, a leading `.`, `_` or `-`, empty, a non-ASCII digit or letter, `/`, a space, uppercase, `:`, a trailing newline — the reserved namespaces `ns` and `nsapi`, `..` in either segment). The `error` text is a maintainer note, not a normative message |
 
 [`test-vectors/decode-bounds.json`](../test-vectors/decode-bounds.json) pins the
 [Decode bounds](#decode-bounds); `tools/decode-bounds-reference.py verify` checks it,
@@ -584,7 +586,10 @@ and the tool's docstring states what each CI leg proves.
 Inputs use a tagged-JSON convention (`{"$set": …}`, `{"$float": "2.0"}`,
 `{"$int": "…"}`, `{"$datetime": "…"}`, `{"$uuid": "…"}`, `{"$bytes": "<hex>"}`)
 documented in the file header, because JSON alone cannot express sets, bytes, floats
-vs ints, or 64-bit integers safely.
+vs ints, or 64-bit integers safely. A JavaScript harness keeps a `$float` apart from a
+bare `Number` by wrapping it in a type of its own, as `tools/interop-crosscheck.mjs`
+does, because the file uses a bare JSON number only for a safe integer: an integral
+`$float` must still reach the SDK as a float.
 
 Regenerate / verify:
 

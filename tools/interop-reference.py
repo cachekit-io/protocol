@@ -6,6 +6,7 @@ companion to the spec:
   - canonical MessagePack encoder (shortest-form, sorted maps)
   - interop argument normalization (number canonicalization, sets, datetimes, UUIDs)
   - interop key generation ({namespace}:{operation}:{args_hash})
+  - a value reader that accepts any well-formed document and rejects trailing bytes
   - HKDF-SHA256 key derivation per spec/encryption.md (stdlib hmac/hashlib)
   - test-vector generator + self-verifier for ../test-vectors/interop-mode.json
 
@@ -199,6 +200,118 @@ def encode_canonical(value: object, *, collapse_floats: bool = True) -> bytes:
     out = bytearray()
     _encode(value, out, collapse_floats=collapse_floats)
     return bytes(out)
+
+
+# ---------------------------------------------------------------------------
+# Value reader (spec: Interop Value Format) — accepts ANY well-formed document,
+# canonical or not, and rejects trailing bytes. What a reader returns for the
+# two shapes outside the data model is its own business; these stand-ins exist
+# so the canonical encoder rejects them by type.
+# ---------------------------------------------------------------------------
+
+class DecodedMap:
+    """A decoded map with a non-string (or repeated) key, kept as its pairs."""
+
+    def __init__(self, pairs: list[tuple[object, object]]) -> None:
+        self.pairs = pairs
+
+
+class DecodedExt:
+    """A decoded ext type: its type code and payload."""
+
+    def __init__(self, code: int, data: bytes) -> None:
+        self.code = code
+        self.data = data
+
+
+def _take(data: bytes, pos: int, n: int) -> tuple[bytes, int]:
+    if pos + n > len(data):
+        raise InteropError("truncated document")
+    return data[pos:pos + n], pos + n
+
+
+def _uint(data: bytes, pos: int, n: int) -> tuple[int, int]:
+    raw, pos = _take(data, pos, n)
+    return int.from_bytes(raw, "big"), pos
+
+
+def _decode(data: bytes, pos: int) -> tuple[object, int]:  # noqa: C901, PLR0911, PLR0912
+    t, pos = _uint(data, pos, 1)
+    if t <= 0x7F:
+        return t, pos
+    if t >= 0xE0:
+        return t - 0x100, pos
+    if t <= 0x8F:
+        return _decode_map(data, pos, t & 0x0F)
+    if t <= 0x9F:
+        return _decode_array(data, pos, t & 0x0F)
+    if t <= 0xBF:
+        raw, pos = _take(data, pos, t & 0x1F)
+        return raw.decode("utf-8"), pos
+    if t in (0xC0, 0xC2, 0xC3):
+        return {0xC0: None, 0xC2: False, 0xC3: True}[t], pos
+    if t in (0xC4, 0xC5, 0xC6):
+        n, pos = _uint(data, pos, 1 << (t - 0xC4))
+        return _take(data, pos, n)
+    if t in (0xC7, 0xC8, 0xC9):
+        n, pos = _uint(data, pos, 1 << (t - 0xC7))
+        code, pos = _take(data, pos, 1)
+        payload, pos = _take(data, pos, n)
+        return DecodedExt(int.from_bytes(code, "big", signed=True), payload), pos
+    if t == 0xCA:
+        raw, pos = _take(data, pos, 4)
+        return struct.unpack(">f", raw)[0], pos
+    if t == 0xCB:
+        raw, pos = _take(data, pos, 8)
+        return struct.unpack(">d", raw)[0], pos
+    if 0xCC <= t <= 0xCF:
+        return _uint(data, pos, 1 << (t - 0xCC))
+    if 0xD0 <= t <= 0xD3:
+        raw, pos = _take(data, pos, 1 << (t - 0xD0))
+        return int.from_bytes(raw, "big", signed=True), pos
+    if 0xD4 <= t <= 0xD8:
+        code, pos = _take(data, pos, 1)
+        payload, pos = _take(data, pos, 1 << (t - 0xD4))
+        return DecodedExt(int.from_bytes(code, "big", signed=True), payload), pos
+    if t in (0xD9, 0xDA, 0xDB):
+        n, pos = _uint(data, pos, 1 << (t - 0xD9))
+        raw, pos = _take(data, pos, n)
+        return raw.decode("utf-8"), pos
+    if t in (0xDC, 0xDD):
+        n, pos = _uint(data, pos, 2 << (t - 0xDC))
+        return _decode_array(data, pos, n)
+    if t in (0xDE, 0xDF):
+        n, pos = _uint(data, pos, 2 << (t - 0xDE))
+        return _decode_map(data, pos, n)
+    raise InteropError(f"type byte {t:#04x} is never used")
+
+
+def _decode_array(data: bytes, pos: int, n: int) -> tuple[list, int]:
+    out = []
+    for _ in range(n):
+        item, pos = _decode(data, pos)
+        out.append(item)
+    return out, pos
+
+
+def _decode_map(data: bytes, pos: int, n: int) -> tuple[object, int]:
+    pairs = []
+    for _ in range(n):
+        k, pos = _decode(data, pos)
+        v, pos = _decode(data, pos)
+        pairs.append((k, v))
+    keys = [k for k, _ in pairs]
+    if all(isinstance(k, str) for k in keys) and len(set(keys)) == len(keys):
+        return dict(pairs), pos
+    return DecodedMap(pairs), pos
+
+
+def decode_value(data: bytes) -> object:
+    """Read exactly one MessagePack document, canonical or not; trailing bytes are an error."""
+    value, end = _decode(data, 0)
+    if end != len(data):
+        raise InteropError(f"{len(data) - end} trailing byte(s) after one complete document")
+    return value
 
 
 # ---------------------------------------------------------------------------
@@ -626,6 +739,58 @@ KEY_VECTORS: list[dict] = [
         "operation": "users.fetch.by_id",
         "args": [1],
     },
+    {
+        "name": "segment_max_length",
+        "description": (
+            "Both segments at the 64-character limit (the longest interop key, 194 characters). The namespace "
+            "starts with a digit and holds '-' and '_'; the operation starts with a digit and holds '.', '-' "
+            "and '_'. A limit of 63, or a ban on a leading digit or on '-', rejects it"
+        ),
+        "namespace": "9-lives_" * 8,
+        "operation": ("0.op-x_" * 10)[:64],
+        "args": [1],
+    },
+    {
+        "name": "map_key_sort_case_across_letters",
+        "description": (
+            "Code point order puts 'B' (0x42) before 'a' (0x61). A collator (Intl.Collator, localeCompare, "
+            "with or without caseFirst 'upper') compares letters first and puts 'a' before 'B'"
+        ),
+        "namespace": "t",
+        "operation": "op",
+        "args": [{"a": 1, "B": 2}],
+    },
+    {
+        "name": "map_key_sort_punctuation",
+        "description": (
+            "Code point order puts 'a-b' ('-' is 0x2d) before 'a_b' ('_' is 0x5f). A collator puts 'a_b' "
+            "first: Unicode collation orders '_' before '-'"
+        ),
+        "namespace": "t",
+        "operation": "op",
+        "args": [{"a_b": 1, "a-b": 2}],
+    },
+    {
+        "name": "int_beyond_float64_precision",
+        "description": (
+            "2^53+1, -(2^53+1) and 2^63-1: integers inside int64 that a float64 cannot hold. A TypeScript "
+            "SDK that turns a BigInt inside int64 into a Number rounds each one and mints a different key"
+        ),
+        "namespace": "t",
+        "operation": "op",
+        "args": [{"$int": "9007199254740993"}, {"$int": "-9007199254740993"}, {"$int": "9223372036854775807"}],
+    },
+    {
+        "name": "small_int_as_bigint",
+        "description": (
+            "Small integers passed as {\"$int\": ...} (a BigInt in JavaScript) take the shortest form, the "
+            "bytes the same plain integers produce. An encoder that writes every BigInt at the full 9-byte "
+            "width mints a different key"
+        ),
+        "namespace": "t",
+        "operation": "op",
+        "args": [{"$int": "1"}, {"$int": "-1"}, {"$int": "300"}],
+    },
 ]
 
 VALUE_VECTORS: list[dict] = [
@@ -736,6 +901,182 @@ ERROR_VECTORS: list[dict] = [
             "(here at the end of the segment, which a check that skips the last pair misses)"
         ),
     },
+    # Segment grammar, rule by rule and on both segments: each vector breaks one rule in one
+    # segment, and the other segment is valid.
+    {
+        "name": "reject_namespace_too_long",
+        "namespace": "a" * 65,
+        "operation": "get_user",
+        "args": [],
+        "error": "namespace is 65 characters; the limit is 64 (segment_max_length pins 64 as valid)",
+    },
+    {
+        "name": "reject_operation_too_long",
+        "namespace": "users",
+        "operation": "b" * 65,
+        "args": [],
+        "error": "operation is 65 characters; the limit is 64",
+    },
+    {
+        "name": "reject_leading_dot_namespace",
+        "namespace": ".users",
+        "operation": "get_user",
+        "args": [],
+        "error": "a segment must start with a letter or digit, not '.'",
+    },
+    {
+        "name": "reject_leading_hyphen_operation",
+        "namespace": "users",
+        "operation": "-get_user",
+        "args": [],
+        "error": "a segment must start with a letter or digit, not '-'",
+    },
+    {
+        "name": "reject_leading_underscore_operation",
+        "namespace": "users",
+        "operation": "_get_user",
+        "args": [],
+        "error": "a segment must start with a letter or digit, not '_' (a leading \\w admits it)",
+    },
+    {
+        "name": "reject_empty_namespace",
+        "namespace": "",
+        "operation": "get_user",
+        "args": [],
+        "error": "a segment holds at least one character",
+    },
+    {
+        "name": "reject_empty_operation",
+        "namespace": "users",
+        "operation": "",
+        "args": [],
+        "error": "a segment holds at least one character",
+    },
+    {
+        "name": "reject_non_ascii_digit_namespace",
+        "namespace": "users\u0663",
+        "operation": "get_user",
+        "args": [],
+        "error": "U+0663 ARABIC-INDIC DIGIT THREE is not an ASCII digit (Unicode \\d, isdigit and isalnum admit it)",
+    },
+    {
+        "name": "reject_non_ascii_letter_operation",
+        "namespace": "users",
+        "operation": "caf\u00e9",
+        "args": [],
+        "error": "U+00E9 is not an ASCII letter (a lowercase or alphanumeric test admits it)",
+    },
+    {
+        "name": "reject_slash_namespace",
+        "namespace": "users/v2",
+        "operation": "get_user",
+        "args": [],
+        "error": "'/' is not in the segment character set",
+    },
+    {
+        "name": "reject_space_operation",
+        "namespace": "users",
+        "operation": "get user",
+        "args": [],
+        "error": "a space is not in the segment character set",
+    },
+    {
+        "name": "reject_uppercase_operation",
+        "namespace": "users",
+        "operation": "getUser",
+        "args": [],
+        "error": "operation must be lowercase",
+    },
+    {
+        "name": "reject_colon_in_namespace",
+        "namespace": "users:v2",
+        "operation": "get_user",
+        "args": [],
+        "error": "':' is not in the segment character set (it would add a key segment)",
+    },
+    {
+        "name": "reject_trailing_newline_operation",
+        "namespace": "users",
+        "operation": "get_user\n",
+        "args": [],
+        "error": "segment validation must be a FULL-string match, on the operation as on the namespace",
+    },
+    # Out-of-model values below the top of the argument list: a check that never reaches a
+    # nested value passes every top-level error vector above.
+    {
+        "name": "reject_naive_datetime_nested",
+        "args": [{"when": {"$set": [{"$datetime": "2024-01-01T00:00:00"}]}}],
+        "error": "naive datetime inside a set inside a map value",
+    },
+    {
+        "name": "reject_nan_nested",
+        "args": [[{"x": {"$float": "nan"}}]],
+        "error": "NaN inside a map value inside a list",
+    },
+    {
+        "name": "reject_int_overflow_in_list",
+        "args": [[1, {"$int": "18446744073709551616"}]],
+        "error": "integer above 2^64-1 inside a list",
+    },
+    {
+        "name": "reject_int_underflow_in_map",
+        "args": [{"id": {"$int": "-9223372036854775809"}}],
+        "error": "integer below -2^63 inside a map value",
+    },
+]
+
+# Value reader inputs (spec: Interop Value Format). Accept vectors are well-formed documents no
+# canonical writer emits; `value`, where tagged JSON can carry it, is what they decode to.
+READER_ACCEPT_VECTORS: list[dict] = [
+    {
+        "name": "reader_padded_int_widths",
+        "description": "Integers in wider forms than the shortest: 42 as uint16, -1 as int32, 1 as uint64",
+        "msgpack_hex": "93cd002ad2ffffffffcf0000000000000001",
+        "value": [42, -1, 1],
+    },
+    {
+        "name": "reader_padded_headers",
+        "description": "Headers wider than needed: an array16 of 3 holding 'abc' as str8, {'a': 1} as map16 and 2 bytes as bin16",
+        "msgpack_hex": "dc0003d903616263de0001a16101c50002dead",
+        "value": ["abc", {"a": 1}, {"$bytes": "dead"}],
+    },
+    {
+        "name": "reader_unsorted_map_keys",
+        "description": "Map keys in the reverse of code point order",
+        "msgpack_hex": "82a16202a16101",
+        "value": {"b": 2, "a": 1},
+    },
+    {
+        "name": "reader_float32",
+        "description": "1.5 as a float32 (0xca), which canonical writers never emit",
+        "msgpack_hex": "ca3fc00000",
+        "value": {"$float": "1.5"},
+    },
+    {
+        "name": "reader_non_string_map_key",
+        "description": (
+            "{1: 42}: a map with an integer key. No tagged-JSON value can carry it; a reader must decode it "
+            "without error (msgpack-python's unpackb needs strict_map_key=False)"
+        ),
+        "msgpack_hex": "81012a",
+    },
+    {
+        "name": "reader_ext_type",
+        "description": "An application ext type (fixext1, type 1, payload 0x2a). No tagged-JSON value can carry it; a reader must decode it without error",
+        "msgpack_hex": "d4012a",
+    },
+]
+
+READER_REJECT_VECTORS: list[dict] = [
+    {
+        "name": "reader_trailing_byte",
+        "description": (
+            "The issue_example_object value followed by one 0x00 byte: a complete document and a trailing "
+            "byte, with no CK frame prefix, so only the general trailing-bytes check rejects it"
+        ),
+        "msgpack_hex": "82a36167651ea46e616d65a5616c69636500",
+        "error": "trailing bytes after one complete document",
+    },
 ]
 
 
@@ -778,7 +1119,7 @@ def _build() -> dict:
     aad = aad_v3(ENC_TENANT_ID, single_int["expected_key"])
 
     return {
-        "version": "1.2.0",
+        "version": "1.3.0",
         "spec": "spec/interop-mode.md",
         "generator": "tools/interop-reference.py (CPython stdlib)",
         "cross_checked_by": "tools/interop-crosscheck.mjs (independent encoder + @noble/hashes blake2b + WebCrypto HKDF/AES-GCM)",
@@ -803,6 +1144,13 @@ def _build() -> dict:
             "The 'error' field is a human-readable reason for maintainers. Conformance means the input "
             "MUST be rejected with an error; the message text is not normative."
         ),
+        "reader_vectors_note": (
+            "Inputs for an interop VALUE reader, as raw MessagePack. A reader MUST decode every "
+            "reader_accept_vectors document without error: each is well-formed but not canonical (a padded "
+            "width, unsorted keys, a float32, a non-string map key, an ext type). Where tagged JSON can carry "
+            "it, 'value' is what the document decodes to. A reader MUST reject every reader_reject_vectors "
+            "document."
+        ),
         "tagged_json": {
             "note": "Single-key objects with a $-prefixed key are typed input tags; all other JSON maps directly.",
             "$set": "set of tagged values (unordered)",
@@ -812,13 +1160,20 @@ def _build() -> dict:
             "$float": (
                 "decimal float literal (JSON numbers are always integers in this file). "
                 "Error vectors use 'nan' (parses to NaN in Python and JS) and '1e999' "
-                "(overflows to +Infinity in Python, JS, and Rust) — never 'inf', which JS parses to NaN."
+                "(overflows to +Infinity in Python, JS, and Rust) — never 'inf', which JS parses to NaN. "
+                "A JavaScript harness must wrap the parsed Number in a type of its own (tools/interop-crosscheck.mjs "
+                "uses a Float class), so the SDK can tell an explicit float from a bare Number, which this file "
+                "only ever uses for a safe integer: an integral $float must still reach the SDK as a float "
+                "('2.0' stays float64 in a value, and '18446744073709551616' is a float64 argument, where a bare "
+                "Number that large must be rejected)."
             ),
             "$int": "decimal integer literal (for values beyond 2^53, unsafe in JS JSON.parse)",
         },
         "key_vectors": key_vectors,
         "value_vectors": value_vectors,
         "error_vectors": ERROR_VECTORS,
+        "reader_accept_vectors": READER_ACCEPT_VECTORS,
+        "reader_reject_vectors": READER_REJECT_VECTORS,
         "aad_vectors": [
             {
                 "name": "interop_key_aad",
@@ -855,6 +1210,93 @@ def _build() -> dict:
     }
 
 
+def _segment_fails(seg: str) -> bool:
+    return not SEGMENT_RE.fullmatch(seg) or FORBIDDEN_SUBSTRING in seg
+
+
+def _expect_rejected(label: str, args: list) -> None:
+    try:
+        canonical_args_bytes(args)
+    except (InteropError, ValueError):  # UnicodeEncodeError is a ValueError
+        return
+    raise AssertionError(f"{label}: must be rejected, was encoded")
+
+
+def _surrogate_selftest() -> None:
+    """Strings must be well-formed Unicode: a lone surrogate is rejected wherever it sits.
+
+    Portable JSON cannot carry a lone surrogate (serde_json rejects it; Rust String is
+    immune by construction), so this lives here and in the .mjs self-test, not in a vector.
+    """
+    for label, args in (
+        ("lone high surrogate", ["\ud800"]),
+        ("lone low surrogate", ["\udc00"]),
+        ("lone surrogate in a map key", [{"\ud800": 1}]),
+        ("lone low surrogate in a map key", [{"\udc00": 1}]),
+        ("lone surrogate in a nested value", [{"k": ["ok", "\udc00"]}]),
+        ("lone surrogate in a set", [_TaggedSet(["\ud800"])]),
+    ):
+        _expect_rejected(label, args)
+    assert canonical_args_bytes(["\U00010000"]) == bytes.fromhex("91a4f0908080"), "a valid pair must still encode"
+
+
+def _non_string_key_selftest() -> None:
+    """Map keys must be strings, at every nesting level. Portable JSON keys are always strings."""
+    for label, args in (
+        ("int key", [{1: "a"}]),
+        ("bytes key", [{b"k": "a"}]),
+        ("None key", [{None: "a"}]),
+        ("int key in a nested map", [[{"ok": {2: "a"}}]]),
+        ("int key in a set element", [_TaggedSet([{3: "a"}])]),
+    ):
+        _expect_rejected(label, args)
+    assert canonical_args_bytes([{"1": "a"}]) == bytes.fromhex("9181a131a161"), "a string key must still encode"
+
+
+def _out_of_model_selftest() -> None:
+    """A value of a type outside the data model is rejected wherever it sits; JSON cannot carry one."""
+    for label, args in (
+        ("object", [object()]),
+        ("complex", [complex(1, 2)]),
+        ("object in a list", [[1, object()]]),
+        ("object in a map value", [{"k": object()}]),
+        ("object in a set", [_TaggedSet([object()])]),
+    ):
+        _expect_rejected(label, args)
+
+
+def _reader_check(built: dict) -> None:
+    """Every reader accept vector is a well-formed, non-canonical document that decodes to its
+    `value`; every reject vector is one complete document followed by trailing bytes."""
+    for rv in built["reader_accept_vectors"]:
+        raw = bytes.fromhex(rv["msgpack_hex"])
+        decoded = decode_value(raw)
+        try:
+            canonical = encode_canonical(decoded, collapse_floats=False)
+        except InteropError:
+            canonical = None
+        if "value" in rv:
+            expected = encode_canonical(from_tagged(rv["value"]), collapse_floats=False)
+            assert canonical == expected, f"{rv['name']} does not decode to its value"
+        else:
+            assert canonical is None, f"{rv['name']} decodes to a value tagged JSON can carry: give it a value"
+        assert canonical != raw, f"{rv['name']} is canonical, so it tests nothing value_vectors do not"
+    for rv in built["reader_reject_vectors"]:
+        raw = bytes.fromhex(rv["msgpack_hex"])
+        try:
+            decode_value(raw)
+        except InteropError:
+            pass
+        else:
+            raise AssertionError(f"{rv['name']} decoded, but must be rejected")
+        _, end = _decode(raw, 0)  # the first document is complete: trailing bytes are the only fault
+        assert 0 < end < len(raw), f"{rv['name']} must be one complete document and trailing bytes"
+        assert not raw.startswith(b"CK"), f"{rv['name']} must not be a CK frame, which python-frame.json covers"
+    names = [v["name"] for g in ("key_vectors", "value_vectors", "error_vectors", "reader_accept_vectors",
+                                 "reader_reject_vectors") for v in built[g]]
+    assert len(names) == len(set(names)), "vector names must be unique across the file"
+
+
 def _self_check(built: dict) -> None:
     """Assertions that pin the spec's intentional equalities and edge cases."""
     by_name = {v["name"]: v for v in built["key_vectors"]}
@@ -880,16 +1322,20 @@ def _self_check(built: dict) -> None:
         "inclusive lower collapse bound broken: float -2^63 must collapse to int64-min"
     )
 
-    # Strings must be well-formed Unicode scalar sequences. A lone surrogate
-    # cannot be expressed in portable JSON (serde_json rejects it — Rust String
-    # is immune by construction), so this lives here and in the .mjs self-test
-    # instead of an error vector.
-    try:
-        canonical_args_bytes(["\ud800"])
-    except (InteropError, ValueError, UnicodeEncodeError):
-        pass
-    else:
-        raise AssertionError("lone surrogate must be rejected, not encoded")
+    assert by_name["small_int_as_bigint"]["canonical_args_hex"] == canonical_args_bytes([1, -1, 300]).hex(), (
+        "a small {\"$int\": ...} must encode exactly like the same plain integer"
+    )
+    max_key = by_name["segment_max_length"]
+    assert len(max_key["namespace"]) == len(max_key["operation"]) == 64 and len(max_key["expected_key"]) == 194, (
+        "segment_max_length must hold two 64-character segments, the 194-character maximum key"
+    )
+    for name in ("map_key_sort_case_across_letters", "map_key_sort_punctuation"):
+        (arg,) = by_name[name]["args"]
+        assert list(arg) != sorted(arg), f"{name} must list its keys out of order, so a no-op sort fails it"
+
+    _surrogate_selftest()
+    _non_string_key_selftest()
+    _out_of_model_selftest()
 
     # The '..' vectors must pass the pattern, or they would prove the grammar
     # rather than the extra rule an implementation has to add beside it.
@@ -898,6 +1344,14 @@ def _self_check(built: dict) -> None:
         assert SEGMENT_RE.fullmatch(ev["namespace"]) and SEGMENT_RE.fullmatch(ev["operation"]), (
             f"{name} must match segment_pattern so it exercises the '..' rule"
         )
+    # Each segment error vector breaks exactly one segment, so it pins one rule on one segment.
+    for ev in ERROR_VECTORS:
+        if "namespace" in ev:
+            bad = [seg for seg in (ev["namespace"], ev["operation"]) if _segment_fails(seg)]
+            bad += ["reserved"] if ev["namespace"] in RESERVED_NAMESPACES else []
+            assert len(bad) == 1, f"{ev['name']} must break exactly one segment rule, breaks {bad}"
+
+    _reader_check(built)
 
     for ev in ERROR_VECTORS:
         try:
@@ -933,6 +1387,16 @@ def _self_check(built: dict) -> None:
             )
         for vv in built["value_vectors"]:
             msgpack.unpackb(bytes.fromhex(vv["canonical_msgpack_hex"]), raw=False, strict_map_key=True)
+        # A stock reader agrees with this one about every reader vector (strict_map_key
+        # off: a non-string key is well-formed MessagePack).
+        for rv in built["reader_accept_vectors"]:
+            msgpack.unpackb(bytes.fromhex(rv["msgpack_hex"]), raw=False, strict_map_key=False)
+        for rv in built["reader_reject_vectors"]:
+            try:
+                msgpack.unpackb(bytes.fromhex(rv["msgpack_hex"]), raw=False, strict_map_key=False)
+            except msgpack.ExtraData:
+                continue
+            raise AssertionError(f"msgpack-python accepted reader reject vector {rv['name']}")
 
     # Encryption chain: the derived key must match the fingerprint already
     # published in test-vectors/encryption.json (ground-truth continuity).
@@ -967,6 +1431,7 @@ def main() -> int:
         vectors_path.write_text(json.dumps(built, indent=2, ensure_ascii=True) + "\n", encoding="utf-8")
         print(
             f"wrote {vectors_path} ({len(built['key_vectors'])} key, {len(built['value_vectors'])} value, "
+            f"{len(built['reader_accept_vectors'])} reader accept, {len(built['reader_reject_vectors'])} reader reject, "
             f"{len(built['error_vectors'])} error, {len(built['aad_vectors'])} AAD, "
             f"{len(built['encryption_vectors'])} encryption vectors)"
         )
@@ -978,6 +1443,7 @@ def main() -> int:
         return 1
     print(
         f"OK: {len(built['key_vectors'])} key, {len(built['value_vectors'])} value, "
+            f"{len(built['reader_accept_vectors'])} reader accept, {len(built['reader_reject_vectors'])} reader reject, "
         f"{len(built['error_vectors'])} error, {len(built['aad_vectors'])} AAD, "
         f"{len(built['encryption_vectors'])} encryption vectors all verified"
     )
