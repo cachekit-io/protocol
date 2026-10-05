@@ -428,11 +428,17 @@ CASES: list[Case] = [
         1,
         "defines no function 'phantom'",
     ),
-    # A comment opener inside a string or a regular expression opens no comment, so the test after it is found.
+    # A comment opener inside a string (past an escaped quote) or a regular expression (after `=` or
+    # `return`, or in a character class) opens no comment, nor does a backtick in a line comment open
+    # a template: each misread would blank the test after it.
     (
-        "mjs test after a string and a regex holding comment openers",
+        "mjs test after strings and regexes holding comment openers",
         both(
-            append("tools/interop-crosscheck.mjs", '\nconst opener = "/*";\nconst slashes = /\\/*/;\nfunction realProbe() {}\n'),
+            append(
+                "tools/interop-crosscheck.mjs",
+                '\nconst opener = "\\"/*";\nconst slashes = /\\/*/;\nconst again = () => { return /\\/*/; };\n'
+                "const klass = /[/]/*2;\n// a lone ` in a comment\nfunction realProbe() {}\n",
+            ),
             entry("IOP-10", tests=["tools/interop-crosscheck.mjs:realProbe"]),
             report,
         ),
@@ -779,6 +785,36 @@ CASES: list[Case] = [
         1,
         "this MUST has no id",
     ),
+    # Container rules: how far a line must be indented to stay in a list item or blockquote decides
+    # whether it is prose there, prose outside, or an indented code block.
+    ("quote marker indented four spaces", append(SPEC, "\n> a\n>\n    > Readers MUST reject it.\n"), 1, "sits inside the indented code block"),
+    ("blockquote takes one space after its marker", append(SPEC, "\n>    Readers MUST reject it.\n"), 1, "this MUST has no id"),
+    ("indented line continuing a paragraph", append(SPEC, "\nReaders reject it\n    MUST here.\n"), 1, "this MUST has no id"),
+    (
+        "line indented less than its list item leaves it",
+        append(SPEC, "\n- ```\n code: Readers MUST reject it.\n  ```\n```\n"),
+        1,
+        "this MUST has no id",
+    ),
+    ("blank line ends an empty list item", append(SPEC, "\n-\n\n    Readers MUST reject it.\n"), 1, "sits inside the indented code block"),
+    ("blank line inside a list item", append(SPEC, "\n- a\n\n    Readers MUST reject it.\n"), 1, "this MUST has no id"),
+    ("list item content after a three-space gap", append(SPEC, "\n-   a\n\n      Readers MUST reject it.\n"), 1, "this MUST has no id"),
+    ("list item opening with indented code", append(SPEC, "\n-      Readers MUST reject it.\n"), 1, "sits inside the indented code block"),
+    ("bare quote marker ends a paragraph", append(SPEC, "\nA lone ` backtick\n>\nso ` MUST ` here\n"), 0, OK),
+    # Interrupting blocks: each ends the paragraph, so the span pairs on the next line and hides MUST.
+    ("thematic break ends a paragraph", append(SPEC, "\nA lone ` backtick\n***\nso ` MUST ` here\n"), 0, OK),
+    ("ordered marker 1 ends a paragraph", append(SPEC, "\nA lone ` backtick\n1. so ` MUST ` here\n"), 0, OK),
+    # A line holding one tag (HTML block type 7) cannot interrupt a paragraph; after a blank line it opens a raw block.
+    ("tag line inside a paragraph", append(SPEC, "\nA lone ` backtick\n<span>\nReaders MUST reject it ` here.\n"), 0, OK),
+    ("tag line opening an HTML block", append(SPEC, "\n<span>\n`MUST`\n</span>\n"), 1, "this MUST has no id"),
+    # Two dashes under a paragraph line make a heading, not a one-column table, so the next lines are a paragraph.
+    ("two-dash underline is not a delimiter row", append(SPEC, "\nTitle\n--\nA lone ` backtick\nReaders MUST reject it ` here.\n"), 0, OK),
+    # A table takes the paragraph's last line as its header; the lines before it stay a paragraph.
+    ("table header row leaves its paragraph", append(SPEC, "\nReaders ` MUST reject it\n| b ` | c |\n| - | - |\n"), 1, "this MUST has no id"),
+    ("trailing pipe on one table row only", append(SPEC, "\n| a ` | b\n| - | - |\n| MUST ` | c\n"), 1, "this MUST has no id"),
+    # A closing fence is indented at most 3 spaces and holds nothing but the fence.
+    ("fence closer indented four spaces", append(SPEC, "\n```text\ncode\n    ```\nMUST inside\n```\n"), 1, "sits inside the code fence opened at line"),
+    ("fence closer with an info string", append(SPEC, "\n```text\n``` inner\nMUST inside\n```\n"), 1, "sits inside the code fence opened at line"),
     # An HTML block passes through as it stands, so a comment it leaves open hides the rest of the file.
     ("comment left open in an HTML block", append(SPEC, "\n<div>\n<!-- note\n\nReaders MUST reject it.\n"), 1, "unclosed HTML comment"),
     ("tab in a spec file", append(SPEC, "\n\tReaders MUST reject it.\n"), 1, "a tab; indent with spaces"),
@@ -894,11 +930,12 @@ CASES: list[Case] = [
     ),
     ("requirements not a map, with --base", commit_base(lambda _: None), 1, "expected prefix, next, requirements and retired"),
     ("next lowered since the base", commit_base(lambda _: None), 1, "next went down from 37"),
+    # A copy of cachekit-py's entry under a name no index entry narrows to, so dropping it fails only here.
     (
         "SDK dropped from sdks.json since the base",
-        commit_base(lambda _: None),
+        commit_base(both(sdks(lambda d: d.__setitem__("cachekit-go", dict(d["cachekit-py"]))), report)),
         1,
-        "cachekit-py was listed at HEAD and is now gone",
+        "cachekit-go was listed at HEAD and is now gone",
     ),
     # --- ids are never dropped or reused (--base) ---
     (
@@ -926,7 +963,7 @@ AFTER_BASE: dict[str, tuple[Mutate, str]] = {
     "vendored copy from a commit not on the base": (vendored_from_unmerged_commit, "HEAD~1"),
     "requirements not a map, with --base": (index(lambda s: s.__setitem__("requirements", 7)), "HEAD"),
     "next lowered since the base": (index(lambda s: s.__setitem__("next", 36)), "HEAD"),
-    "SDK dropped from sdks.json since the base": (both(sdks(lambda d: d.pop("cachekit-py")), report), "HEAD"),
+    "SDK dropped from sdks.json since the base": (both(sdks(lambda d: d.pop("cachekit-go")), report), "HEAD"),
 }
 
 PRISTINE: Path | None = None

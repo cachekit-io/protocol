@@ -28,7 +28,9 @@ same text in lowercase. When the keyword is bold, the id goes after the closing 
 
 | Spec file | Prefix |
 | :--- | :--- |
+| [`spec/file-backend-format.md`](../spec/file-backend-format.md) | `FILE` |
 | [`spec/interop-mode.md`](../spec/interop-mode.md) | `IOP` |
+| [`spec/wire-format.md`](../spec/wire-format.md) | `WIRE` |
 
 Each keyword occurrence is one requirement. A sentence with two keywords carries two ids. A
 keyword that introduces a list ("An SDK implementation of interop mode MUST:") carries one id,

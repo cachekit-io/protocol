@@ -236,8 +236,8 @@ def layout(lines: list[str]) -> list[Leaf]:
     one whose containers it did not continue (a lazy continuation line), or else continues an
     open table or starts a paragraph. A list item that would interrupt a paragraph must hold
     text and, if ordered, start at 1; a setext underline, a table and an HTML block of type 7
-    are judged by the same rule. Only spaces are read as indentation, so a tab is an error. A
-    code fence or HTML comment block still open at the end of the file is an error too.
+    are judged by the same rule. Only spaces are read as indentation, so a tab is an error, and
+    so is a code fence still open at the end of the file.
     """
     stack: list[object] = []  # open containers, outermost first: QUOTE or an Item
     leaves: list[Leaf] = []
@@ -433,13 +433,9 @@ def mask(text: str) -> tuple[str, list[Block], list[tuple[int, str]], frozenset[
             for i in leaf.lines:
                 masked[i] = mask_cells(lines[i])
         elif leaf.kind in ("code fence", "indented code block"):
-            # Only a fence at column 0, outside every container, can be exempted.
-            exempt = (
-                leaf.kind == "code fence"
-                and lines[first].startswith(("`", "~"))
-                and first > 0
-                and lines[first - 1].rstrip() == EXEMPT
-            )
+            # Only a fence at column 0, outside every container, can be exempted: a line that starts
+            # with its run of backticks or tildes, which no indented code block can.
+            exempt = lines[first].startswith(("`", "~")) and first > 0 and lines[first - 1].rstrip() == EXEMPT
             found.append(Block(leaf.kind, at[first], at[last] + len(lines[last]), first + 1, exempt))
             for i in leaf.lines:
                 masked[i] = " " * len(lines[i])
