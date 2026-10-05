@@ -746,7 +746,7 @@
           "tests": [
             "tools/path-encoding-verify.py:verify"
           ],
-          "gap": "No row holds a backslash, which a WHATWG URL parser reads as '/': an encoder that leaves it raw passes every row, and the key `a\\..\\health` then reaches /v1/cache/health; and the rows pin the encoder, not the request path (API-15)."
+          "gap": "No row holds a backslash, which a WHATWG URL parser reads as '/' (an encoder that leaves it raw passes every row, and the key `a\\..\\health` then reaches /v1/cache/health), a raw tab, LF or CR, which the parser strips (so `.<TAB>.` arrives as `..`), or an existing percent-escape, which an encoder that keeps escapes raw (API-7) sends unchanged, so the key `%2e%2e` becomes a dot segment and /v1/cache/%2e%2e/ttl becomes /v1/ttl; and the rows pin the encoder, not the request path (API-15)."
         },
         "API-5": {
           "section": "Encoding rules",
@@ -765,7 +765,7 @@
           "tests": [
             "tools/path-encoding-verify.py:verify"
           ],
-          "gap": "No row holds a byte outside ASCII, or any ASCII character API-7's gap names, so an encoder that escapes Latin-1 or UTF-16 code units instead of UTF-8 bytes, or leaves a backslash raw, passes; and the rows pin the encoder, not the request path (API-15)."
+          "gap": "No row holds a byte outside ASCII, an existing percent-escape, or any ASCII character API-7's gap names, so an encoder that escapes Latin-1 or UTF-16 code units instead of UTF-8 bytes, leaves a backslash raw, or keeps an existing escape raw (API-7) passes; and the rows pin the encoder, not the request path (API-15)."
         },
         "API-6": {
           "section": "Encoding rules",
@@ -780,7 +780,7 @@
           "tests": [
             "tools/path-encoding-verify.py:verify"
           ],
-          "gap": "No row holds '-' or '~', so an encoder that escapes either passes; '-' is in the server's key charset, so escaping it changes the wire bytes the spec promises are identical across SDKs for every key the server accepts; and the rows pin the encoder, not the request path (API-15)."
+          "gap": "No row holds an uppercase letter, '-' or '~', so an encoder whose safe set is lowercase-only, or that escapes '-' or '~', passes; uppercase letters and '-' are in the server's key charset, so escaping them changes the wire bytes the spec promises are identical across SDKs for every key the server accepts; and the rows pin the encoder, not the request path (API-15)."
         },
         "API-7": {
           "section": "Encoding rules",
@@ -799,7 +799,7 @@
           "tests": [
             "tools/path-encoding-verify.py:verify"
           ],
-          "gap": "No row holds a backslash (API-4), a backtick, any of '\"', '$', '&', '+', ',', ';', '<', '>', '@', '[', ']', '^', '{', '|' and '}', a control character or a byte of 0x80 or above (API-5), so an encoder that escapes only the characters the rows hold passes; and the rows pin the encoder, not the request path (API-15)."
+          "gap": "No row holds a backslash (API-4), a backtick, any of '\"', '$', '&', '+', ',', ';', '<', '>', '@', '[', ']', '^', '{', '|' and '}', a control character, a byte of 0x80 or above (API-5), or an existing percent-escape. So an encoder that escapes only the characters the rows hold passes, and so does one that keeps an existing escape raw, as never-double-encode encoders do: the key `ns%3Akey` then reaches the server as `ns:key`, and `%2e%2e` as a dot segment (API-4). And the rows pin the encoder, not the request path (API-15)."
         },
         "API-8": {
           "section": "Encoding rules",
@@ -867,31 +867,11 @@
         "API-14": {
           "section": "Encoding rules",
           "binds": "sdk",
-          "vectors": [
-            "path-encoding.json:",
-            "path-encoding.json:.",
-            "path-encoding.json:..",
-            "path-encoding.json:health",
-            "path-encoding.json:ttl",
-            "path-encoding.json:lock"
-          ],
-          "gap": "Whether an SDK's test asserts that each row raises before any URL or request is built, on every entry point, is SDK test code no vector can check."
+          "gap": "Whether an SDK's test asserts that each row raises before any URL or request is built, on every entry point, is SDK test code no vector can check: a suite that asserts something weaker passes every reject row."
         },
         "API-15": {
           "section": "Encoding rules",
           "binds": "sdk",
-          "vectors": [
-            "path-encoding.json:ns:test:func:__main__.get_user:args:3870b2ea5735ae639ded9450ef117768db676f037bec636503796c5b81095153:1s",
-            "path-encoding.json:default:../../admin",
-            "path-encoding.json:x/../../health",
-            "path-encoding.json:k?x=1#f",
-            "path-encoding.json:a b",
-            "path-encoding.json:100%",
-            "path-encoding.json:a:..",
-            "path-encoding.json:..a",
-            "path-encoding.json:ns:key",
-            "path-encoding.json:f(x)!*'"
-          ],
           "gap": "Whether an SDK's test reads the parsed path of the request it actually builds, rather than the encoder's return value or a template string, is SDK test code no vector can check; until it does, the encoding rules' rows pin the encoder alone."
         },
         "API-16": {
@@ -916,7 +896,7 @@
           "tests": [
             "tools/path-encoding-verify.py:verify"
           ],
-          "gap": "The rows pin one call of the encoder: a client that hands the encoded segment to a URL builder that escapes '%' again, turning ns%3Akey into ns%253Akey, passes them unless its test asserts on the parsed request path (API-15)."
+          "gap": "The rows pin one call of the encoder: a client that hands the encoded segment to a URL builder that escapes '%' again, turning ns%3Akey into ns%253Akey, passes them unless its test asserts on the parsed request path (API-15). No row holds an existing percent-escape, so the opposite mistake passes too: an encoder that avoids double-encoding by keeping an existing escape raw (API-7)."
         },
         "API-18": {
           "section": "GET /v1/cache/{key}",
@@ -1051,7 +1031,7 @@
         "API-44": {
           "section": "PUT /v1/cache/{key}",
           "binds": "sdk",
-          "gap": "No vector covers request headers, so nothing here catches a client that sends X-TTL beside X-CacheKit-TTL."
+          "gap": "No vector covers request headers, so nothing here catches a client that sends X-TTL instead of, or beside, X-CacheKit-TTL."
         },
         "API-45": {
           "section": "PUT /v1/cache/{key}",
@@ -1112,7 +1092,7 @@
           "sdks": [
             "cachekit-py"
           ],
-          "gap": "No vector covers request headers, so nothing here catches a revalidation write that omits X-CacheKit-Stale-TTL and so leaves the entry with no stale window."
+          "gap": "No vector covers request headers, so nothing here catches a revalidation write that omits X-CacheKit-TTL, which stores a no-expiry entry (or draws a 400 if it still sends X-CacheKit-Stale-TTL), or omits X-CacheKit-Stale-TTL, which leaves no stale window."
         },
         "API-56": {
           "section": "Write semantics",
@@ -1137,7 +1117,7 @@
         "API-60": {
           "section": "Reading a stale entry",
           "binds": "sdk",
-          "gap": "No vector drives revalidation, so nothing here catches a client that fires a background recompute from a HEAD labelled stale."
+          "gap": "No vector drives a background recompute, so nothing here catches a client that starts one from a HEAD labelled stale. Unlike API-61 to API-63, the rule binds every SDK: a local refresh-ahead is a background recompute too."
         },
         "API-61": {
           "section": "Revalidation flow (SDK)",
@@ -1201,7 +1181,7 @@
         "API-71": {
           "section": "GET /v1/cache/{key}/ttl",
           "binds": "sdk",
-          "gap": "No vector presents a /ttl response, so nothing here catches a client that coerces a null ttl to 0, or raises on it."
+          "gap": "No vector presents a /ttl response, so nothing here catches a client that coerces a null ttl to 0 or to a negative sentinel such as -1, or raises on it."
         },
         "API-72": {
           "section": "GET /v1/cache/{key}/ttl",
@@ -1216,7 +1196,7 @@
         "API-74": {
           "section": "SSRF Protection",
           "binds": "sdk",
-          "gap": "No vector covers URL validation, so nothing here catches a client that applies the hostname allowlist but accepts http, or skips the private-range check once a custom host is allowed."
+          "gap": "No vector holds an API URL, so nothing here checks HTTPS-only, the listed private ranges or the hostname allowlist."
         }
       },
       "retired": {}
