@@ -768,7 +768,7 @@
             "path-encoding.json:a\\..\\health",
             "path-encoding.json:.\t.",
             "path-encoding.json:.\r\n.",
-            "path-encoding.json:a\u0000b\u001fcd",
+            "path-encoding.json:a\u0000b\u001fc\u007fd",
             "path-encoding.json:%2e%2e",
             "path-encoding.json:User%3AKey",
             "path-encoding.json:café",
@@ -815,7 +815,7 @@
             "path-encoding.json:a\\..\\health",
             "path-encoding.json:.\t.",
             "path-encoding.json:.\r\n.",
-            "path-encoding.json:a\u0000b\u001fcd",
+            "path-encoding.json:a\u0000b\u001fc\u007fd",
             "path-encoding.json:%2e%2e",
             "path-encoding.json:User%3AKey",
             "path-encoding.json:café",
@@ -937,7 +937,8 @@
             "freshness-headers.json:freshness_capitalised",
             "freshness-headers.json:freshness_uppercase_stale",
             "freshness-headers.json:freshness_empty",
-            "freshness-headers.json:freshness_list"
+            "freshness-headers.json:freshness_list_fresh_first",
+            "freshness-headers.json:freshness_list_fresh_last"
           ],
           "tests": [
             "tools/freshness-headers-verify.py:verify"
@@ -1002,7 +1003,13 @@
         "API-30": {
           "section": "Remaining Freshness",
           "binds": "sdk",
-          "gap": "As API-29, for an SDK that backfills a fresh response whose X-CacheKit-Fresh-For is 0."
+          "vectors": [
+            "freshness-headers.json:fresh_for_zero"
+          ],
+          "tests": [
+            "tools/freshness-headers-verify.py:verify"
+          ],
+          "gap": "The row reaches the parser an SDK's test hands the value: a parser that reads 0 as no value fails it, but no vector reaches the local cache, so nothing here catches an SDK that parses 0 and backfills anyway (API-29)."
         },
         "API-31": {
           "section": "Remaining Freshness",
@@ -1026,9 +1033,12 @@
             "freshness-headers.json:fresh_for_hex",
             "freshness-headers.json:fresh_for_digit_separator",
             "freshness-headers.json:fresh_for_inner_space",
+            "freshness-headers.json:fresh_for_nbsp_prefix",
             "freshness-headers.json:fresh_for_eight_digits",
             "freshness-headers.json:fresh_for_over_cap",
             "freshness-headers.json:fresh_for_wraps_32_bit",
+            "freshness-headers.json:fresh_for_over_64_bits",
+            "freshness-headers.json:fresh_for_4301_digits",
             "freshness-headers.json:fresh_for_superscript_two",
             "freshness-headers.json:fresh_for_arabic_indic_one",
             "freshness-headers.json:fresh_for_list"
@@ -1043,12 +1053,14 @@
           "binds": "sdk",
           "vectors": [
             "freshness-headers.json:fresh_for_eight_digits",
-            "freshness-headers.json:fresh_for_wraps_32_bit"
+            "freshness-headers.json:fresh_for_wraps_32_bit",
+            "freshness-headers.json:fresh_for_over_64_bits",
+            "freshness-headers.json:fresh_for_4301_digits"
           ],
           "tests": [
             "tools/freshness-headers-verify.py:verify"
           ],
-          "gap": "The order of the checks is not observable: a parser that converts first, with arithmetic that cannot wrap, and checks the length after returns the same values, so it passes; and the rows reach the parser, not the read path (API-33)."
+          "gap": "A parser that converts first, with arithmetic that neither wraps nor fails on a long value, and checks the length after returns the same values, so the order shows only through the conversions the rows break (32- and 64-bit integers, CPython's 4,300-digit limit); and the rows reach the parser, not the read path (API-33)."
         },
         "API-35": {
           "section": "Remaining Freshness",
@@ -1118,7 +1130,7 @@
         "API-48": {
           "section": "HEAD /v1/cache/{key}",
           "binds": "sdk",
-          "gap": "No vector presents a response, so nothing here catches a client that reports a key absent when its HEAD response is labelled stale."
+          "gap": "No vector presents a HEAD response, so nothing here catches a client that reports a key absent when its HEAD response is labelled stale."
         },
         "API-49": {
           "section": "HEAD /v1/cache/{key}",
@@ -1143,7 +1155,7 @@
         "API-53": {
           "section": "Entry lifecycle",
           "binds": "sdk",
-          "gap": "No vector presents a response, so nothing here catches an SDK that computes an entry's freshness from its own clock and the TTL it wrote, instead of the server's label."
+          "gap": "No vector drives an SDK's read path, so nothing here catches an SDK that computes an entry's freshness from its own clock and the TTL it wrote, instead of the server's label."
         },
         "API-54": {
           "section": "Validation",
@@ -1169,7 +1181,13 @@
         "API-57": {
           "section": "Reading a stale entry",
           "binds": "sdk",
-          "gap": "No vector presents a response, so nothing here catches a client that raises on a stale label it does not expect."
+          "vectors": [
+            "freshness-headers.json:freshness_stale"
+          ],
+          "tests": [
+            "tools/freshness-headers-verify.py:verify"
+          ],
+          "gap": "The row reaches the parser an SDK's test hands the value, not its read path: a parser that raises on `stale` fails it, but nothing here catches a read path that classifies the GET 200 as stale and then raises instead of serving it or taking its local miss policy."
         },
         "API-58": {
           "section": "Reading a stale entry",

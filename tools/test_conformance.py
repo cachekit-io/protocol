@@ -1421,6 +1421,37 @@ def test_strip(tmp: Path) -> bool:
     return bool(good)
 
 
+def test_code_spans() -> bool:
+    """The report shows each vector name exactly: every branch of code(), read back the way a GFM table cell reads it."""
+    sys.path.insert(0, str(HERE))
+    import conformance
+
+    def shown(cell: str) -> str:
+        """What GitHub shows for a cell that is one code span: \\| unescaped, then the fence and one pad space dropped."""
+        text = re.sub(r"\\\|", "|", cell)
+        fence = re.match("`+", text)[0]
+        inner = text[len(fence) : -len(fence)]
+        return inner[1:-1] if inner.startswith(" ") and inner.endswith(" ") and inner.strip(" ") else inner
+
+    # name -> what the report must show for it
+    cases = {
+        "ns:key": "ns:key",
+        "a|b": "a|b",
+        "a\\|b": "a\\|b",  # its own backslash survives the pipe escaping
+        "a`b": "a`b",  # a longer fence
+        "`a`": "`a`",  # padded, so the end backticks stay out of the fence
+        ".\t.": '".\\t."',  # not printable: its JSON string literal
+        "a\x7fb": '"a\\u007fb"',  # DEL, which json.dumps leaves raw
+        " a": '" a"',  # a span would drop the space
+        '".\\t."': '"\\".\\\\t.\\""',  # printable, but it would pass for the tab key
+        "cafe\u0301": '"cafe\\u0301"',  # decomposed, so it would pass for the precomposed spelling
+    }
+    wrong = {name: shown(conformance.cell(conformance.code(name))) for name in cases}
+    wrong = {name: got for name, got in wrong.items() if got != cases[name]}
+    print(f"  {'ok  ' if not wrong else 'FAIL'} report shows each vector name exactly{f': {wrong}' if wrong else ''}")
+    return not wrong
+
+
 def test_optimized() -> bool:
     """`python -OO` strips docstrings; the checker must not depend on its own."""
     proc = subprocess.run(
@@ -1449,6 +1480,7 @@ def main() -> int:
         results += [run_report_case(Path(tmp), n, case) for n, case in enumerate(REPORT_CASES)]
         results.append(test_optimized())
         results.append(test_strip(Path(tmp)))
+        results.append(test_code_spans())
     failed = results.count(False)
     if failed:
         print(f"\n{failed}/{len(results)} case(s) failed", file=sys.stderr)

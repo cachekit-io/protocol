@@ -77,6 +77,7 @@ import json
 import re
 import subprocess
 import sys
+import unicodedata
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -1067,16 +1068,18 @@ def code(text: str) -> str:
 
     A name is data, so it can hold what a span cannot: a line break ends the table row, a
     backtick ends the span, and a span drops a space at each end. A name that is not all
-    printable (a tab, a line break, NUL), or that starts or ends with a space, is shown as its
-    JSON string literal, and the fence is one backtick longer than any run inside it.
+    printable (a tab, a line break, NUL), is not in Unicode normal form C, starts or ends with
+    a space, or starts with a quote is shown as its JSON string literal, so it cannot pass for
+    another name. The fence is one backtick longer than any run inside it.
     """
-    if not text.isprintable() or text[:1] == " " or text[-1:] == " ":
+    if not text.isprintable() or not unicodedata.is_normalized("NFC", text) or text[:1] in (" ", '"') or text[-1:] == " ":
         text = json.dumps(text).replace("\x7f", "\\u007f")  # json.dumps leaves DEL raw
     fence = "`" * (1 + max((len(run) for run in re.findall("`+", text)), default=0))
     # The span strips the padding again, which keeps a backtick at either end out of the fence.
     if text[:1] == "`" or text[-1:] == "`":
         text = f" {text} "
-    return fence + text + fence
+    # cell() turns every \| into | before it escapes each pipe, so a name's own \| goes in as \\| to keep its backslash.
+    return fence + text.replace("\\|", "\\\\|") + fence
 
 
 def excerpt(text: str, start: int, word: str, rows: frozenset[int]) -> str:
