@@ -1042,7 +1042,7 @@
         "API-42": {
           "section": "PUT /v1/cache/{key}",
           "binds": "sdk",
-          "gap": "No vector maps a duration to a header, so nothing here catches a client that truncates 0.4 s to 0 and then rejects it or sends 0."
+          "gap": "No vector maps a duration to a header, so nothing here catches a client that sends a sub-second TTL unrounded, or truncates it to 0 and then rejects it or sends 0."
         },
         "API-43": {
           "section": "PUT /v1/cache/{key}",
@@ -1157,7 +1157,7 @@
         "API-65": {
           "section": "POST /v1/cache/{key}/lock",
           "binds": "sdk",
-          "gap": "No vector presents a lock response, so nothing here catches a client that takes a 200 as acquired without reading lock_id, and so treats {\"lock_id\": null} as its own lease."
+          "gap": "No vector presents a lock response, so nothing here catches a client that takes a 200 as its lease unless lock_id is null, so that an absent or empty lock_id counts as held."
         },
         "API-66": {
           "section": "POST /v1/cache/{key}/lock",
