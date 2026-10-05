@@ -1,5 +1,5 @@
 {
-  "version": "1.3.0",
+  "version": "1.4.0",
   "spec": "spec/interop-v2.md",
   "generator": "tools/interop-v2-reference.py (CPython stdlib, incl. pure-Python LZ4 block codec)",
   "cross_checked_by": "tools/interop-v2-crosscheck.mjs (independent container parser + LZ4 block decoder + WebCrypto HKDF/AES-GCM; zero dependencies)",
@@ -194,7 +194,7 @@
     },
     {
       "name": "reject_forged_bin32_length",
-      "description": "bin32 payload header declaring 4 GiB (0xffffffff) with no data following \u2014 readers MUST validate the length header against remaining input BEFORE allocating",
+      "description": "bin32 payload header declaring 4 GiB (0xffffffff) with no data following. Rule 2's declared-length budget forbids allocating for the declared length, and the remaining-bytes check rejects it before any data byte is read. A reader that allocates 4 GiB and then hits the end of input also errors, so the conformance test of spec/interop-v2.md#sdk-implementation-requirements, item 7, asserts which check rejected it",
       "container_hex": "c102930005c6ffffffff",
       "error": "bin length header exceeds remaining input"
     },
@@ -263,6 +263,48 @@
       "description": "Valid LZ4 block whose output is one byte short of original_size",
       "container_hex": "c1029301cceec445ff1382a66576656e747398b8474554202f6170692f75736572732f343220323030204f4b19009cf00da6736f75726365b4696e7465726f702d76322d7265666572656e6365",
       "error": "LZ4 output length != original_size (also fine to fail as overrun, depending on decoder structure)"
+    },
+    {
+      "name": "reject_count_array16_forged",
+      "description": "array16 header declaring 65,535 elements, followed by three complete elements",
+      "container_hex": "c102dcffff0000c400",
+      "error": "container body must be a 3-element array"
+    },
+    {
+      "name": "reject_count_array32_forged",
+      "description": "array32 header declaring 4,294,967,295 elements, followed by three complete elements",
+      "container_hex": "c102ddffffffff0000c400",
+      "error": "container body must be a 3-element array"
+    },
+    {
+      "name": "reject_count_four",
+      "description": "fixarray(4) header followed by three complete elements",
+      "container_hex": "c102940000c400",
+      "error": "container body must be a 3-element array"
+    },
+    {
+      "name": "reject_truncated_uint64",
+      "description": "Body ends inside the uint64 method field (cf, then 1 of its 8 bytes)",
+      "container_hex": "c10293cf00",
+      "error": "container body truncated"
+    },
+    {
+      "name": "reject_truncated_array16_header",
+      "description": "Body ends inside the array16 count (dc, then 1 of its 2 bytes)",
+      "container_hex": "c102dc00",
+      "error": "container body truncated"
+    },
+    {
+      "name": "reject_truncated_bin32_length",
+      "description": "Body ends inside the payload's bin32 length field (c6, then 1 of its 4 bytes)",
+      "container_hex": "c102930000c6ff",
+      "error": "container body truncated"
+    },
+    {
+      "name": "reject_truncated_before_payload",
+      "description": "Body ends after original_size, before the payload's marker",
+      "container_hex": "c102930011",
+      "error": "container body truncated"
     }
   ],
   "crypto_reject_vectors": [

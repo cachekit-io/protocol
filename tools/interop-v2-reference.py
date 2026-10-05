@@ -279,7 +279,8 @@ class _Reader:
         self.pos = 0
 
     def _take(self, n: int) -> bytes:
-        if self.pos + n > len(self.buf):
+        # n against the bytes left, never pos + n, which wraps in a 32-bit type.
+        if n > len(self.buf) - self.pos:
             raise V2Error("container body truncated")
         chunk = self.buf[self.pos : self.pos + n]
         self.pos += n
@@ -325,7 +326,10 @@ class _Reader:
             # The explicit non-inheritance of the array-of-ints leniency (and
             # rejection of str-family payloads) lands here.
             raise _bad_marker("payload must be msgpack bin (0xc4/0xc5/0xc6)", marker)
-        if self.pos + n > len(self.buf):  # header-vs-remaining-input rule
+        # The remaining-bytes check, made before any data byte is copied. With
+        # count == 3 checked first, it also keeps the body within rule 2's
+        # declared-length budget (spec/interop-v2.md, Encoding rules).
+        if n > len(self.buf) - self.pos:
             raise V2Error("bin length header exceeds remaining input")
         return self._take(n)
 
@@ -339,6 +343,7 @@ U32 = 1 << 32
 
 SIZE_TRUNCATION_VECTOR = "reject_declared_size_wraps_32_bits"
 SIZE_JOIN_VECTOR = "reject_declared_size_joins_32_bits"
+COUNT_VECTORS = ["reject_count_array16_forged", "reject_count_array32_forged", "reject_count_four"]
 
 
 def _size_mutant(decode_size: Callable[[int], int]) -> type[_Reader]:
@@ -357,13 +362,26 @@ def _size_mutant(decode_size: Callable[[int], int]) -> type[_Reader]:
     return _SizeMutant
 
 
-# name -> (non-conforming original_size decode, the reject vectors it MUST accept, exactly).
+class _CountBlindReader(_Reader):
+    """A NON-conforming reader that reads the body's array header but reports 3 whatever it declares.
+
+    It models a hand parser that reads three elements without checking the count, which
+    is the check that lets parse_container skip a separate walk under rule 2.
+    """
+
+    def read_array_header(self) -> int:
+        super().read_array_header()
+        return 3
+
+
+# name -> (non-conforming reader, the reject vectors it MUST accept, exactly).
 # The joins model a JS reader doing 32-bit arithmetic, where `hi << 32` shifts by 0.
-SIZE_MUTANTS: dict[str, tuple[type[_Reader], list[str]]] = {
+READER_MUTANTS: dict[str, tuple[type[_Reader], list[str]]] = {
     "truncate to u32": (_size_mutant(lambda v: v % U32), [SIZE_TRUNCATION_VECTOR]),
     # The payload length (17) is odd, so 1 | 17 == 1 | 16 == 17: this join accepts both vectors.
     "hi | lo join": (_size_mutant(lambda v: (v >> 32) | (v % U32)), [SIZE_TRUNCATION_VECTOR, SIZE_JOIN_VECTOR]),
     "hi + lo join": (_size_mutant(lambda v: ((v >> 32) + v) % U32), [SIZE_JOIN_VECTOR]),
+    "count-blind": (_CountBlindReader, COUNT_VECTORS),
 }
 
 
@@ -378,7 +396,13 @@ def within_ratio(original_size: int, payload_len: int) -> bool:
 
 
 def parse_container(data: bytes, reader: type[_Reader] = _Reader) -> tuple[int, int, bytes]:
-    """Container bytes -> (method, original_size, payload), structure only; no bounds applied."""
+    """Container bytes -> (method, original_size, payload); the Security Limits are decode_container's.
+
+    It meets Decode bounds rules 1 and 2 without a separate walk. The body is one array,
+    so its depth is 1. The count must be exactly 3 before anything else is read, so no
+    larger count is ever acted on, and the one bin length passes the remaining-bytes check
+    before its data is read, so the declared slots never exceed the body's bytes.
+    """
     if len(data) < 2:
         msg = "truncated container (magic + version bytes required)"
         raise V2Error(msg)
@@ -623,8 +647,12 @@ def _build_reject_vectors(containers: dict[str, dict]) -> list[dict]:
         {
             "name": "reject_forged_bin32_length",
             "description": (
-                "bin32 payload header declaring 4 GiB (0xffffffff) with no data following — "
-                "readers MUST validate the length header against remaining input BEFORE allocating"
+                "bin32 payload header declaring 4 GiB (0xffffffff) with no data following. Rule 2's "
+                "declared-length budget forbids allocating for the declared length, and the "
+                "remaining-bytes check rejects it before any data byte is read. A reader that "
+                "allocates 4 GiB and then hits the end of input also errors, so the conformance "
+                "test of spec/interop-v2.md#sdk-implementation-requirements, item 7, asserts which "
+                "check rejected it"
             ),
             "container_hex": bytes([MAGIC, CONTAINER_VERSION, 0x93, 0x00, 0x05, 0xC6, 0xFF, 0xFF, 0xFF, 0xFF]).hex(),
             "error": "bin length header exceeds remaining input",
@@ -705,6 +733,53 @@ def _build_reject_vectors(containers: dict[str, dict]) -> list[dict]:
             "container_hex": _hex_container(METHOD_LZ4_BLOCK, lz4_size + 1, lz4_payload),
             "error": "LZ4 output length != original_size (also fine to fail as overrun, depending on decoder structure)",
         },
+        # Complete elements after a wrong count: a reader that skips the count check and
+        # reads three elements accepts all three, and one that sizes element storage from
+        # the count allocates for 65,535 or 4,294,967,295 elements first.
+        {
+            "name": COUNT_VECTORS[0],
+            "description": "array16 header declaring 65,535 elements, followed by three complete elements",
+            "container_hex": "c102dcffff0000c400",
+            "error": "container body must be a 3-element array",
+        },
+        {
+            "name": COUNT_VECTORS[1],
+            "description": "array32 header declaring 4,294,967,295 elements, followed by three complete elements",
+            "container_hex": "c102ddffffffff0000c400",
+            "error": "container body must be a 3-element array",
+        },
+        {
+            "name": COUNT_VECTORS[2],
+            "description": "fixarray(4) header followed by three complete elements",
+            "container_hex": "c102940000c400",
+            "error": "container body must be a 3-element array",
+        },
+        # Truncated bodies: SDK Implementation Requirements item 3 requires rejecting each,
+        # and the remaining-bytes check does, before the reader reads past the end.
+        {
+            "name": "reject_truncated_uint64",
+            "description": "Body ends inside the uint64 method field (cf, then 1 of its 8 bytes)",
+            "container_hex": "c10293cf00",
+            "error": "container body truncated",
+        },
+        {
+            "name": "reject_truncated_array16_header",
+            "description": "Body ends inside the array16 count (dc, then 1 of its 2 bytes)",
+            "container_hex": "c102dc00",
+            "error": "container body truncated",
+        },
+        {
+            "name": "reject_truncated_bin32_length",
+            "description": "Body ends inside the payload's bin32 length field (c6, then 1 of its 4 bytes)",
+            "container_hex": "c102930000c6ff",
+            "error": "container body truncated",
+        },
+        {
+            "name": "reject_truncated_before_payload",
+            "description": "Body ends after original_size, before the payload's marker",
+            "container_hex": "c102930011",
+            "error": "container body truncated",
+        },
     ]
 
 
@@ -769,7 +844,7 @@ def _build() -> dict:
     enc_container_hex = by_name["lz4_roundtrip_compressible"]["container_hex"]
 
     return {
-        "version": "1.3.0",
+        "version": "1.4.0",
         "spec": "spec/interop-v2.md",
         "generator": "tools/interop-v2-reference.py (CPython stdlib, incl. pure-Python LZ4 block codec)",
         "cross_checked_by": "tools/interop-v2-crosscheck.mjs (independent container parser + LZ4 block decoder + WebCrypto HKDF/AES-GCM; zero dependencies)",
@@ -976,9 +1051,10 @@ def _self_check(built: dict) -> None:
         _expect_structural_reject(rv)
 
     # A 32-bit original_size decode fails open, and the 1 TiB declared-size bomb cannot
-    # show it: its low 32 bits are 0, so such a reader still rejects it. So each reader in
-    # SIZE_MUTANTS must ACCEPT exactly its named reject vectors, proven by execution.
-    for mutant_name, (mutant, expected) in SIZE_MUTANTS.items():
+    # show it: its low 32 bits are 0, so such a reader still rejects it. A count-blind
+    # reader fails open too, and no other vector catches it. So each reader in
+    # READER_MUTANTS must ACCEPT exactly its named reject vectors, proven by execution.
+    for mutant_name, (mutant, expected) in READER_MUTANTS.items():
         accepted = []
         for rv in built["reject_vectors"]:
             try:
@@ -986,7 +1062,7 @@ def _self_check(built: dict) -> None:
             except V2Error:
                 continue
             accepted.append(rv["name"])
-        _require(accepted == expected, f"original_size reader '{mutant_name}' must accept exactly {expected}; it accepted {accepted}")
+        _require(accepted == expected, f"reader mutant '{mutant_name}' must accept exactly {expected}; it accepted {accepted}")
 
     # AAD pair: v2 differs from v1 exactly in the final component.
     aad = built["aad_vectors"][0]
