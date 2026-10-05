@@ -231,7 +231,18 @@ def vendored_from_unmerged_commit(root: Path) -> None:
     sdks(lambda d: d["cachekit-rs"]["fixtures"].__setitem__("file-backend.json", hashlib.sha256(unmerged).hexdigest()))(root)
 
 
+def crlf(rel: str) -> Mutate:
+    """Convert a file to CRLF line endings, as a Windows checkout would."""
+
+    def mutate(root: Path) -> None:
+        path = root / rel
+        path.write_bytes(path.read_bytes().replace(b"\n", b"\r\n"))
+
+    return mutate
+
+
 IOP3 = marker("IOP-3")
+NBSP = chr(0xA0)  # a non-breaking space: text to CommonMark, never blank
 OK = "conformance: OK"
 STALE = f"{REPORT} is stale or missing"
 
@@ -281,23 +292,31 @@ CASES: list[Case] = [
         1,
         "sits inside the HTML comment opened at line",
     ),
+    # A 4-space-indented ``` or <!-- is an indented code block, not a fence or comment opener, and a
+    # quote's fence closes where the quote ends: the prose after each is prose, as GitHub renders it.
     (
         "prose between two indented fence-like lines",
         append(SPEC, "\n    ```\n\nReaders MUST reject it.\n\n    ```\n"),
         1,
-        "sits inside the code fence opened at line",
+        "this MUST has no id",
     ),
     (
         "prose after a blockquote that ends its fence",
         append(SPEC, "\n> ```text\n> code\n\nReaders MUST reject it.\n\n> ```\n"),
         1,
-        "sits inside the code fence opened at line",
+        "this MUST has no id",
     ),
     (
         "prose after an indented comment opener",
         append(SPEC, "\n    <!--\nReaders MUST reject it.\n    -->\n"),
         1,
-        "sits inside the HTML comment opened at line",
+        "this MUST has no id",
+    ),
+    (
+        "MUST in an indented code block",
+        append(SPEC, "\n    Readers MUST reject it.\n"),
+        1,
+        "sits inside the indented code block",
     ),
     (
         "stray backtick in a table row without leading pipes",
@@ -362,6 +381,13 @@ CASES: list[Case] = [
         1,
         "has no vector named 'reject_int_overflowed'",
     ),
+    # Every defect is reported, not just the first: the second misspelt name must be named too.
+    (
+        "two misspelt vectors in one entry",
+        entry("IOP-9", vectors=["interop-mode.json:reject_int_overflowed", "interop-mode.json:reject_nan_twice"]),
+        1,
+        "has no vector named 'reject_nan_twice'",
+    ),
     (
         "fixture that does not exist",
         entry("IOP-36", vectors=["interop-modes.json"]),
@@ -406,6 +432,41 @@ CASES: list[Case] = [
         ),
         1,
         "defines no function 'probe'",
+    ),
+    (
+        "mjs test defined only inside a block comment",
+        both(
+            append("tools/interop-crosscheck.mjs", "\n/*\nfunction phantom() {}\n*/\n"),
+            entry("IOP-10", tests=["tools/interop-crosscheck.mjs:phantom"]),
+        ),
+        1,
+        "defines no function 'phantom'",
+    ),
+    (
+        "mjs test defined only inside a template literal",
+        both(
+            append("tools/interop-crosscheck.mjs", "\nconst note = `\nfunction phantom() {}\n`;\n"),
+            entry("IOP-10", tests=["tools/interop-crosscheck.mjs:phantom"]),
+        ),
+        1,
+        "defines no function 'phantom'",
+    ),
+    # A comment opener inside a string (past an escaped quote) or a regular expression (after `=` or
+    # `return`, or in a character class) opens no comment, nor does a backtick in a line comment open
+    # a template: each misread would blank the test after it.
+    (
+        "mjs test after strings and regexes holding comment openers",
+        both(
+            append(
+                "tools/interop-crosscheck.mjs",
+                "\nconst slashes = /\\/*/;\nconst again = () => { return /\\/*/; };\nconst klass = /[/]/*2;\n"
+                'const opener = "\\"/*";\n// a lone ` in a comment\nfunction realProbe() {}\n',
+            ),
+            entry("IOP-10", tests=["tools/interop-crosscheck.mjs:realProbe"]),
+            report,
+        ),
+        0,
+        OK,
     ),
     (
         "py test cited by a def inside a docstring",
@@ -501,6 +562,73 @@ CASES: list[Case] = [
         1,
         "this MUST has no id",
     ),
+    # MUST and NOT are one keyword only where GitHub shows them as one phrase. Where NOT starts
+    # another block, or a literal > parts the two, MUST stands alone and needs its own id, even
+    # when the id after NOT is indexed.
+    (
+        "MUST and NOT in two paragraphs",
+        both(
+            append(SPEC, f"\n## Phrase\n\nReaders MUST\n\nNOT{marker('IOP-37')} accept unauthenticated bytes.\n"),
+            new_requirement("IOP-37", "Phrase"),
+        ),
+        1,
+        "this MUST has no id",
+    ),
+    (
+        "MUST in a heading, NOT after it",
+        append(SPEC, f"\n### Readers MUST\nNOT{marker('IOP-37')} crash.\n"),
+        1,
+        "this MUST has no id",
+    ),
+    (
+        "NOT in a blockquote after MUST",
+        append(SPEC, f"\nReaders MUST\n> NOT{marker('IOP-37')} crash.\n"),
+        1,
+        "this MUST has no id",
+    ),
+    (
+        "MUST and NOT in two table rows",
+        append(SPEC, f"\n| a | b |\n| - | - |\n| Readers MUST\nNOT{marker('IOP-37')} crash | c |\n"),
+        1,
+        "this MUST has no id",
+    ),
+    (
+        "literal > between MUST and NOT",
+        append(SPEC, f"\nReaders MUST > NOT{marker('IOP-37')} crash.\n"),
+        1,
+        "this MUST has no id",
+    ),
+    (
+        "literal > ending MUST's line",
+        append(SPEC, f"\nReaders MUST >\nNOT{marker('IOP-37')} crash.\n"),
+        1,
+        "this MUST has no id",
+    ),
+    (
+        "literal > on an indented continuation line",
+        append(SPEC, f"\nReaders MUST\n    > NOT{marker('IOP-37')} crash.\n"),
+        1,
+        "this MUST has no id",
+    ),
+    ("MUST NOT across a lazy continuation line", append(SPEC, "\n> Readers MUST\nNOT crash.\n"), 1, "this MUST NOT has no id"),
+    ("MUST NOT across a setext heading's lines", append(SPEC, "\nReaders MUST\nNOT crash\n---\n"), 1, "this MUST NOT has no id"),
+    # On one line the words join in any block: IOP-6 is a MUST NOT in a table row.
+    (
+        "MUST NOT in one table cell",
+        append(SPEC, "\n| a | b |\n| - | - |\n| Readers MUST NOT crash | c |\n"),
+        1,
+        "this MUST NOT has no id",
+    ),
+    (
+        "id after MUST, with NOT opening the next paragraph",
+        both(
+            append(SPEC, f"\n## Phrase\n\nReaders MUST{marker('IOP-37')}\n\nNOT that one.\n"),
+            new_requirement("IOP-37", "Phrase"),
+            report,
+        ),
+        0,
+        OK,
+    ),
     # Pipe-led lines with no delimiter row are a paragraph, so this span runs from the first line
     # to the third and the keyword is inside it, as GitHub renders it.
     (
@@ -552,10 +680,17 @@ CASES: list[Case] = [
         "this MUST has no id",
     ),
     (
-        "fence closed at a different indent",
+        "indented fence-like line opens no fence",
         append(SPEC, "\nExample:\n\n    ```\n    code\n\nReaders MUST reject it.\n\n```text\nx\n```\n"),
         1,
-        "at a different indent",
+        "this MUST has no id",
+    ),
+    # A closing fence may sit at any indent up to 3 spaces, whatever the opener's: the fence closes here.
+    (
+        "fence closed at a different indent",
+        append(SPEC, "\n  ```text\ncode\n```\nReaders MUST reject it.\n"),
+        1,
+        "this MUST has no id",
     ),
     (
         "fence inside a comment block",
@@ -630,18 +765,32 @@ CASES: list[Case] = [
         1,
         "this MUST has no id",
     ),
-    # Only a fence at column 0 can be exempted: these render as indented code or an ended quote.
+    # Only a fence at column 0, outside every container, can be exempted.
     (
-        "exemption before an indented fence-like line",
-        append(SPEC, "\n<!-- not-a-requirement -->\n    ```\n\nReaders MUST reject it.\n\n    ```\n"),
+        "exemption before an indented code block",
+        append(SPEC, "\n<!-- not-a-requirement -->\n    MUST inside\n"),
+        1,
+        "sits inside the indented code block",
+    ),
+    (
+        "exemption before a quoted fence",
+        append(SPEC, "\n<!-- not-a-requirement -->\n> ```text\n> MUST inside\n> ```\n"),
         1,
         "sits inside the code fence opened at line",
     ),
     (
-        "exemption before a quoted fence",
-        append(SPEC, "\n<!-- not-a-requirement -->\n> ```text\n> code\n\nReaders MUST reject it.\n\n> ```\n"),
+        "exemption before a fence in a list item",
+        append(SPEC, "\n<!-- not-a-requirement -->\n- ```text\n  MUST inside\n  ```\n"),
         1,
         "sits inside the code fence opened at line",
+    ),
+    # A fence inside an HTML block that no blank line has closed is raw HTML text, so the
+    # exemption before it exempts nothing and the keyword shows.
+    (
+        "fence inside an open HTML block",
+        append(SPEC, "\n<details>\n<!-- not-a-requirement -->\n```text\nReaders MUST reject it.\n```\n</details>\n"),
+        1,
+        "this MUST has no id",
     ),
     # Without a delimiter row the line is a paragraph, and the keyword sits inside a code span.
     ("pipe-led line without a delimiter row", append(SPEC, "\n| a ` b | Readers MUST reject it | `x` |\n"), 0, OK),
@@ -651,6 +800,201 @@ CASES: list[Case] = [
     ("retired id with an empty reason", index(lambda s: s["retired"].__setitem__("IOP-99", "")), 1, "retired must map each id"),
     ("text after a comment block closes", append(SPEC, "\n<!--\nnote\n--> Readers MUST reject it.\n"), 1, "this MUST has no id"),
     ("heading with closing hashes", edit(SPEC, "### Decode bounds\n", "### Decode bounds ###\n"), 0, OK),
+    # --- block structure, as GitHub's renderer builds it: a code span pairs only inside one block ---
+    # An HTML block interrupts a paragraph, so no code span runs across its first line.
+    (
+        "comment line ends a paragraph",
+        append(SPEC, "\nA lone ` backtick\n<!-- note -->\nReaders MUST reject it, see `x`.\n"),
+        1,
+        "this MUST has no id",
+    ),
+    (
+        "HTML block start ends a paragraph",
+        append(SPEC, "\nA lone ` backtick\n<div>\nReaders MUST reject it, see `x`.\n</div>\n"),
+        1,
+        "this MUST has no id",
+    ),
+    # An HTML block is raw HTML up to a blank line: a backtick there is a backtick, not code.
+    ("MUST in backticks inside an HTML block", append(SPEC, "\n<div>\n`MUST`\n</div>\n"), 1, "this MUST has no id"),
+    # A run of dashes, even one or two, under a paragraph line makes it a heading.
+    (
+        "two-dash underline ends a paragraph",
+        append(SPEC, "\nA lone ` backtick\n--\nReaders MUST reject it, see `x`.\n"),
+        1,
+        "this MUST has no id",
+    ),
+    # A lazy continuation line cannot be an underline, so this quote paragraph runs on and its span hides MUST.
+    (
+        "two-dash line continuing a quote paragraph",
+        append(SPEC, "\n> A lone ` backtick\n--\nReaders MUST reject it ` here.\n"),
+        0,
+        OK,
+    ),
+    # Only a list item that starts at 1 and holds text interrupts a paragraph; these lines continue it.
+    ("ordered marker 2 inside a paragraph", append(SPEC, "\nA lone ` backtick\n2. Readers MUST reject it ` here.\n"), 0, OK),
+    # Splitting there instead would pair the second line's own backticks around MUST and hide it.
+    (
+        "ordered marker 2 inside a paragraph, keyword between backticks",
+        append(SPEC, "\nA lone ` backtick\n2. so ` MUST ` here\n"),
+        1,
+        "this MUST has no id",
+    ),
+    ("empty bullet inside a paragraph", append(SPEC, "\nA lone ` backtick\n*\nReaders MUST reject it ` here.\n"), 0, OK),
+    # A line that leaves the list item or quote its paragraph sits in is no continuation: 2. starts a list.
+    (
+        "ordered marker 2 after a list item",
+        append(SPEC, "\n1. A lone ` backtick\n2. Readers MUST reject it, see ` here.\n"),
+        1,
+        "this MUST has no id",
+    ),
+    (
+        "ordered marker 2 after a blockquote",
+        append(SPEC, "\n> A lone ` backtick\n2. Readers MUST reject it, see ` here.\n"),
+        1,
+        "this MUST has no id",
+    ),
+    # A table ends with the list item it sits in; the dedented lines are a paragraph.
+    (
+        "table body ends with its list item",
+        append(SPEC, "\n- item\n  | a | b |\n  | - | - |\n  | c | d |\ndedented ` text\n`MUST` here\n"),
+        1,
+        "this MUST has no id",
+    ),
+    # A header row must continue every container of its paragraph; these lines are all one list paragraph.
+    (
+        "header lazily continuing a list paragraph",
+        append(SPEC, "\n- item ` text\n| a | b |\n| - | - |\n| `MUST` | c |\n"),
+        1,
+        "this MUST has no id",
+    ),
+    ("HTML block ends a table body", append(SPEC, "\n| a | b |\n| - | - |\n<div>\n`MUST`\n</div>\n"), 1, "this MUST has no id"),
+    # A table body runs to the first blank line or line that starts another block, such as a list item.
+    ("list item ends a table body", append(SPEC, "\n| a | b |\n| - | - |\n- a `\n  b | `MUST` |\n"), 1, "this MUST has no id"),
+    # A one-column table needs no pipe; each row is one cell, so neither backtick pairs.
+    ("one-column table without pipes", append(SPEC, "\na `\n:-:\nReaders MUST reject it `\n"), 1, "this MUST has no id"),
+    # cmark-gfm tries a paragraph as a table once: after a delimiter row with the wrong cell count,
+    # a later matching one makes no table, and the paragraph's span leaves MUST outside it.
+    (
+        "paragraph whose first delimiter row failed",
+        append(SPEC, "\na | b\n--- | --- | ---\nc ` | d\n--- | ---\n`MUST` | e\n"),
+        1,
+        "this MUST has no id",
+    ),
+    # Container rules: how far a line must be indented to stay in a list item or blockquote decides
+    # whether it is prose there, prose outside, or an indented code block.
+    (
+        "quote marker indented four spaces",
+        append(SPEC, "\n> a\n>\n    > Readers MUST reject it.\n"),
+        1,
+        "sits inside the indented code block",
+    ),
+    ("blockquote takes one space after its marker", append(SPEC, "\n>    Readers MUST reject it.\n"), 1, "this MUST has no id"),
+    ("indented line continuing a paragraph", append(SPEC, "\nReaders reject it\n    MUST here.\n"), 1, "this MUST has no id"),
+    (
+        "line indented less than its list item leaves it",
+        append(SPEC, "\n- ```\n code: Readers MUST reject it.\n  ```\n```\n"),
+        1,
+        "this MUST has no id",
+    ),
+    (
+        "blank line ends an empty list item",
+        append(SPEC, "\n-\n\n    Readers MUST reject it.\n"),
+        1,
+        "sits inside the indented code block",
+    ),
+    ("blank line inside a list item", append(SPEC, "\n- a\n\n    Readers MUST reject it.\n"), 1, "this MUST has no id"),
+    (
+        "list item content after a three-space gap",
+        append(SPEC, "\n-   a\n\n      Readers MUST reject it.\n"),
+        1,
+        "this MUST has no id",
+    ),
+    (
+        "list item opening with indented code",
+        append(SPEC, "\n-      Readers MUST reject it.\n"),
+        1,
+        "sits inside the indented code block",
+    ),
+    ("bare quote marker ends a paragraph", append(SPEC, "\nA lone ` backtick\n>\nso ` MUST ` here\n"), 0, OK),
+    # Interrupting blocks: each ends the paragraph, so the span pairs on the next line and hides MUST.
+    ("thematic break ends a paragraph", append(SPEC, "\nA lone ` backtick\n***\nso ` MUST ` here\n"), 0, OK),
+    ("ordered marker 1 ends a paragraph", append(SPEC, "\nA lone ` backtick\n1. so ` MUST ` here\n"), 0, OK),
+    # A line holding one tag (HTML block type 7) cannot interrupt a paragraph; after a blank line it opens a raw block.
+    ("tag line inside a paragraph", append(SPEC, "\nA lone ` backtick\n<span>\nReaders MUST reject it ` here.\n"), 0, OK),
+    ("tag line opening an HTML block", append(SPEC, "\n<span>\n`MUST`\n</span>\n"), 1, "this MUST has no id"),
+    # Two dashes under a paragraph line make a heading, not a one-column table, so the next lines are a paragraph.
+    (
+        "two-dash underline is not a delimiter row",
+        append(SPEC, "\nTitle\n--\nA lone ` backtick\nReaders MUST reject it ` here.\n"),
+        0,
+        OK,
+    ),
+    # A table takes the paragraph's last line as its header; the lines before it stay a paragraph.
+    (
+        "table header row leaves its paragraph",
+        append(SPEC, "\nReaders ` MUST reject it\n| b ` | c |\n| - | - |\n"),
+        1,
+        "this MUST has no id",
+    ),
+    ("trailing pipe on one table row only", append(SPEC, "\n| a ` | b\n| - | - |\n| MUST ` | c\n"), 1, "this MUST has no id"),
+    # A delimiter row inside a blockquote the line opens cannot turn the paragraph before it into a table.
+    ("delimiter row inside a new blockquote", append(SPEC, "\n| a ` | MUST ` |\n> | - | - |\n"), 0, OK),
+    # A closing fence is indented at most 3 spaces and holds nothing but the fence.
+    (
+        "fence closer indented four spaces",
+        append(SPEC, "\n```text\ncode\n    ```\nMUST inside\n```\n"),
+        1,
+        "sits inside the code fence opened at line",
+    ),
+    (
+        "fence closer with an info string",
+        append(SPEC, "\n```text\n``` inner\nMUST inside\n```\n"),
+        1,
+        "sits inside the code fence opened at line",
+    ),
+    # An HTML block passes through as it stands, so a comment it leaves open hides the rest of the file.
+    (
+        "comment left open in an HTML block",
+        append(SPEC, "\n<div>\n<!-- note\n\nReaders MUST reject it.\n"),
+        1,
+        "unclosed HTML comment",
+    ),
+    ("tab in a spec file", append(SPEC, "\n\tReaders MUST reject it.\n"), 1, "a tab; indent with spaces"),
+    # Only spaces make a line blank, so a line of non-breaking spaces keeps an HTML block open and is a table row.
+    (
+        "line of non-breaking spaces in an HTML block",
+        append(SPEC, f"\n<div>\n{NBSP}\n`MUST`\n</div>\n"),
+        1,
+        "this MUST has no id",
+    ),
+    (
+        "line of non-breaking spaces in a table body",
+        append(SPEC, f"\n| a | b |\n| - | - |\n{NBSP}\n| `MUST | x` |\n"),
+        1,
+        "this MUST has no id",
+    ),
+    # A non-breaking space after a header row's last pipe is one more cell, so no table forms and the span hides MUST.
+    (
+        "non-breaking space after a header row's last pipe",
+        append(SPEC, f"\n| a ` | b |{NBSP}\n| - | - |\n| MUST ` | c |\n"),
+        0,
+        OK,
+    ),
+    # GitHub ends a line at a lone carriage return, and reads a form feed or vertical tab as space only in some places.
+    (
+        "lone carriage return",
+        append(SPEC, "\nIntro text\r<div>\r`x MUST y`\n"),
+        1,
+        "a carriage return that does not end a CRLF line",
+    ),
+    (
+        "form feed after a delimiter row",
+        append(SPEC, "\n| a ` | b |\n| - | - |\f\n| MUST ` | c |\n"),
+        1,
+        "a vertical tab or form feed",
+    ),
+    ("vertical tab in a spec file", append(SPEC, "\nReaders\vMUST reject it.\n"), 1, "a vertical tab or form feed"),
+    ("spec checked out with CRLF line endings", crlf(SPEC), 0, OK),
     # --- ids are never reused: next only grows ---
     (
         "new id at or above next",
@@ -673,6 +1017,24 @@ CASES: list[Case] = [
         "the next free id is IOP-37",
     ),
     ("next missing", index(lambda s: s.pop("next")), 1, "next must be the number the next new id gets"),
+    # A lead-in's entry may list vectors its items' entries list too: only its gap is limited to what no item owns.
+    (
+        "lead-in and item entries mapping the same vector",
+        both(
+            append(
+                SPEC,
+                f"\n## Lead-in\n\nA reader MUST{marker('IOP-37')}:\n\n"
+                f"- reject NaN, and it MUST{marker('IOP-38')} say so.\n",
+            ),
+            new_requirement("IOP-37", "Lead-in"),
+            new_requirement("IOP-38", "Lead-in"),
+            entry("IOP-37", vectors=["interop-mode.json:reject_nan"], gap=None),
+            entry("IOP-38", vectors=["interop-mode.json:reject_nan"], gap=None),
+            report,
+        ),
+        0,
+        OK,
+    ),
     (
         "gap naming an id that is not indexed",
         entry("IOP-6", gap="See IOP-99."),
@@ -749,11 +1111,12 @@ CASES: list[Case] = [
     ),
     ("requirements not a map, with --base", commit_base(lambda _: None), 1, "expected prefix, next, requirements and retired"),
     ("next lowered since the base", commit_base(lambda _: None), 1, "next went down from 37"),
+    # A copy of cachekit-py's entry under a name no index entry narrows to, so dropping it fails only here.
     (
         "SDK dropped from sdks.json since the base",
-        commit_base(lambda _: None),
+        commit_base(both(sdks(lambda d: d.__setitem__("cachekit-go", dict(d["cachekit-py"]))), report)),
         1,
-        "cachekit-py was listed at HEAD and is now gone",
+        "cachekit-go was listed at HEAD and is now gone",
     ),
     # --- ids are never dropped or reused (--base) ---
     (
@@ -781,7 +1144,7 @@ AFTER_BASE: dict[str, tuple[Mutate, str]] = {
     "vendored copy from a commit not on the base": (vendored_from_unmerged_commit, "HEAD~1"),
     "requirements not a map, with --base": (index(lambda s: s.__setitem__("requirements", 7)), "HEAD"),
     "next lowered since the base": (index(lambda s: s.__setitem__("next", 36)), "HEAD"),
-    "SDK dropped from sdks.json since the base": (both(sdks(lambda d: d.pop("cachekit-py")), report), "HEAD"),
+    "SDK dropped from sdks.json since the base": (both(sdks(lambda d: d.pop("cachekit-go")), report), "HEAD"),
 }
 
 PRISTINE: Path | None = None
@@ -940,6 +1303,13 @@ REPORT_CASES: list[tuple[str, Mutate, dict[str, list[str]], list[str]]] = [
         },
         # Tests-only requirements are uncovered in every SDK, so the summary counts them apart.
         ["| [`spec/interop-mode.md`](../spec/interop-mode.md) | 36 | 3 | 24 | 3 | 6 |"],
+    ),
+    (
+        # Tests but no vectors: uncovered in every SDK the requirement binds, and n/a in the others.
+        "a tests-only requirement that binds one SDK",
+        lambda _: None,
+        {"IOP-12": ["n/a", "uncovered", "n/a"], "IOP-10": ["uncovered"] * 3},
+        [],
     ),
     (
         # interop-mode.json 1.1.0 predates the `..` vectors and lone_dots_stay_valid.

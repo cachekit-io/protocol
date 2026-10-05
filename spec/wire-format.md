@@ -100,8 +100,8 @@ StorageEnvelope {
 └───────────────────┴─────────────────────────────────────────────────┘
 ```
 
-As of **protocol 1.1**, writers MUST encode `compressed_data` (element `[0]`) as
-MessagePack **`bin`** (`0xc4`/`0xc5`/`0xc6`, shortest form). Readers MUST **also**
+As of **protocol 1.1**, writers MUST<sup id="wire-1">WIRE-1</sup> encode `compressed_data` (element `[0]`) as
+MessagePack **`bin`** (`0xc4`/`0xc5`/`0xc6`, shortest form). Readers MUST<sup id="wire-2">WIRE-2</sup> **also**
 accept the legacy encoding below — a stored envelope never expires on a schedule,
 so legacy-read support is permanent.
 
@@ -231,7 +231,7 @@ the generic shortest-width selection property at fixture level, while
 > above; protocol#11 corrected the prose). Writers emitted the array-of-ints
 > element-`[0]` encoding through protocol 1.0; protocol 1.1 makes `bin` the
 > canonical writer encoding for `compressed_data` only. `checksum` remains an
-> array of integers in **both** revisions — a reader MUST NOT expect `bin` there.
+> array of integers in **both** revisions — a reader MUST NOT<sup id="wire-3">WIRE-3</sup> expect `bin` there.
 
 > [!WARNING]
 > **Discrepancy with RFC** — The RFC (Section 4.3.3) states the checksum is **Blake3 (32 bytes)**. The actual `cachekit-core` implementation uses **xxHash3-64 (8 bytes)**. The crate comments explain: "xxHash3-64 checksums for corruption detection (19x faster than Blake3)". xxHash3-64 is non-cryptographic — tamper resistance is provided by the encryption layer (AES-GCM auth tag), not the checksum. **The implementation (xxHash3-64) is authoritative.**
@@ -269,8 +269,8 @@ compressors may legally emit different bytes for the same input. Compressed
 bytes are therefore
 **not canonical**, and conformance for `compressed_data` is **read-side**:
 
-- A conforming reader MUST decompress the `compressed_data` of every vector in
-  the `vectors` and `constructed_vectors` groups to its input, **and MUST enforce
+- A conforming reader MUST<sup id="wire-4">WIRE-4</sup> decompress the `compressed_data` of every vector in
+  the `vectors` and `constructed_vectors` groups to its input, **and MUST<sup id="wire-5">WIRE-5</sup> enforce
   [Retrieve Flow](#retrieve-flow) steps 2, 4, 5 and 9 while doing so, in the order
   the [ordering rule](#check-order) requires.**
   Read-side conformance is not "the vectors pass":
@@ -289,7 +289,7 @@ bytes are therefore
   covers. Step 2's decode bounds have their own fixture,
   [`test-vectors/decode-bounds.json`](../test-vectors/decode-bounds.json).
 - A writer **other than the canonical `lz4_flex` writer** is NOT required to
-  reproduce the pinned compressed bytes, and MUST NOT be judged non-conforming
+  reproduce the pinned compressed bytes, and MUST NOT<sup id="wire-6">WIRE-6</sup> be judged non-conforming
   because its compressor output differs from the fixture — validate such a
   writer by decoding its envelopes per the
   [Retrieve Flow](#retrieve-flow) and checking its MessagePack encoding against
@@ -394,10 +394,10 @@ step 8. `format` sits outside the digest and no step of this flow checks it.
 ## Security Limits
 
 > [!IMPORTANT]
-> All three limits below MUST be enforced by every implementation of the ByteStorage envelope. The decompression bomb check uses integer-valued arithmetic — do not substitute a floating-point *ratio*, and see [Decompression Bomb Detection](#decompression-bomb-detection) for the normative arithmetic requirements: the ratio product, and `original_size` compared at its full wire value.
-> Additionally, a decoder MUST NOT allocate for declared MessagePack lengths
+> All three limits below MUST<sup id="wire-7">WIRE-7</sup> be enforced by every implementation of the ByteStorage envelope. The decompression bomb check uses integer-valued arithmetic — do not substitute a floating-point *ratio*, and see [Decompression Bomb Detection](#decompression-bomb-detection) for the normative arithmetic requirements: the ratio product, and `original_size` compared at its full wire value.
+> Additionally, a decoder MUST NOT<sup id="wire-8">WIRE-8</sup> allocate for declared MessagePack lengths
 > (collection, `str`, `bin`, `ext`) more than the input can back: the declared slots,
-> summed over the **whole document**, MUST NOT exceed the input length minus one,
+> summed over the **whole document**, MUST NOT<sup id="wire-9">WIRE-9</sup> exceed the input length minus one,
 > checked **before** anything is materialised. A 5-byte `bin32` header can
 > otherwise declare a 4 GiB allocation from a ~30-byte envelope. Checking each
 > header against the remaining input bytes does not satisfy this: nested headers
@@ -418,7 +418,7 @@ step 8. `format` sits outside the digest and no step of this flow checks it.
 
 ### Decompression Bomb Detection
 
-All three limits above are enforced here. Both size caps MUST be checked before
+All three limits above are enforced here. Both size caps MUST<sup id="wire-10">WIRE-10</sup> be checked before
 the ratio product, which relies on them; their relative order is not
 significant. The check uses **integer-valued arithmetic** and never a
 floating-point *ratio*:
@@ -439,13 +439,13 @@ reject if original_size > max_allowed
 // END shared-block: ratio-product-pseudocode
 ```
 
-<a id="check-order"></a>For each envelope, a reader MUST complete these checks before it decompresses
+<a id="check-order"></a>For each envelope, a reader MUST<sup id="wire-11">WIRE-11</sup> complete these checks before it decompresses
 that envelope's `compressed_data`, and before it allocates or grows any output buffer
 for it, however that buffer is sized (for example from `original_size`, from the
 length of `compressed_data`, from a multiple of either, or from a constant).
 
 <!-- BEGIN shared-block: ratio-product-rule (guarded by tools/check-spec-duplication.py) -->
-The `MAX_UNCOMPRESSED` comparison MUST be decided on the **full wire value** of
+The `MAX_UNCOMPRESSED` comparison MUST<sup id="wire-12">WIRE-12</sup> be decided on the **full wire value** of
 `original_size`. Decode it into a ≥ 64-bit unsigned or arbitrary-precision integer,
 or into an IEEE-754 binary64 (which rounds only integers above 2⁵³, far past the cap,
 so the comparison is unchanged), or reject it when it does not fit a narrower
@@ -464,7 +464,7 @@ reader rejects it. Every target language has a conforming path: Rust `u64`, or `
 rejects an out-of-range value, whatever its marker width, instead of truncating it);
 Python's `int`; JavaScript `BigInt`, or `Number`.
 
-The ratio product MUST be computed **exactly**:
+The ratio product MUST<sup id="wire-13">WIRE-13</sup> be computed **exactly**:
 promote `compressed_size` to a ≥ 64-bit unsigned or arbitrary-precision integer, or to an
 IEEE-754 binary64 in which the operand and the product are exact integers
 (< 2⁵³), *before* the multiply. Multiplying in pointer width and widening the
@@ -479,7 +479,7 @@ pseudocode above carries no overflow branch, and why rejecting on overflow is
 **not** a substitute for widening — at 32-bit width it would refuse the 99.2 % of
 the legal `compressed_size` range that lies above the wrap threshold given in the note below.
 
-The bound MUST be computed by **multiplication**. Deriving it by division, or
+The bound MUST<sup id="wire-14">WIRE-14</sup> be computed by **multiplication**. Deriving it by division, or
 as a *ratio*, is forbidden in any arithmetic — integer or floating-point.
 Truncating integer division (`original_size / compressed_size > 1000`) accepts up to
 `1000·compressed_size + (compressed_size − 1)`, which is looser than this specification permits, and a
@@ -528,7 +528,7 @@ its container's product, `lz4_ratio_product_wraps_32_bits`
 
 An implementation of the ByteStorage envelope that supports a 32-bit target, as
 [interop-v2.md → SDK Implementation Requirements](interop-v2.md#sdk-implementation-requirements),
-item 7, defines that term, MUST, in its own CI, pass
+item 7, defines that term, MUST<sup id="wire-15">WIRE-15</sup>, in its own CI, pass
 `envelope_ratio_product_wraps_32_bits` on each such target, built as its consumers
 get it: the artifact it distributes or, for source-distributed code, a build of its
 published source for that target. It runs the vector at this spec's limits, not at a
@@ -597,7 +597,7 @@ a length error.
 
 A verdict cannot show which check rejected a vector, the same limit
 [interop-mode.md → Decode bounds](interop-mode.md#decode-bounds) sets out for
-`decode-bounds.json`. An SDK's conformance test for the ByteStorage envelope MUST
+`decode-bounds.json`. An SDK's conformance test for the ByteStorage envelope MUST<sup id="wire-16">WIRE-16</sup>
 therefore drive each reject vector through its envelope read path, below the point
 where the SDK turns the error into a cache miss, and assert what the table's last
 column names. Calling a check directly as well is fine, but on its own does not show
@@ -607,8 +607,8 @@ deployment limit.
 An error assertion cannot show ordering either. A reader can allocate an
 `original_size` output buffer right after step 2, free it, run steps 4 and 5, and
 raise exactly the error its test expects. So for `reject_original_size_over_cap` and
-`reject_ratio_bomb`, the test MUST also bound what the read allocates, and fail if it
-reaches `original_size`. The measurement MUST satisfy all of these:
+`reject_ratio_bomb`, the test MUST<sup id="wire-17">WIRE-17</sup> also bound what the read allocates, and fail if it
+reaches `original_size`. The measurement MUST<sup id="wire-18">WIRE-18</sup> satisfy all of these:
 
 - It counts bytes requested from the allocator the envelope code actually allocates
   from: the Rust global allocator for Rust code, and the Python heap only for code
@@ -646,7 +646,7 @@ every reader would have to materialise more than 512 MiB to run it. A short enve
 with a forged `bin32` length is not a substitute: a conforming reader and one without
 step 1 both reject it as truncated at step 2. Step 3 cannot fire once step 1 has
 passed, because `compressed_data` is a strict slice of an envelope that step 1 has
-already bounded to 512 MiB. An implementation MUST still enforce both. Test step 1
+already bounded to 512 MiB. An implementation MUST<sup id="wire-19">WIRE-19</sup> still enforce both. Test step 1
 with a lowered cap, as `check_reader_rejects` in
 `tools/test_wire_format_reference.py` does.
 
@@ -737,7 +737,7 @@ Datetime values are encoded as MessagePack maps with sentinel keys:
 ```
 
 > [!IMPORTANT]
-> All SDKs MUST check for these sentinel keys during deserialization and reconstruct the appropriate temporal type. Failing to handle them means datetime values will be returned as raw maps instead of native date objects.
+> All SDKs MUST<sup id="wire-20">WIRE-20</sup> check for these sentinel keys during deserialization and reconstruct the appropriate temporal type. Failing to handle them means datetime values will be returned as raw maps instead of native date objects.
 
 ### MessagePack Options
 
@@ -770,7 +770,7 @@ implementations ([protocol#11](https://github.com/cachekit-io/protocol/issues/11
 > [!IMPORTANT]
 > **Decision (protocol#11):** the CK v3 frame and the Arrow envelope are NOT
 > cross-SDK wire formats and never will be — cross-SDK sharing goes through
-> [interop mode](interop-mode.md) exclusively. An SDK MUST NOT decode another
+> [interop mode](interop-mode.md) exclusively. An SDK MUST NOT<sup id="wire-21">WIRE-21</sup> decode another
 > SDK's auto-mode container. An SDK MAY parse a foreign container *for diagnostics
 > only*, using the layouts below.
 
@@ -807,7 +807,7 @@ carries the flags either way. The header's `v` is the Python wrapper's own logic
 envelope version string (currently `"2.0"`) — it is unrelated to the frame VERSION
 byte (`0x03`) and readers do not validate it.
 
-A reader MUST reject: frames shorter than the 7-byte fixed prefix, `VERSION != 3`,
+A reader MUST<sup id="wire-22">WIRE-22</sup> reject: frames shorter than the 7-byte fixed prefix, `VERSION != 3`,
 and a declared `HDR_LEN` that overruns the value. (`cachekit-py` additionally reads a
 legacy base64-in-JSON envelope, first byte `{` — pre-v3 entries only; new writes are
 always v3 frames.)
@@ -818,10 +818,10 @@ always v3 frames.)
 > and compression flags into the AES-GCM tag, but the CK header JSON itself is
 > outside that binding. Two consequences are normative:
 >
-> 1. A reader configured for encryption MUST NOT let the header's `encrypted` /
+> 1. A reader configured for encryption MUST NOT<sup id="wire-23">WIRE-23</sup> let the header's `encrypted` /
 >    `s` / `m` values downgrade it to a non-authenticated read path. If the cache
 >    is configured encrypted and an entry does not authenticate as ciphertext,
->    the read MUST fail closed — an attacker with backend write access (the
+>    the read MUST<sup id="wire-24">WIRE-24</sup> fail closed — an attacker with backend write access (the
 >    CVSS 8.5 actor in encryption.md's threat model) must not be able to feed
 >    plaintext past a secure cache by forging `"encrypted": false`.
 > 2. The zero-knowledge property is **value confidentiality only**: for encrypted

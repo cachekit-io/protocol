@@ -22,13 +22,18 @@ things in step:
   requirement counts as covered for an SDK only when its copy holds every mapped vector,
   identical to the vector published here.
 
-Keywords are found the way a Markdown renderer would show them. Inline code and inline
-comments are skipped. A code span may cross a line break within a paragraph but never a
-table cell, and tables follow the GFM table extension's start and end rules. A keyword inside
-a code fence or an HTML comment block is an error, unless the fence opens at column 0 with
-<!-- not-a-requirement --> on the line before it: block detection can misread Markdown, and
-an error there fails closed where skipping would hide text. A fence closed at a different
-indent than it opened is an error for the same reason.
+Keywords are found the way GitHub renders them. The file is read into blocks by CommonMark's
+parsing strategy as GitHub's cmark-gfm applies it: blockquotes and list items, lazy
+continuation lines, HTML blocks, and GFM tables. Inline code and inline comments are skipped
+within one paragraph, heading or table cell, so a code span may cross a line break but never
+a block or cell boundary. MUST NOT is one keyword only where a reader sees one phrase: both
+words on one line, or across a line break inside one paragraph or heading, with nothing a
+reader sees between them. So an id after a NOT in another block, or past a literal >, never
+marks the MUST before it. An HTML block is raw HTML, so only its comments are hidden. A
+keyword inside a code block, or inside an HTML comment block that spans lines, is an error
+(a comment on one line is hidden like an inline one), unless the block is a fence that opens
+at column 0, outside every container, with <!-- not-a-requirement --> on the line before it:
+if a block were misread, an error fails closed where skipping would hide text.
 
 **What this does NOT catch.** It checks that a mapping exists and that it names real vectors
 and tests. It cannot check that they exercise the requirement: whether a plausible wrong
@@ -40,8 +45,10 @@ each one through every entry point a requirement names or assert the error it re
 and `next` going down; it cannot tell an existing id moved onto a different rule.
 
 Fails closed: an unreadable or malformed file, a duplicate JSON key, a duplicate vector name,
-an unclosed code fence or HTML comment, an index that lists no spec file, or a vendored sha256
-that matches no revision of its fixture is an error, not a pass. A guard that silently checks
+a tab, vertical tab, form feed or lone carriage return in a spec file (only spaces and line
+feeds are modelled), a code fence open at the end of the file, an HTML block that leaves a
+comment open, an index that lists no spec file, or a vendored sha256 that matches no revision
+of its fixture is an error, not a pass. A guard that silently checks
 nothing is worse than no guard. Uses explicit failures rather than `assert`, so it cannot be
 defanged by `-O`.
 
@@ -65,11 +72,12 @@ from __future__ import annotations
 import argparse
 import ast
 import hashlib
+from bisect import bisect_right
 import json
 import re
 import subprocess
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 INDEX = "conformance/requirements.json"
@@ -84,39 +92,56 @@ FIELDS = {"section", "binds", "sdks", "vectors", "tests", "gap"}
 FILE_FIELDS = {"prefix", "next", "requirements", "retired"}
 
 # A hard keyword is a whole word (an underscore around it is emphasis, not a letter). MUST NOT
-# may be split by a line break, a blockquote marker, or emphasis closed after MUST.
+# may be split by a line break, a blockquote marker, or emphasis closed after MUST; scan() keeps
+# the two words together only where a renderer shows them as one phrase.
 KEYWORD = re.compile(r"(?<![A-Za-z0-9])MUST(?:(?:\*{1,3}|_{1,3})?[\s>]+NOT)?(?![A-Za-z0-9])")
 MARKER = re.compile(r'<sup id="([a-z0-9-]+)">([A-Z][A-Z0-9]*-([1-9][0-9]*))</sup>')
 EXEMPT = "<!-- not-a-requirement -->"
 CLOSER = re.compile(r"\*{1,3}|_{1,3}")
 NOT_AFTER = re.compile(r"(?:\*{1,3}|_{1,3})?[\s>]+NOT(?![A-Za-z0-9])")
-# A fence line: its container prefix (blockquote markers, indentation, a list marker), the
-# fence, and the rest of the line (the info string of an opener).
-FENCE = re.compile(r"(?P<lead>[ \t>]*(?:(?:[-*+]|[0-9]{1,9}[.)])[ \t]+)?)(?P<fence>`{3,}|~{3,})(?P<rest>.*)")
-BLOCK_COMMENT = re.compile(r"[ \t>]*<!--")
-TABLE_ROW = re.compile(r"[ \t>]*\|")
-# Container prefix of a line: its blockquote markers, and the text after them.
-QUOTED = re.compile(r"((?:[ \t]*>)*)[ \t]?(.*)")
-# A GFM table's delimiter row, after its blockquote markers: cells of dashes, optionally
-# aligned with colons, between pipes.
-DELIMITER_ROW = re.compile(r"[ \t]*\|?[ \t]*:?-+:?[ \t]*(?:\|[ \t]*:?-+:?[ \t]*)*\|?[ \t]*")
-LIST_ITEM = re.compile(r"[ \t>]*(?:[-*+]|[0-9]{1,9}[.)])[ \t]")
-# Lines that start a new block, after blockquote markers: these end a paragraph or a table body.
-BLOCK_START = re.compile(
-    r" {0,3}(?:#{1,6}(?:[ \t]|$)|`{3,}|~{3,}|>|(?:[-*+]|[0-9]{1,9}[.)])(?:[ \t]|$)"
-    r"|(?:-[ \t]*){3,}$|(?:\*[ \t]*){3,}$|(?:_[ \t]*){3,}$|=+[ \t]*$)"
+# Block starts, as GitHub's cmark-gfm reads them, matched against a line's text past its
+# container prefix and indentation.
+ATX_OPEN = re.compile(r"#{1,6}(?: |$)")
+FENCE_OPEN = re.compile(r"`{3,}(?!.*`)|~{3,}")
+THEMATIC_BREAK = re.compile(r"(?:\* *){3,}|(?:- *){3,}|(?:_ *){3,}")
+SETEXT_UNDERLINE = re.compile(r"(?:=+|-+) *")
+LIST_MARKER = re.compile(r"(?:[-+*]|([0-9]{1,9})[.)])(?= |$)")
+# A GFM table's delimiter row: cells of dashes, optionally aligned with colons. It needs no pipe.
+DELIMITER_ROW = re.compile(r" *\|? *:?-+:? *(?:\| *:?-+:? *)*\|? *")
+BLOCK_TAGS = (
+    "address|article|aside|base|basefont|blockquote|body|caption|center|col|colgroup|dd|details|dialog|dir|div|dl"
+    "|dt|fieldset|figcaption|figure|footer|form|frame|frameset|h[1-6]|head|header|hr|html|iframe|legend|li|link"
+    "|main|menu|menuitem|nav|noframes|ol|optgroup|option|p|param|section|source|summary|table|tbody|td|tfoot|th"
+    "|thead|title|tr|track|ul"
 )
+# HTML block types 1 to 6, which may interrupt a paragraph, as (start, end). Type 6 ends at a blank line.
+HTML_BLOCKS = (
+    (re.compile(r"<(?:pre|script|style|textarea)(?:[ >]|$)", re.I), re.compile(r"</(?:pre|script|style|textarea)>", re.I)),
+    (re.compile(r"<!--"), re.compile(r"-->")),
+    (re.compile(r"<\?"), re.compile(r"\?>")),
+    (re.compile(r"<![A-Za-z]"), re.compile(r">")),
+    (re.compile(r"<!\[CDATA\["), re.compile(r"\]\]>")),
+    (re.compile(rf"</?(?:{BLOCK_TAGS})(?:[ >]|/>|$)", re.I), None),
+)
+ATTRIBUTE = r" +[A-Za-z_:][A-Za-z0-9_.:-]*(?: *= *(?:[^ \"'=<>`]+|'[^']*'|\"[^\"]*\"))?"
+# HTML block type 7: one complete open or closing tag alone on its line. It ends at a blank line.
+HTML_TAG_LINE = re.compile(rf"(?:<[A-Za-z][A-Za-z0-9-]*(?:{ATTRIBUTE})* */?>|</[A-Za-z][A-Za-z0-9-]* *>) *")
 PIPE = re.compile(r"(?<!\\)\|")
 # Inline code or an inline comment, whichever opens first, within one paragraph (so it may
 # cross a line break) or one table cell. A backtick that is escaped, or that sits inside a
 # longer run, opens no code span.
 INLINE = re.compile(r"(?<![`\\])(`+)(?!`).+?(?<!`)\1(?!`)|<!--.*?-->", re.DOTALL)
-ATX = re.compile(r" {0,3}#{1,6}[ \t]+(.+?)(?:[ \t]+#+)?[ \t]*")
-SETEXT = re.compile(r" {0,3}(?:=+|-+)[ \t]*")
+# An HTML block is raw HTML: a renderer hides its comments and nothing else.
+COMMENT = re.compile(r"<!--.*?-->", re.DOTALL)
 PREFIX = re.compile(r"[A-Z][A-Z0-9]*")
 TEST_REF = re.compile(r"(tools/[A-Za-z0-9_.-]+):([A-Za-z0-9_]+)")
-# A named test in a .mjs tool must be a function declared at the start of a line.
+# A named test in a .mjs tool must be a function declared at the start of a line, in code: not
+# in a comment, a string, a template literal or a regular expression.
 MJS_FUNCTION = r"^[ \t]*(?:export[ \t]+)?(?:async[ \t]+)?function\*?[ \t]+{name}[ \t]*\("
+JS_WORD = re.compile(r"[A-Za-z0-9_$]+")
+JS_KEYWORDS_BEFORE_REGEX = {
+    "await", "case", "delete", "do", "else", "in", "instanceof", "new", "of", "return", "throw", "typeof", "void", "yield",
+}
 ID_MENTION = re.compile(r"\b([A-Z][A-Z0-9]*)-([1-9][0-9]*)\b")
 HEX40 = re.compile(r"[0-9a-f]{40}")
 HEX64 = re.compile(r"[0-9a-f]{64}")
@@ -138,9 +163,9 @@ class Keyword:
 
 @dataclass(frozen=True)
 class Block:
-    kind: str  # "code fence" or "HTML comment"
-    start: int  # offset of its first line
-    end: int  # offset just past its last line
+    kind: str  # "code fence", "indented code block" or "HTML comment"
+    start: int  # offset where it opens
+    end: int  # offset just past where it closes
     line: int  # the line it opens on
     exempt: bool  # a code fence with <!-- not-a-requirement --> on the line before it
 
@@ -150,54 +175,242 @@ class Spec:
     text: str  # the file, with CRLF line endings normalised to LF
     keywords: list[Keyword]
     stray: list[tuple[int, str]]  # (line, id) of markers that sit beside no keyword
+    rows: frozenset[int]  # indexes of the lines in a table
+
+
+QUOTE = ">"  # an open blockquote, on the stack of open containers
+
+
+@dataclass
+class Item:
+    """An open list item, on the stack of open containers."""
+
+    width: int  # how far its content is indented past its parent's
+    filled: bool = False  # it holds a block; a blank line continues only an item that does
+
+
+@dataclass
+class Leaf:
+    """One leaf block: the lines a renderer puts in one paragraph, heading, table, code block or HTML block."""
+
+    kind: str  # "paragraph", "heading", "table", "code fence", "indented code block", "html" or "break"
+    lines: list[int] = field(default_factory=list)  # their indexes
+    starts: list[int] = field(default_factory=list)  # where each one's text starts, past its containers' prefixes
+    fence: str = ""  # a code fence's opening run of backticks or tildes
+    end: re.Pattern[str] | None = None  # what ends an HTML block of types 1 to 5
+    comment: bool = False  # an HTML block that opens with <!--
+    tried: bool = False  # a paragraph that a delimiter row failed to make a table; cmark-gfm tries once
+
+    def add(self, line: int, start: int) -> None:
+        self.lines.append(line)
+        self.starts.append(start)
 
 
 # --- spec scanning ---------------------------------------------------------------------------
 
 
-def quoted(line: str) -> tuple[int, str]:
-    """(blockquote depth, the text after the markers) of a line."""
-    m = QUOTED.fullmatch(line)
-    return (m.group(1).count(">"), m.group(2)) if m else (0, line)
+def indentation(text: str) -> int:
+    return len(text) - len(text.lstrip(" "))
+
+
+def is_blank(text: str) -> bool:
+    """Whether a line, past its containers, is blank: CommonMark counts only spaces and tabs (and a tab is an
+    error here), so a non-breaking space or a form feed is text, not blank."""
+    return not text.strip(" ")
 
 
 def cells(row: str) -> int:
-    """How many cells a table row has: one more than its unescaped pipes, outer pipes aside."""
-    row = row.strip()
+    """How many cells a table row has: one more than its unescaped pipes, outer pipes aside.
+
+    Only spaces around the row are trimmed: GitHub reads a non-breaking space after the last
+    pipe as one more cell.
+    """
+    row = row.strip(" ")
     row = row.removeprefix("|")
     row = row[:-1] if row.endswith("|") and not row.endswith("\\|") else row
     return len(PIPE.findall(row)) + 1
 
 
-def table_rows(lines: list[str]) -> set[int]:
-    """Indexes of the lines in a GFM table, by the GFM table extension's start and end rules.
+def closes(text: str, fence: str) -> bool:
+    """Whether a line closes the code fence opened by `fence`: the same character, at least as many, nothing else."""
+    body = text[indentation(text) :].rstrip(" ")
+    return indentation(text) < 4 and len(body) >= len(fence) and body == fence[0] * len(body)
 
-    A table starts where a header row with a pipe is followed by a delimiter row with the same
-    number of cells, and its body runs to the first blank line or line that starts another
-    block. A body row needs no pipe.
+
+def html_start(body: str, interrupts: bool) -> int:
+    """The HTML block type, 1 to 7, that a line opens, or 0. Type 7 cannot interrupt a paragraph."""
+    for kind, (start, _) in enumerate(HTML_BLOCKS, 1):
+        if start.match(body):
+            return kind
+    return 7 if not interrupts and HTML_TAG_LINE.fullmatch(body) else 0
+
+
+def layout(lines: list[str]) -> list[Leaf]:
+    """The leaf blocks of a Markdown file, in order, by CommonMark's parsing strategy as cmark-gfm implements it.
+
+    Each line first continues every open blockquote and list item it can. It may then open
+    new ones, and a new leaf block. A line that opens nothing joins the open paragraph, even
+    one whose containers it did not continue (a lazy continuation line), or else continues an
+    open table or starts a paragraph. Only a list item that holds text and, if ordered, starts
+    at 1 interrupts a paragraph, and an HTML block of type 7 never does; a setext underline or
+    a table's delimiter row acts only on a paragraph whose containers the line continues. Only
+    spaces are read as indentation and only spaces make a line blank, so a tab, a vertical tab,
+    a form feed and a lone carriage return are errors, and so is a code fence still open at the
+    end of the file.
     """
-    rows: set[int] = set()
-    for i in range(1, len(lines)):
-        depth, delimiter = quoted(lines[i])
-        head_depth, head = quoted(lines[i - 1])
-        if (
-            depth != head_depth
-            or "|" not in delimiter
-            or not DELIMITER_ROW.fullmatch(delimiter)
-            or not PIPE.search(head)
-            or BLOCK_START.match(head)
-            or cells(head) != cells(delimiter)
-        ):
-            continue
-        rows.update((i - 1, i))
-        j = i + 1
-        while j < len(lines):
-            row_depth, row = quoted(lines[j])
-            if row_depth != depth or not row.strip() or BLOCK_START.match(row):
+    stack: list[object] = []  # open containers, outermost first: QUOTE or an Item
+    leaves: list[Leaf] = []
+    leaf: Leaf | None = None  # the open leaf block, which sits in every container on the stack
+    for i, line in enumerate(lines):
+        if "\t" in line:
+            raise Defect(
+                f"line {i + 1}: a tab; indent with spaces (how far a tab indents depends on its column, "
+                "which this check does not model)"
+            )
+        if "\r" in line:
+            raise Defect(
+                f"line {i + 1}: a carriage return that does not end a CRLF line; GitHub ends a line there, "
+                "and this check reads only LF and CRLF line endings"
+            )
+        if "\v" in line or "\f" in line:
+            raise Defect(
+                f"line {i + 1}: a vertical tab or form feed; remove it (GitHub reads it as a space in table rows "
+                "and HTML tags but as text elsewhere, which this check does not model)"
+            )
+        pos = matched = 0
+        for container in stack:
+            rest = line[pos:]
+            indent = indentation(rest)
+            if container is QUOTE and indent < 4 and rest[indent:].startswith(">"):
+                pos += indent + 1 + rest[indent + 1 : indent + 2].count(" ")
+            elif isinstance(container, Item) and not is_blank(rest) and indent >= container.width:
+                pos += container.width
+            elif isinstance(container, Item) and is_blank(rest) and container.filled:
+                pos = len(line)
+            else:
                 break
-            rows.add(j)
-            j += 1
-    return rows
+            matched += 1
+        rest = line[pos:]
+        continued = matched == len(stack)
+
+        # An open code fence, indented code block or HTML block takes the line if every container continued.
+        if leaf and continued:
+            if leaf.kind == "code fence":
+                leaf.add(i, pos)
+                if closes(rest, leaf.fence):
+                    leaf = None
+                continue
+            if leaf.kind == "html" and (leaf.end or not is_blank(rest)):
+                leaf.add(i, pos)
+                if leaf.end and leaf.end.search(rest):
+                    leaf = None
+                continue
+            if leaf.kind == "indented code block" and (is_blank(rest) or indentation(rest) >= 4):
+                leaf.add(i, pos)
+                continue
+        if is_blank(rest):
+            # A blank line closes any other leaf, and every container it did not continue.
+            del stack[matched:]
+            leaf = None
+            continue
+
+        paragraph = leaf is not None and leaf.kind == "paragraph"
+        interrupts = paragraph and continued  # a block opened here interrupts the open paragraph
+        opened = False  # a container or leaf opened on this line
+        kind = ""
+        html = 0
+        while True:
+            rest = line[pos:]
+            indent = indentation(rest)
+            body = rest[indent:]
+            if not body:
+                break
+            if indent >= 4:
+                # While a paragraph is open, an indented line continues it instead of opening code.
+                kind = "" if paragraph and not opened else "indented code block"
+                break
+            container: object | None = None
+            step = 0
+            item = LIST_MARKER.match(body)
+            if body.startswith(">"):
+                container, step = QUOTE, indent + 1 + body[1:2].count(" ")
+            elif ATX_OPEN.match(body):
+                kind = "heading"
+            elif FENCE_OPEN.match(body):
+                kind = "code fence"
+            elif html := html_start(body, interrupts):
+                kind = "html"
+            elif interrupts and SETEXT_UNDERLINE.fullmatch(body):
+                kind = "setext"
+            elif THEMATIC_BREAK.fullmatch(body):
+                kind = "break"
+            elif item and not (
+                interrupts and (is_blank(body[item.end() :]) or (item.group(1) is not None and int(item.group(1)) != 1))
+            ):
+                # The content starts 1 to 4 spaces past the marker; past more, or with none, 1 space past it.
+                gap = indentation(body[item.end() :])
+                width = item.end() + (gap if not is_blank(body[item.end() :]) and gap <= 4 else 1)
+                container, step = Item(indent + width), indent + min(width, item.end() + gap)
+            elif interrupts and not leaf.tried and DELIMITER_ROW.fullmatch(body):
+                if cells(lines[leaf.lines[-1]][leaf.starts[-1] :]) == cells(body):
+                    kind = "table"
+                else:
+                    leaf.tried = True
+            if container is None:
+                break
+            if not opened:
+                del stack[matched:]
+                opened = True
+            if stack and isinstance(stack[-1], Item):
+                stack[-1].filled = True
+            stack.append(container)
+            matched = len(stack)
+            pos += step
+            interrupts = False
+        rest = line[pos:]
+
+        if kind == "setext":
+            # The paragraph becomes a heading, and the underline its last line.
+            leaf.kind = "heading"
+            leaf.add(i, pos)
+            leaf = None
+            continue
+        if kind == "table":
+            # The paragraph's last line becomes the header row; any lines before it stay a paragraph.
+            table = Leaf("table")
+            table.add(leaf.lines.pop(), leaf.starts.pop())
+            if not leaf.lines:
+                leaves.remove(leaf)
+            table.add(i, pos)
+            leaves.append(table)
+            leaf = table
+            continue
+        if not kind and not opened and leaf is not None:
+            if paragraph or (leaf.kind == "table" and continued):
+                leaf.add(i, pos)  # a paragraph line (lazy if a container did not continue) or a table row
+                continue
+        if not opened:
+            del stack[matched:]
+        if is_blank(rest):
+            leaf = None  # a line of container markers alone opens no leaf
+            continue
+        if stack and isinstance(stack[-1], Item):
+            stack[-1].filled = True
+        leaf = Leaf(kind or "paragraph")
+        leaf.add(i, pos)
+        leaves.append(leaf)
+        if kind == "code fence":
+            leaf.fence = FENCE_OPEN.match(rest.lstrip(" ")).group(0)
+        elif kind == "html":
+            leaf.end = HTML_BLOCKS[html - 1][1] if html <= len(HTML_BLOCKS) else None
+            leaf.comment = html == 2
+            if leaf.end and leaf.end.search(rest):
+                leaf = None
+        elif kind in ("heading", "break"):
+            leaf = None
+    if leaf is not None and leaf.kind == "code fence":
+        raise Defect(f"line {leaf.lines[0] + 1}: unclosed code fence (the rest of the file would render as code)")
+    return leaves
 
 
 def blank(match: re.Match[str]) -> str:
@@ -213,131 +426,99 @@ def mask_cells(row: str) -> str:
     return "".join(out) + INLINE.sub(blank, row[start:])
 
 
-def paragraphs(lines: list[str], flow: list[bool]) -> list[list[int]]:
-    """Runs of flow lines that belong to one paragraph, so a code span may cross their line breaks.
-
-    A run ends at a blank line and before a heading, a list item, a thematic break, a setext
-    underline or a deeper blockquote, the blocks that interrupt a paragraph.
-    """
-    runs: list[list[int]] = []
-    current: list[int] = []
-    for i, line in enumerate(lines):
-        depth, body = quoted(line)
-        starts = BLOCK_START.match(body) is not None and not body.lstrip().startswith(">")
-        deeper = bool(current) and depth > quoted(lines[current[-1]])[0]
-        if not flow[i] or not body.strip() or starts or deeper:
-            if current:
-                runs.append(current)
-            current = []
-            if flow[i] and body.strip():
-                current = [i]
-                if starts and re.match(r" {0,3}#", body):
-                    runs.append(current)  # a heading is one line
-                    current = []
-            continue
-        current.append(i)
-    if current:
-        runs.append(current)
-    return runs
+def title(leaf: Leaf, lines: list[str]) -> str:
+    """A heading's text: an ATX heading's without its # runs, a setext heading's lines without the underline."""
+    if len(leaf.lines) > 1:
+        return " ".join(lines[i][s:].strip(" ") for i, s in zip(leaf.lines[:-1], leaf.starts[:-1]))
+    text = lines[leaf.lines[0]][leaf.starts[0] :].strip(" ").lstrip("#")
+    return re.sub(r"(?:^| +)#+ *$", "", text).strip(" ")
 
 
-def mask(text: str) -> tuple[str, str, list[Block]]:
-    """(text with code fences and comment blocks blanked, that with inline code and comments blanked too, the blocks).
+def mask(text: str) -> tuple[str, list[Block], list[tuple[int, str]], frozenset[int], list[tuple[int, int] | None]]:
+    """(text with what a renderer hides blanked, the code and comment blocks, (offset, title) of each heading, table
+    lines, and per line its (paragraph or heading number, column its text starts at), None for any other line).
 
-    Blanking keeps every offset and line break, so positions in either map back to `text`.
+    Blanked are code blocks, comment blocks, and inline code and comments. Blanking keeps every
+    offset and line break, so a position in the masked text maps back to `text`.
     """
     lines = text.split("\n")
-    rows = table_rows(lines)
-    blocks = list(lines)
+    at = [0]
+    for line in lines:
+        at.append(at[-1] + len(line) + 1)
     masked = list(lines)
-    flow = [False] * len(lines)
     found: list[Block] = []
-    fence: tuple[str, int, int, int, int, bool] | None = None  # (char, length, indent, line, offset, exempt)
-    comment: tuple[int, int] | None = None  # (line, offset) of an open comment block
-    offset = 0
-    for i, line in enumerate(lines):
-        number = i + 1
-        hidden = " " * len(line)
-        here = offset
-        offset += len(line) + 1
-        if fence:
-            m = FENCE.match(line)
-            if m and m["fence"][0] == fence[0] and len(m["fence"]) >= fence[1] and not m["rest"].strip():
-                if len(m["lead"]) != fence[2]:
-                    raise Defect(
-                        f"line {number}: closes the code fence opened at line {fence[3]} at a different indent; "
-                        "one of the two fence lines is misread, so the text between them would go unchecked"
-                    )
-                found.append(Block("code fence", fence[4], here + len(line), fence[3], fence[5]))
-                fence = None
-        elif comment:
-            if (end := line.find("-->")) >= 0:
-                # A comment block ends with the line holding -->; text after it still renders.
-                found.append(Block("HTML comment", comment[1], here + end + 3, comment[0], False))
-                comment = None
-                visible = line[end + 3 :]
-                blocks[i] = " " * (end + 3) + visible
-                masked[i] = " " * (end + 3) + INLINE.sub(blank, visible)
-                continue
-        elif (m := FENCE.match(line)) and not (m["fence"][0] == "`" and "`" in m["rest"]):
-            # Only a fence at column 0 can be exempted: an indented or quoted "fence" may be
-            # something the renderer shows as prose.
-            exempt = not m["lead"] and i > 0 and lines[i - 1].rstrip() == EXEMPT
-            fence = (m["fence"][0], len(m["fence"]), len(m["lead"]), number, here, exempt)
-        elif (c := BLOCK_COMMENT.match(line)) and "-->" not in line[c.end() :]:
-            comment = (number, here)
-        elif i in rows:
-            masked[i] = mask_cells(line)
-            continue
-        else:
-            flow[i] = True
-            continue
-        blocks[i] = hidden
-        masked[i] = hidden
-    if fence:
-        raise Defect(f"line {fence[3]}: unclosed code fence (everything after it would go unchecked)")
-    if comment:
-        raise Defect(f"line {comment[0]}: unclosed HTML comment (everything after it would go unchecked)")
-    for run in paragraphs(lines, flow):
-        joined = INLINE.sub(blank, "\n".join(lines[i] for i in run)).split("\n")
-        for i, part in zip(run, joined):
-            masked[i] = part
-    return "\n".join(blocks), "\n".join(masked), found
-
-
-def heading_offsets(blocks: str) -> list[tuple[int, str]]:
-    """(offset, title) of every ATX and setext heading, in document order."""
-    found: list[tuple[int, str]] = []
-    offset = 0
-    previous: tuple[int, str] | None = None
-    for line in blocks.split("\n"):
-        if m := ATX.fullmatch(line):
-            found.append((offset, m.group(1)))
-        elif (
-            previous
-            and SETEXT.fullmatch(line)
-            and previous[1].strip()
-            and not ATX.fullmatch(previous[1])
-            and not TABLE_ROW.match(previous[1])
-            and not LIST_ITEM.match(previous[1])
-            and not previous[1].lstrip().startswith(">")
-        ):
-            found.append((previous[0], previous[1].strip()))
-        previous = (offset, line)
-        offset += len(line) + 1
-    return found
+    headings: list[tuple[int, str]] = []
+    rows: set[int] = set()
+    prose: list[tuple[int, int] | None] = [None] * len(lines)
+    for number, leaf in enumerate(layout(lines)):
+        first, last = leaf.lines[0], leaf.lines[-1]
+        if leaf.kind in ("paragraph", "heading"):
+            for i, start in zip(leaf.lines, leaf.starts):
+                prose[i] = (number, start)
+            # A code span may cross a line break inside one paragraph or heading, never out of it.
+            spans = leaf.lines[:-1] if leaf.kind == "heading" and len(leaf.lines) > 1 else leaf.lines
+            for i, part in zip(spans, INLINE.sub(blank, "\n".join(lines[i] for i in spans)).split("\n")):
+                masked[i] = part
+            if leaf.kind == "heading":
+                headings.append((at[first], title(leaf, lines)))
+        elif leaf.kind == "table":
+            rows.update(leaf.lines)
+            for i in leaf.lines:
+                masked[i] = mask_cells(lines[i])
+        elif leaf.kind in ("code fence", "indented code block"):
+            # Only a fence at column 0, outside every container, can be exempted: a line that starts
+            # with its run of backticks or tildes, which no indented code block can.
+            exempt = lines[first].startswith(("`", "~")) and first > 0 and lines[first - 1].rstrip() == EXEMPT
+            found.append(Block(leaf.kind, at[first], at[last] + len(lines[last]), first + 1, exempt))
+            for i in leaf.lines:
+                masked[i] = " " * len(lines[i])
+        elif leaf.kind == "html":
+            raw = COMMENT.sub(blank, "\n".join(lines[i] for i in leaf.lines))
+            if "<!--" in raw:
+                # A renderer passes an HTML block through as it stands, so a comment it leaves open hides
+                # everything after it, whatever the Markdown after it says.
+                raise Defect(f"line {first + 1}: unclosed HTML comment (the rest of the file would be hidden)")
+            for i, part in zip(leaf.lines, raw.split("\n")):
+                masked[i] = part
+            if leaf.comment and len(leaf.lines) > 1:
+                # A comment block: its last line is the first to hold -->.
+                end = at[last] + lines[last].index("-->") + 3
+                found.append(Block("HTML comment", at[first] + lines[first].index("<!--"), end, first + 1, False))
+    return "\n".join(masked), found, headings, frozenset(rows), prose
 
 
 def scan(text: str) -> Spec:
     """Every hard keyword in `text` (LF line endings), with the id beside it and its section."""
-    blocks, masked, regions = mask(text)
-    headings = heading_offsets(blocks)
+    masked, regions, headings, rows, prose = mask(text)
+    line_starts = [0, *(i + 1 for i, c in enumerate(text) if c == "\n")]
+
+    def one_phrase(gap_start: int, gap_end: int) -> bool:
+        """Whether the text between MUST and a NOT after it renders as space, so the two read as one MUST NOT.
+
+        On one line the words join in any block unless a > parts them. Across lines, both words must
+        sit in one paragraph or heading, and a > between them must be one of the container markers
+        that open a continuation line; anywhere else a renderer shows it.
+        """
+        first = bisect_right(line_starts, gap_start) - 1
+        last = bisect_right(line_starts, gap_end) - 1
+        blocks = {prose[i][0] if prose[i] is not None else None for i in range(first, last + 1)}
+        if first != last and (None in blocks or len(blocks) > 1):
+            return False
+        for p in range(gap_start, gap_end):
+            if text[p] == ">":
+                line = bisect_right(line_starts, p) - 1
+                if line == first or p - line_starts[line] >= prose[line][1]:
+                    return False
+        return True
+
     markers = {m.start(): m for m in MARKER.finditer(masked)}
     used: set[int] = set()
     keywords: list[Keyword] = []
     for m in KEYWORD.finditer(text):
         start = m.start()
-        word = "MUST NOT" if m.group(0).endswith("NOT") else "MUST"
+        # MUST and NOT are one keyword only where a renderer shows them as one phrase; otherwise MUST stands alone.
+        end = m.end() if m.group(0).endswith("NOT") and one_phrase(start + 4, m.end() - 3) else start + 4
+        word = "MUST NOT" if end > start + 4 else "MUST"
         section = next((title for at, title in reversed(headings) if at < start), "")
         line = text.count("\n", 0, start) + 1
         # A keyword inside a block is reported, not skipped: if a block was misread, a keyword
@@ -351,6 +532,12 @@ def scan(text: str) -> Spec:
                     f"{EXEMPT} on the line before the fence if it states no requirement, or state it in prose"
                 )
                 keywords.append(Keyword(word, start, line, section, None, problem))
+            elif block.kind == "indented code block":
+                problem = (
+                    f"sits inside the indented code block at line {block.line}, which can carry neither an id nor an "
+                    "exemption: fence it at column 0 if it states no requirement, or state it in prose"
+                )
+                keywords.append(Keyword(word, start, line, section, None, problem))
             else:
                 problem = (
                     f"sits inside the HTML comment opened at line {block.line}, which can carry neither an id "
@@ -360,7 +547,7 @@ def scan(text: str) -> Spec:
             continue
         if masked[start] == " ":
             continue  # inline code or an inline comment
-        pos = m.end()
+        pos = end
         if closer := CLOSER.match(text, pos):
             pos = closer.end()
         rid: str | None = None
@@ -373,13 +560,17 @@ def scan(text: str) -> Spec:
             rid = marker.group(2)
             if marker.group(1) != rid.lower():
                 problem = f'anchor id="{marker.group(1)}" does not match {rid} (it must be "{rid.lower()}")'
-            elif word == "MUST" and NOT_AFTER.match(text, marker.end()):
+            elif (
+                word == "MUST"
+                and (after := NOT_AFTER.match(text, marker.end()))
+                and one_phrase(marker.end(), after.end() - 3)
+            ):
                 problem = f"{rid} sits between MUST and NOT; it goes after NOT"
         elif text.startswith("<sup", pos):
             problem = 'malformed id marker (expected <sup id="iop-3">IOP-3</sup>)'
         keywords.append(Keyword(word, start, line, section, rid, problem))
     stray = [(text.count("\n", 0, at) + 1, mk.group(2)) for at, mk in markers.items() if at not in used]
-    return Spec(text, keywords, stray)
+    return Spec(text, keywords, stray, rows)
 
 
 def strip(text: str) -> str:
@@ -742,7 +933,7 @@ def requirement(
                 isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == m.group(2) for node in ast.walk(tree)
             )
         elif suffix == ".mjs":
-            defined = re.search(MJS_FUNCTION.format(name=re.escape(m.group(2))), source, re.MULTILINE) is not None
+            defined = re.search(MJS_FUNCTION.format(name=re.escape(m.group(2))), js_code(source), re.MULTILINE) is not None
         else:
             errors.append(f"{what}: test {ref!r}: name a .py or .mjs tool")
             continue
@@ -755,6 +946,50 @@ def requirement(
     if not vectors and not tests and not gap:
         errors.append(f"{what}: maps to no vector and no test, and records no gap")
     return Requirement(kw.rid or "", rel, kw.section, str(binds), only, vectors, tests, gap, kw)
+
+
+def js_code(source: str) -> str:
+    """JavaScript source with its comments, strings, template literals and regular expressions blanked.
+
+    A `/` opens a regular expression after an operator, an opening bracket, a keyword such as
+    `return`, or at the start; after an operand it divides. This is a heuristic, not a parser:
+    it does not track `${…}` substitutions, and it can read a regular expression as division
+    (after `)`, say). A backtick met in the wrong state flips what counts as code, so contrived
+    source can reveal a declaration written in a comment or a template literal.
+    """
+    out: list[str] = []
+    operand = False  # the last token was an operand, so a `/` divides
+    i = 0
+    while i < len(source):
+        c, two = source[i], source[i : i + 2]
+        if two in ("//", "/*"):
+            end = source.find("\n" if two == "//" else "*/", i + 2)
+            j = len(source) if end < 0 else end + (0 if two == "//" else 2)
+        elif c in "'\"`" or (c == "/" and not operand):
+            j, in_class = i + 1, False
+            while j < len(source) and (source[j] != c or in_class) and (c == "`" or source[j] != "\n"):
+                if source[j] == "\\":
+                    j += 1
+                elif c == "/":
+                    in_class = (in_class or source[j] == "[") and source[j] != "]"
+                j += 1
+            j += 1
+            while c == "/" and j < len(source) and source[j].isalnum():
+                j += 1  # the flags
+            operand = True
+        elif word := JS_WORD.match(source, i):
+            operand = word.group(0) not in JS_KEYWORDS_BEFORE_REGEX
+            out.append(word.group(0))
+            i = word.end()
+            continue
+        else:
+            operand = c in ")]}" if not c.isspace() else operand
+            out.append(c)
+            i += 1
+            continue
+        out.append(re.sub(r"[^\n]", " ", source[i:j]))
+        i = j
+    return "".join(out)
 
 
 def verify_base(root: Path, base: str) -> None:
@@ -827,7 +1062,7 @@ def cell(text: str) -> str:
     return text.replace("\\|", "|").replace("|", "\\|")
 
 
-def excerpt(text: str, start: int, word: str) -> str:
+def excerpt(text: str, start: int, word: str, rows: frozenset[int]) -> str:
     """The text around the keyword at `start`, from its paragraph, list item or table cell, keyword in bold.
 
     Display only: a construct it does not follow degrades the excerpt, never the check.
@@ -846,7 +1081,7 @@ def excerpt(text: str, start: int, word: str) -> str:
         b = body(line)
         return not b.strip() or b.startswith(("#", "|", "```", "~~~", "[!"))
 
-    if at in table_rows(lines):
+    if at in rows:
         row = lines[at]
         pos = row.index("\0")
         pipes = [p.start() for p in PIPE.finditer(row)]
@@ -951,13 +1186,13 @@ def render(model: Model) -> str:
         out.append("| :--- | :--- | :--- |" + " :--- |" * len(sdks))
         for req in (r for r in model.requirements if r.file == rel):
             link = f"[{req.rid}](../{rel}#{req.rid.lower()})"
-            said = f"*{cell(req.section)}*: {excerpt(spec.text, req.keyword.start, req.keyword.word)}"
+            said = f"*{cell(req.section)}*: {excerpt(spec.text, req.keyword.start, req.keyword.word, spec.rows)}"
             cells = " | ".join(status(req, sdk, model) for sdk in sdks)
             out.append(f"| {link} | {said} | {evidence(req, model)} | {cells} |")
         exempt = [kw for kw in spec.keywords if kw.rid == ""]
         if exempt:
             out += ["", f"Marked not-a-requirement in `{rel}`:", ""]
-            out += [f"- line {kw.line}: {excerpt(spec.text, kw.start, kw.word)}" for kw in exempt]
+            out += [f"- line {kw.line}: {excerpt(spec.text, kw.start, kw.word, spec.rows)}" for kw in exempt]
     return "\n".join(out) + "\n"
 
 

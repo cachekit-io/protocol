@@ -27,8 +27,9 @@ INTEROP = "spec/interop-v2.md"
 
 Mutate = Callable[[Path], None]
 
-# The obligation sentence, present in both copies -- the realistic drift target.
-MUST = "The ratio product MUST be computed **exactly**"
+# The obligation sentence, present in both copies -- the realistic drift target. Only the text
+# up to the keyword is pinned: a requirement id may follow it in an indexed copy.
+MUST = "The ratio product MUST"
 
 
 def edit(rel: str, old: str, new: str, *, once: bool = True) -> Mutate:
@@ -126,7 +127,21 @@ CASES: list[Case] = [
     (
         # Markdown reads a 4-space indent as a code block, so this changes meaning.
         "normative paragraph indented in one copy",
-        edit(WIRE, "\nThe bound MUST be computed by **multiplication**.", "\n    The bound MUST be computed by **multiplication**."),
+        edit(WIRE, "\nThe bound MUST", "\n    The bound MUST"),
+        1,
+        DRIFT,
+    ),
+    (
+        # The other copy's file is not indexed, so its copy carries no ids: they are not drift.
+        "requirement id in one copy only",
+        edit(INTEROP, "The ratio product MUST", 'The ratio product MUST<sup id="v2-9">V2-9</sup>'),
+        0,
+        OK,
+    ),
+    (
+        # Only a well-formed id marker is removed; any other markup beside the keyword is compared.
+        "markup beside the keyword that is not an id",
+        edit(INTEROP, "The ratio product MUST", "The ratio product MUST<sup>NOT</sup>"),
         1,
         DRIFT,
     ),

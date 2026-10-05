@@ -23,16 +23,16 @@ Every entry is a 14-byte header followed by zero or more payload bytes.
 | 6 | 8 | Expiry | unsigned 64-bit big-endian Unix seconds; `0` means no expiry |
 | 14 | variable | Payload | opaque backend bytes |
 
-Writers for version 1 MUST set the reserved byte and flags to zero. The expiry is the integer UTC Unix-second deadline. An entry with a nonzero expiry is expired when the reader wall clock reaches that timestamp; readers MAY lazily remove expired entries.
+Writers for version 1 MUST<sup id="file-1">FILE-1</sup> set the reserved byte and flags to zero. The expiry is the integer UTC Unix-second deadline. An entry with a nonzero expiry is expired when the reader wall clock reaches that timestamp; readers MAY lazily remove expired entries.
 
 ## Version and flag negotiation
 
-A truncated header or wrong magic/version is corrupt and may be removed as a cache miss. A nonzero reserved byte or flag value is different: it can indicate a future payload transform. A reader that does not implement every indicated transform MUST return a miss and MUST NOT delete, rewrite, or return the payload. This fails closed rather than exposing transformed bytes as plaintext.
+A truncated header or wrong magic/version is corrupt and may be removed as a cache miss. A nonzero reserved byte or flag value is different: it can indicate a future payload transform. A reader that does not implement every indicated transform MUST<sup id="file-2">FILE-2</sup> return a miss and MUST NOT<sup id="file-3">FILE-3</sup> delete, rewrite, or return the payload. This fails closed rather than exposing transformed bytes as plaintext.
 
-A future nonzero flag assignment requires a protocol update and canonical test vector. A writer MUST NOT set an unknown flag. A reader that implements a future flag must preserve the established fields and verify the transform before returning payload bytes.
+A future nonzero flag assignment requires a protocol update and canonical test vector. A writer MUST NOT<sup id="file-4">FILE-4</sup> set an unknown flag. A reader that implements a future flag must preserve the established fields and verify the transform before returning payload bytes.
 
 ## Write and TTL behavior
 
-Entries are written through a temporary file in the same directory and atomically renamed into place. Refreshing TTL rewrites only bytes 6 through 13 and MUST NOT expose a torn expiry to a concurrent reader: a refresh either rewrites the entry through the same temporary-file and atomic-rename path, or updates the expiry with a single positioned 8-byte write on platforms that guarantee read/write atomicity for regular files (POSIX.1-2017 §2.9.7) — in which case readers MUST load the 14-byte header in a single read. Writers calculate the absolute deadline and store its whole-second Unix timestamp; a positive sub-second TTL can therefore expire within the current second.
+Entries are written through a temporary file in the same directory and atomically renamed into place. Refreshing TTL rewrites only bytes 6 through 13 and MUST NOT<sup id="file-5">FILE-5</sup> expose a torn expiry to a concurrent reader: a refresh either rewrites the entry through the same temporary-file and atomic-rename path, or updates the expiry with a single positioned 8-byte write on platforms that guarantee read/write atomicity for regular files (POSIX.1-2017 §2.9.7) — in which case readers MUST<sup id="file-6">FILE-6</sup> load the 14-byte header in a single read. Writers calculate the absolute deadline and store its whole-second Unix timestamp; a positive sub-second TTL can therefore expire within the current second.
 
 The canonical examples are in [`test-vectors/file-backend.json`](../test-vectors/file-backend.json).

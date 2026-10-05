@@ -20,8 +20,10 @@ syntax the context needs (an HTML comment in prose, `//` inside a pseudocode
 fence). Any other line that carries a sentinel tag is an error, since text beside
 a sentinel would sit outside the comparison. This compares the copies modulo
 each document's operand name (`compressed_size` in wire-format, `payload.length`
-in interop-v2) and a declared left margin per copy (BLOCKS), which are the only
-differences the copies are permitted to have. Every non-blank line must carry
+in interop-v2), a declared left margin per copy (BLOCKS), and requirement ids such as
+`<sup id="wire-3">WIRE-3</sup>`, which tools/conformance.py's own `strip` removes: one
+copy's file can be indexed while the other's is not yet. These are the only differences the
+copies are permitted to have. Every non-blank line must carry
 exactly its margin, and any indent beyond it is compared: in Markdown a 4-space
 indent turns a normative paragraph into a code block, and in pseudocode an
 indent changes which branch a line belongs to.
@@ -44,6 +46,8 @@ import difflib
 import re
 import sys
 from pathlib import Path
+
+from conformance import strip as strip_ids
 
 # block-id -> members; every member holds one copy of the block, as
 # (spec path, operand name normalised away, declared left margin in spaces)
@@ -101,7 +105,7 @@ def main(argv: list[str]) -> int:
         for rel, operand, margin in members:
             path = root / rel
             try:
-                body = extract(path.read_text(encoding="utf-8"), block_id, margin)
+                body = extract(strip_ids(path.read_text(encoding="utf-8")), block_id, margin)
             except OSError as exc:
                 failures.append(f"{rel}: cannot read ({exc})")
                 continue
@@ -147,7 +151,7 @@ def main(argv: list[str]) -> int:
 
     print(
         f"check-spec-duplication: OK -- {len(BLOCKS)} shared block(s), "
-        "every copy identical modulo its operand name and its declared margin"
+        "every copy identical modulo its operand name, its declared margin and its requirement ids"
     )
     return 0
 
