@@ -1345,10 +1345,14 @@ REPORT_CASES: list[tuple[str, Mutate, dict[str, list[str]], list[str]]] = [
     ),
     (
         # A tab or line break in a name would show as nothing or end the row; a backtick would end the span.
+        # Every SDK is pinned to 1.1.0, which lacks these rows, so the statuses do not move as SDKs re-vendor.
         "vector names with a tab, a line break or a backtick stay inside their span and cell",
-        entry(
-            "IOP-13",
-            vectors=["path-encoding.json:.\t.", "path-encoding.json:.\r\n.", 'path-encoding.json:a"b<c>d^e`f{g|h}i'],
+        both(
+            entry(
+                "IOP-13",
+                vectors=["path-encoding.json:.\t.", "path-encoding.json:.\r\n.", 'path-encoding.json:a"b<c>d^e`f{g|h}i'],
+            ),
+            *(pin(sdk, "path-encoding.json", "1.1.0") for sdk in ("cachekit-py", "cachekit-ts", "cachekit-rs")),
         ),
         {"IOP-13": ["uncovered (0/3)"] * 3},
         ['`".\\t."`, `".\\r\\n."`, ``a"b<c>d^e`f{g\\|h}i``'],
