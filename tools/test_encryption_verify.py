@@ -67,7 +67,7 @@ def mk(doc: dict, name: str) -> dict:
 
 
 def accept_row(doc: dict) -> dict:
-    return mk(doc, "master_key_distinct_bytes")
+    return mk(doc, ev.ACCEPT_ROW)
 
 
 def set_key(name: str, text: str) -> Callable[[dict], None]:
@@ -101,12 +101,26 @@ def retenant(doc: dict) -> None:
     row["aad_hex"] = ev.aad_v3(tenant, row["cache_key"], fmt=row["format"], compressed=row["compressed"]).hex()
 
 
-# The key every master_key_input row comes from.
-D = bytes(range(32))
-# 32 bytes that read the same reversed, with a leading 00 byte and the letters a-f.
+# The key every master_key_input row comes from, and its hex string.
+KEY = bytes.fromhex("00ff807fa55ac33c1ee12dd24bb469968778f00f01102332455467768998abba")
+H = KEY.hex()
+# Keys that each lack one property of KEY. 00..1f: no byte above 7f, and no letter in a byte's first digit.
+LOW_KEY = bytes(range(32))
+# Digits only, with a leading 00 and bytes above 7f.
+ALL_DIGITS = bytes.fromhex("00" + "".join(f"{n:02d}" for n in range(99, 79, -1)) + "".join(f"{n:02d}" for n in range(79, 68, -1)))
+# A leading 00, bytes above 7f and letters in both digits, reading the same reversed.
 PALINDROME = bytes.fromhex("001a2b3c4d5e6f708192a3b4c5d6e7f8") + bytes.fromhex("001a2b3c4d5e6f708192a3b4c5d6e7f8")[::-1]
-# 32 bytes whose two digits are equal (00, 11, ... ff, twice): swapping them reads the same key.
+# Equal digits in every byte (00, 11, ... ff, twice): swapping them reads the same key.
 EQUAL_DIGITS = bytes(0x11 * (i % 16) for i in range(32))
+
+# The two readings of what rule 1 leaves open, which the row guard compares: the strict one refuses each of these
+# strings, and the lenient one reads KEY from it.
+READING_CASES = {
+    "uppercase digits": H.upper(),
+    "white space between pairs and after": " ".join(H[i : i + 2] for i in range(0, len(H), 2)) + "\r\n",
+    "a 0x prefix": "0x" + H,
+    "a 0X prefix": "0X" + H,
+}
 
 # The sealed bytes and the AAD that binds them; swapping these between vectors leaves each vector's identity in place.
 PAYLOAD_FIELDS = ("cache_key", "aad_hex", "ciphertext_hex", "plaintext_hex")
@@ -153,36 +167,45 @@ STDLIB_CASES: dict[str, Callable[[dict], None]] = {
     # lane the entry also fails to decrypt).
     "master_key_input tenant is not the literal": retenant,
     "accept row fingerprint corrupted": lambda d: accept_row(d).__setitem__("derived_key_fingerprint_hex", "00" * 16),
+    "accept row aad tenant component swapped": lambda d: accept_row(d).__setitem__(
+        "aad_hex", ev.aad_v3("cross-sdk-test", accept_row(d)["cache_key"], fmt="msgpack", compressed=False).hex()
+    ),
     # 33 bytes: a conformant entry point that takes exactly 32 refuses it, and one that takes 32 or more accepts it, so
     # it can be neither an accept row nor a reject row.
-    "accept row refused by a conformant length rule": rekey(D + b"\x20"),
-    "reject row accepted by a conformant length rule": set_key("master_key_31_bytes", (D + b"\x20").hex()),
-    "raw reject row of exactly 32 bytes": set_raw("raw_key_33_bytes", D),
-    # What rule 1 leaves open, which no row may decide: an uppercase digit, white space, the x of a 0x prefix.
-    "uppercase hex digit in a row": set_key("master_key_non_hex_digit", D.hex()[:-1] + "A"),
-    "white space in a row": set_key("master_key_non_hex_digit", D.hex()[:-1] + "\n"),
-    "0x prefix's x in a row": set_key("master_key_non_hex_digit", D.hex()[:-1] + "x"),
-    "raw_key_hex in uppercase": lambda d: mk(d, "raw_key_33_bytes").__setitem__("raw_key_hex", (D + b"\x20").hex().upper()),
+    "accept row refused by a conformant length rule": rekey(KEY + b"\x20"),
+    "reject row accepted by a conformant length rule": set_key("master_key_31_bytes", (KEY + b"\x20").hex()),
+    "raw reject row of exactly 32 bytes": set_raw("raw_key_33_bytes", KEY),
+    # A valid key that one reading of rule 1 refuses and the other accepts: a reject row holding one would decide it.
+    "valid key with an uppercase digit as a reject row": set_key("master_key_non_hex_digit", H[:-1] + "A"),
+    "valid key with a trailing newline as a reject row": set_key("master_key_odd_65_digits", H + "\n"),
+    "non-ASCII character in a row": set_key("master_key_non_hex_digit", H[:-1] + "\ufeff"),
+    "raw_key_hex in uppercase": lambda d: mk(d, "raw_key_33_bytes").__setitem__("raw_key_hex", (KEY + b"\x20").hex().upper()),
     "row note blank": lambda d: mk(d, "master_key_16_bytes").__setitem__("note", " "),
     "unknown field on a row": lambda d: mk(d, "master_key_16_bytes").__setitem__("reject", True),
+    "duplicate row name": lambda d: d["master_key_input"]["reject_vectors"].append(copy.deepcopy(mk(d, "master_key_16_bytes"))),
     # Deleted, not renamed: a renamed row is also a row no wrong entry point lists, which the next case's guard catches.
     "frozen master_key_input row deleted": lambda d: d["master_key_input"]["raw_reject_vectors"].remove(mk(d, "raw_key_31_bytes")),
     "row added with no wrong entry point to show its mistake": lambda d: d["master_key_input"]["reject_vectors"].append(
-        {"name": "master_key_20_bytes", "master_key_hex": D.hex()[:40], "note": "The accept row's first 20 bytes."}
+        {"name": "master_key_20_bytes", "master_key_hex": H[:40], "note": "The accept row's first 20 bytes."}
     ),
     # Each row edited so that a mistake its note names no longer misjudges it; only the wrong-entry-point check
-    # rejects these.
-    "65-digit row cut to 63 digits": set_key("master_key_odd_65_digits", D.hex()[:63]),
-    "63-digit row cut to 61 digits": set_key("master_key_odd_63_digits", D.hex()[:61]),
-    "non-hex row also short": set_key("master_key_non_hex_digit", D.hex()[:61] + "g"),
-    "trailing non-hex pair moved inside the first 32 bytes": set_key("master_key_trailing_non_hex", D.hex()[:62] + "gg"),
-    "non-hex digit first, where a start-anchored pattern sees it": set_key("master_key_non_hex_digit", "g" + D.hex()[1:]),
-    "31-byte row cut to 30 bytes": set_key("master_key_31_bytes", D.hex()[:60]),
-    "16-byte row grown to 20 bytes": set_key("master_key_16_bytes", D.hex()[:40]),
-    "raw 31-byte row cut to 30 bytes": set_raw("raw_key_31_bytes", D[:30]),
+    # rejects these (the accept-row keys also fail to decrypt in the seal lane).
+    "65-digit row cut to 63 digits": set_key("master_key_odd_65_digits", H[:63]),
+    "63-digit row cut to 61 digits": set_key("master_key_odd_63_digits", H[:61]),
+    "non-hex row also short": set_key("master_key_non_hex_digit", H[:61] + "g"),
+    "non-hex digit first, where a start-anchored pattern sees it": set_key("master_key_non_hex_digit", "g" + H[1:]),
+    "trailing row made odd, which an even-length check refuses": set_key("master_key_trailing_non_hex", H + "g"),
+    "plus sign moved inside a pair": set_key("master_key_plus_sign", "0+" + H[2:]),
+    "31-byte row cut to 30 bytes": set_key("master_key_31_bytes", H[:60]),
+    "24-byte row grown to 25 bytes": set_key("master_key_24_bytes", H[:50]),
+    "16-byte row grown to 20 bytes": set_key("master_key_16_bytes", H[:40]),
+    "CRLF row without the CR LF": set_key("master_key_31_bytes_and_crlf", H[:62]),
+    "0x row without the 0x": set_key("master_key_0x_and_31_bytes", H[:62]),
+    "raw 31-byte row cut to 30 bytes": set_raw("raw_key_31_bytes", KEY[:30]),
     "raw ASCII row not a hex string": set_raw("raw_key_ascii_hex_string", b"g" * 64),
-    "accept row without a leading zero byte": rekey(bytes(range(1, 33))),
-    "accept row without hex letters": rekey(bytes.fromhex("0001020304050607080910111213141516171819202122232425262728293031")),
+    "accept row without a leading zero byte": rekey(KEY[1:] + KEY[:1]),
+    "accept row without hex letters": rekey(ALL_DIGITS),
+    "accept row with no byte above 7f and no letter first in a byte": rekey(LOW_KEY),
     "accept row that reads the same reversed": rekey(PALINDROME),
     "accept row that reads the same with each byte's digits swapped": rekey(EQUAL_DIGITS),
 }
@@ -212,6 +235,13 @@ def main() -> int:
         print(f"FAIL baseline fixture does not verify:\n{out}")
         return 1
     print(f"ok  baseline verifies ({'seal' if HAVE_SEAL else 'stdlib'} lane)")
+
+    for name, text in READING_CASES.items():
+        if ev.read_hex_key(text) is not None or ev.read_hex_key(text, lenient=True) != KEY:
+            print(f"FAIL reading {name!r}: the strict reading must refuse it and the lenient reading must read the key")
+            bad += 1
+        else:
+            print(f"ok  reading {name!r}")
 
     cases = dict(STDLIB_CASES)
     if HAVE_SEAL:
