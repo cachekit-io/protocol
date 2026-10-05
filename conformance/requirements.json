@@ -507,6 +507,7 @@
             "encryption.json:master_key_24_bytes",
             "encryption.json:master_key_16_bytes",
             "encryption.json:master_key_31_bytes_and_crlf",
+            "encryption.json:master_key_31_bytes_with_spaces",
             "encryption.json:master_key_0x_and_31_bytes"
           ],
           "tests": [
@@ -550,6 +551,8 @@
             "interop-mode.json:interop_encryption_roundtrip",
             "encryption.json:master_key_every_hex_digit",
             "encryption.json:raw_key_31_bytes",
+            "encryption.json:raw_key_24_bytes",
+            "encryption.json:raw_key_16_bytes",
             "encryption.json:raw_key_33_bytes",
             "encryption.json:raw_key_ascii_hex_string"
           ],
@@ -557,7 +560,7 @@
             "tools/encryption-verify.py:verify_master_key_input",
             "tools/encryption-verify.py:verify_wrong_entry_points"
           ],
-          "gap": "Each vector reaches a raw-bytes entry point only when an SDK's test drives it through one: the 32-byte keys of interop_encryption_roundtrip and master_key_every_hex_digit to be accepted (the second has bytes above 7f, which an entry point that passes the bytes through a text string corrupts), the raw reject rows to be refused. Whether a test drives them through every raw-bytes entry point the SDK offers, for current and previous keys alike, is SDK test code no vector can check."
+          "gap": "Each vector reaches a raw-bytes entry point only when an SDK's test drives it through one: the 32-byte keys of interop_encryption_roundtrip and master_key_every_hex_digit to be accepted (the second has bytes above 7f, which an entry point that passes the bytes through a text string corrupts), and the raw reject rows of 16, 24, 31 and 33 bytes and the ASCII bytes of a hex string to be refused, so one that refuses those and accepts another length but 32 passes. Whether a test drives them through every raw-bytes entry point the SDK offers, for current and previous keys alike, is SDK test code no vector can check."
         },
         "PRE-27": {
           "section": "Master Key Input",
@@ -769,7 +772,7 @@
             "encryption.json:default_tenant_interop",
             "encryption.json:master_key_every_hex_digit"
           ],
-          "gap": "The vectors catch a secure companion that does not read CACHEKIT_MASTER_KEY only when a test supplies the key through that variable. They are default-tenant entries sealed under two different master keys, so a companion that ignores CACHEKIT_PREVIOUS_MASTER_KEYS fails only a test that sets one key as current and the other as previous; and apart from CACHEKIT_MASTER_KEY, which PRE-53's planted entry reaches, nothing observes an io companion that reads a variable besides CACHEKIT_API_KEY."
+          "gap": "The vectors catch a secure companion that does not read CACHEKIT_MASTER_KEY only when a test supplies the key through that variable. They are default-tenant entries under two different master keys and cache keys, so a companion that ignores CACHEKIT_PREVIOUS_MASTER_KEYS fails a test that sets one key as current and the other as previous only if the test asserts a hit, since a fail-open read recomputes instead; and apart from CACHEKIT_MASTER_KEY, which PRE-53's planted entry reaches, nothing observes an io companion that reads a variable besides CACHEKIT_API_KEY."
         },
         "PRE-52": {
           "section": "Explicit Configuration",
@@ -777,11 +780,7 @@
           "sdks": [
             "cachekit-rs"
           ],
-          "vectors": [
-            "encryption.json:default_tenant_interop",
-            "encryption.json:master_key_every_hex_digit"
-          ],
-          "gap": "As PRE-51, for a companion that does not support previous keys: with the variable set, one that ignores it fails to read the entry sealed under the previous key, but only the test sees whether it failed at construction, as the rule asks."
+          "gap": "The rule asks for a construction error, which no vector observes."
         },
         "PRE-53": {
           "section": "Explicit Configuration",

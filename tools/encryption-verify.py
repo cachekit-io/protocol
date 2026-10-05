@@ -98,10 +98,13 @@ FROZEN_MASTER_KEY_INPUT_VECTORS = {
             "master_key_24_bytes",
             "master_key_16_bytes",
             "master_key_31_bytes_and_crlf",
+            "master_key_31_bytes_with_spaces",
             "master_key_0x_and_31_bytes",
         }
     ),
-    "raw_reject_vectors": frozenset({"raw_key_31_bytes", "raw_key_33_bytes", "raw_key_ascii_hex_string"}),
+    "raw_reject_vectors": frozenset(
+        {"raw_key_31_bytes", "raw_key_24_bytes", "raw_key_16_bytes", "raw_key_33_bytes", "raw_key_ascii_hex_string"}
+    ),
 }
 MASTER_KEY_INPUT_FIELDS = {
     "accept_vectors": frozenset(
@@ -123,18 +126,18 @@ MASTER_KEY_INPUT_FIELDS = {
 }
 KEY_BYTES = 32
 # Rule 3 lets a hex entry point accept exactly 32 bytes or 32 and more, so every row must get one verdict under both.
+EXACTLY, OR_MORE = "exactly 32 bytes", "32 bytes or more"
 HEX_LENGTH_RULES: dict[str, Callable[[int], bool]] = {
-    "exactly 32 bytes": lambda n: n == KEY_BYTES,
-    "32 bytes or more": lambda n: n >= KEY_BYTES,
+    EXACTLY: lambda n: n == KEY_BYTES,
+    OR_MORE: lambda n: n >= KEY_BYTES,
 }
 LOWER_HEX = frozenset("0123456789abcdef")
 # Rule 1 does not say whether a key may hold uppercase hex digits, white space or a 0x prefix, so every row must get
-# one verdict under both readings of it (see read_hex_key). The white space is the ASCII set Python's bytes.fromhex
-# skips, which JavaScript's trim() strips too.
-READINGS = {"strict": False, "lenient": True}
-READING_LABELS = {
-    "strict": "refuses uppercase digits, white space and a 0x prefix",
-    "lenient": "drops white space and a 0x prefix and reads uppercase as lowercase",
+# one verdict under both readings of it: each reading, and whether read_hex_key reads leniently under it. The white
+# space is the ASCII set Python's bytes.fromhex skips, which JavaScript's trim() strips too.
+READINGS = {
+    "refuses uppercase digits, white space and a 0x prefix": False,
+    "drops white space and a 0x prefix and reads uppercase as lowercase": True,
 }
 ASCII_WHITE_SPACE = frozenset(" \t\n\r\x0b\x0c")
 # Rows hold printable ASCII and that white space only, so none turns on how a parser treats any other character
@@ -381,12 +384,9 @@ HEX_DIGITS = frozenset(string.hexdigits)
 ACCEPT_ROW = "master_key_every_hex_digit"
 
 
-def at_least_32(key: bytes | None) -> bytes | None:
-    return key if key is not None and len(key) >= KEY_BYTES else None
-
-
-def exactly_32(key: bytes | None) -> bytes | None:
-    return key if key is not None and len(key) == KEY_BYTES else None
+def behind(rule: str, key: bytes | None) -> bytes | None:
+    """`key` if an entry point that takes `rule` accepts its length, else None."""
+    return key if key is not None and HEX_LENGTH_RULES[rule](len(key)) else None
 
 
 def buffer_from_hex(text: str) -> bytes:
@@ -403,6 +403,11 @@ def big_integer(text: str) -> bytes:
     """int(text, 16) back to bytes at its minimal length: a leading 00 byte disappears."""
     value = int(text, 16)
     return value.to_bytes((value.bit_length() + 7) // 8, "big")
+
+
+def digits_swapped(text: str) -> bytes | None:
+    """Each byte read with its two digits swapped."""
+    return None if len(text) % 2 else bytes.fromhex("".join(text[i + 1] + text[i] for i in range(0, len(text), 2)))
 
 
 def digits_only_decoder(text: str) -> bytes:
@@ -447,14 +452,23 @@ def one_integer(text: str) -> bytes | None:
         return None
 
 
-def white_space_skipped(text: str) -> bytes | None:
-    """Only the string's length checked (64 characters or more), then Python's bytes.fromhex, which skips white space."""
-    if len(text) < 2 * KEY_BYTES:
+def white_space_skipped(text: str, *, strip_first: bool) -> bytes | None:
+    """The string, as given or with its ends stripped, checked for 64 characters or more, then decoded with
+    Python's bytes.fromhex, which skips white space between pairs and at the ends."""
+    checked = text.strip() if strip_first else text
+    if len(checked) < 2 * KEY_BYTES:
         return None
     try:
-        return bytes.fromhex(text)
+        return bytes.fromhex(checked)
     except ValueError:
         return None
+
+
+def prefix_stripped(text: str) -> bytes | None:
+    """A 64-character check, then a 0x prefix stripped and the rest decoded with no check on the key's length."""
+    if len(text) != 2 * KEY_BYTES:
+        return None
+    return read_hex_key(text[2:] if text[:2] in ("0x", "0X") else text)
 
 
 def length_rule(accepts: Callable[[int], bool]) -> Callable[[str], bytes | None]:
@@ -476,33 +490,30 @@ WRONG_HEX_ENTRY_POINTS: dict[str, tuple[Callable[[str], bytes | None], tuple[str
         (ACCEPT_ROW,),
     ),
     "uppercase hex digits only (^[0-9A-F]{64}$)": (lambda t: bytes.fromhex(t) if re.fullmatch("[0-9A-F]{64}", t) else None, (ACCEPT_ROW,)),
-    "big-integer decode, which drops a leading 00 byte": (lambda t: at_least_32(big_integer(t)), (ACCEPT_ROW,)),
-    "bytes reversed (a little-endian integer)": (lambda t: at_least_32(bytes.fromhex(t)[::-1]), (ACCEPT_ROW,)),
-    "the two digits of each byte swapped": (
-        lambda t: at_least_32(bytes.fromhex("".join(t[i + 1] + t[i] for i in range(0, len(t), 2)))),
-        (ACCEPT_ROW,),
-    ),
-    "a letter read as ord(c) - ord('0')": (lambda t: at_least_32(digits_only_decoder(t)), (ACCEPT_ROW,)),
-    "a byte's first digit read as decimal": (lambda t: at_least_32(first_digit_decimal(t)), (ACCEPT_ROW,)),
-    "a signed-byte pair parser, which refuses a pair above 7f": (lambda t: at_least_32(signed_pairs(t)), (ACCEPT_ROW,)),
+    "big-integer decode, which drops a leading 00 byte": (lambda t: behind(OR_MORE, big_integer(t)), (ACCEPT_ROW,)),
+    "bytes reversed (a little-endian integer)": (lambda t: behind(OR_MORE, bytes.fromhex(t)[::-1]), (ACCEPT_ROW,)),
+    "the two digits of each byte swapped": (lambda t: behind(OR_MORE, digits_swapped(t)), (ACCEPT_ROW,)),
+    "a letter read as ord(c) - ord('0')": (lambda t: behind(OR_MORE, digits_only_decoder(t)), (ACCEPT_ROW,)),
+    "a byte's first digit read as decimal": (lambda t: behind(OR_MORE, first_digit_decimal(t)), (ACCEPT_ROW,)),
+    "a signed-byte pair parser, which refuses a pair above 7f": (lambda t: behind(OR_MORE, signed_pairs(t)), (ACCEPT_ROW,)),
     "the key bytes passed through a text string (latin-1 in, UTF-8 out)": (
-        lambda t: at_least_32(through_text(bytes.fromhex(t))),
+        lambda t: behind(OR_MORE, through_text(bytes.fromhex(t))),
         (ACCEPT_ROW,),
     ),
     "Node's Buffer.from(key, 'hex'), then a check that the key is 32 bytes": (
-        lambda t: exactly_32(buffer_from_hex(t)),
+        lambda t: behind(EXACTLY, buffer_from_hex(t)),
         ("master_key_odd_65_digits",),
     ),
     "a check that the length is even, then Node's Buffer.from(key, 'hex') and a check that the key is 32 bytes": (
-        lambda t: exactly_32(buffer_from_hex(t)) if len(t) % 2 == 0 else None,
+        lambda t: behind(EXACTLY, buffer_from_hex(t)) if len(t) % 2 == 0 else None,
         ("master_key_trailing_non_hex",),
     ),
     "an odd string padded with a leading 0, then a check that the key is exactly 32 bytes": (
-        lambda t: exactly_32(bytes.fromhex(t if len(t) % 2 == 0 else "0" + t)),
+        lambda t: behind(EXACTLY, bytes.fromhex(t if len(t) % 2 == 0 else "0" + t)),
         ("master_key_odd_63_digits",),
     ),
     "a character that is not a hex digit read as 0": (
-        lambda t: exactly_32(bytes.fromhex("".join(c if c in HEX_DIGITS else "0" for c in t))),
+        lambda t: behind(EXACTLY, bytes.fromhex("".join(c if c in HEX_DIGITS else "0" for c in t))),
         ("master_key_non_hex_digit",),
     ),
     "Node's Buffer.from(key, 'hex'), with only the string's length checked": (
@@ -521,15 +532,21 @@ WRONG_HEX_ENTRY_POINTS: dict[str, tuple[Callable[[str], bytes | None], tuple[str
         one_integer,
         ("master_key_plus_sign", "master_key_0x_and_31_bytes"),
     ),
-    "only the string's length checked, then bytes.fromhex, which skips white space": (
-        white_space_skipped,
+    "a 64-character check, then a 0x prefix stripped and the rest decoded": (prefix_stripped, ("master_key_0x_and_31_bytes",)),
+    "the string's length checked as given, then bytes.fromhex, which skips white space": (
+        lambda t: white_space_skipped(t, strip_first=False),
         ("master_key_31_bytes_and_crlf",),
+    ),
+    "the string's ends stripped and its length checked, then bytes.fromhex, which skips white space between pairs": (
+        lambda t: white_space_skipped(t, strip_first=True),
+        ("master_key_31_bytes_with_spaces",),
     ),
     "no length check": (length_rule(lambda n: True), SHORT_ROWS),
     "off by one (31 bytes or more)": (length_rule(lambda n: n >= KEY_BYTES - 1), ("master_key_31_bytes",)),
     "16 bytes or more, the HKDF floor encryption.md once listed": (length_rule(lambda n: n >= 16), SHORT_ROWS),
     "AES key sizes (16, 24 or 32 bytes)": (length_rule(lambda n: n in (16, 24, 32)), ("master_key_24_bytes", "master_key_16_bytes")),
     "AES-192 and AES-256 key sizes (24 or 32 bytes)": (length_rule(lambda n: n in (24, 32)), ("master_key_24_bytes",)),
+    "AES-128 and AES-256 key sizes (16 or 32 bytes)": (length_rule(lambda n: n in (16, 32)), ("master_key_16_bytes",)),
     "a short key padded to 32 bytes": (
         lambda t: key.ljust(KEY_BYTES, b"\0") if (key := read_hex_key(t)) is not None else None,
         SHORT_ROWS,
@@ -537,17 +554,23 @@ WRONG_HEX_ENTRY_POINTS: dict[str, tuple[Callable[[str], bytes | None], tuple[str
 }
 
 WRONG_RAW_ENTRY_POINTS: dict[str, tuple[Callable[[bytes], bytes | None], tuple[str, ...]]] = {
-    "32 bytes or more, as a hex entry point may accept": (at_least_32, ("raw_key_33_bytes", "raw_key_ascii_hex_string")),
+    "32 bytes or more, as a hex entry point may accept": (
+        lambda k: behind(OR_MORE, k),
+        ("raw_key_33_bytes", "raw_key_ascii_hex_string"),
+    ),
     "64 hex digits hex-decoded first": (
-        lambda k: key if len(key := hex_decoded_first(k)) == KEY_BYTES else None,
+        lambda k: behind(EXACTLY, hex_decoded_first(k)),
         ("raw_key_ascii_hex_string",),
     ),
     "off by one (31 bytes or more)": (lambda k: k if len(k) >= KEY_BYTES - 1 else None, ("raw_key_31_bytes",)),
     "a short key padded to 32 bytes": (lambda k: k.ljust(KEY_BYTES, b"\0") if len(k) <= KEY_BYTES else None, ("raw_key_31_bytes",)),
+    "AES key sizes (16, 24 or 32 bytes)": (lambda k: k if len(k) in (16, 24, 32) else None, ("raw_key_24_bytes", "raw_key_16_bytes")),
+    "AES-192 and AES-256 key sizes (24 or 32 bytes)": (lambda k: k if len(k) in (24, 32) else None, ("raw_key_24_bytes",)),
+    "AES-128 and AES-256 key sizes (16 or 32 bytes)": (lambda k: k if len(k) in (16, 32) else None, ("raw_key_16_bytes",)),
     "no length check": (lambda k: k, ("raw_key_31_bytes", "raw_key_33_bytes", "raw_key_ascii_hex_string")),
     # Fed the accept row's key as bytes, as a test drives a raw-bytes entry point with a decoded hex key.
     "the key bytes passed through a text string, then a check that they are 32 bytes": (
-        lambda k: exactly_32(through_text(k)),
+        lambda k: behind(EXACTLY, through_text(k)),
         (ACCEPT_ROW,),
     ),
 }
@@ -580,15 +603,15 @@ def verify_wrong_entry_points(rows: dict[str, tuple[str, dict]]) -> int:
                 if target not in rows:
                     continue
                 table, row = rows[target]
-                if table == "raw_reject_vectors":
-                    given: str | bytes = bytes.fromhex(row["raw_key_hex"])
-                elif entry_points is WRONG_RAW_ENTRY_POINTS:
-                    given = bytes.fromhex(row["master_key_hex"])
-                else:
-                    given = row["master_key_hex"]
                 try:
+                    if table == "raw_reject_vectors":
+                        given: str | bytes = bytes.fromhex(row["raw_key_hex"])
+                    elif entry_points is WRONG_RAW_ENTRY_POINTS:
+                        given = bytes.fromhex(row["master_key_hex"])
+                    else:
+                        given = row["master_key_hex"]
                     got = verdict(entry_point(given))
-                except (ValueError, OverflowError) as exc:
+                except (ValueError, OverflowError, IndexError) as exc:
                     print(f"FAIL wrong entry point {label!r} raised on {target}: {exc}")
                     failures += 1
                     continue
@@ -621,7 +644,10 @@ def verify_master_key_input(block: dict | None, *, seal: bool) -> int:
         print(f"FAIL master_key_input: tenant_id must be the literal {DEFAULT_TENANT_ID!r}; got {block.get('tenant_id')!r}")
         return 1
     failures = 0
+    # A row joins `rows`, and so the wrong-entry-point check, once its shape is sound: the models only ever see
+    # well-formed input, and a row whose verdict is wrong is still checked against them.
     rows: dict[str, tuple[str, dict]] = {}
+    seen: set[str] = set()
     for table, frozen in FROZEN_MASTER_KEY_INPUT_VECTORS.items():
         missing = frozen - {row.get("name") for row in block.get(table, [])}
         if missing:
@@ -634,21 +660,23 @@ def verify_master_key_input(block: dict | None, *, seal: bool) -> int:
                 print(f"FAIL {label}: fields {sorted(row)} != {sorted(MASTER_KEY_INPUT_FIELDS[table])}")
                 failures += 1
                 continue
-            if name in rows:
+            if name in seen:
                 print(f"FAIL {label}: duplicate name")
                 failures += 1
                 continue
+            seen.add(name)
             if not isinstance(row["note"], str) or not row["note"].strip():
                 print(f"FAIL {label}: note must be a non-empty string")
                 failures += 1
                 continue
-            rows[name] = (table, row)
             if table == "raw_reject_vectors":
                 raw_hex = row["raw_key_hex"]
                 if len(raw_hex) % 2 or not set(raw_hex) <= LOWER_HEX:
                     print(f"FAIL {label}: raw_key_hex must be lowercase hex")
                     failures += 1
-                elif len(bytes.fromhex(raw_hex)) == KEY_BYTES:
+                    continue
+                rows[name] = (table, row)
+                if len(bytes.fromhex(raw_hex)) == KEY_BYTES:
                     print(f"FAIL {label}: a raw-bytes entry point takes exactly {KEY_BYTES} bytes, so this row is no reject")
                     failures += 1
                 else:
@@ -659,9 +687,10 @@ def verify_master_key_input(block: dict | None, *, seal: bool) -> int:
                 print(f"FAIL {label}: holds a character other than printable ASCII and ASCII white space")
                 failures += 1
                 continue
+            rows[name] = (table, row)
             wanted = table == "accept_vectors"
             wrong = [
-                f"an entry point that takes {rule} and {READING_LABELS[reading]}"
+                f"an entry point that takes {rule} and {reading}"
                 for reading, lenient in READINGS.items()
                 for rule, accepts in HEX_LENGTH_RULES.items()
                 if ((key := read_hex_key(text, lenient=lenient)) is not None and accepts(len(key))) != wanted
