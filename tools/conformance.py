@@ -169,10 +169,13 @@ INLINE = (
     ("autolink", r"<[A-Za-z][A-Za-z0-9.+-]{1,31}:[^\x00-\x20<>]*>"),
     (
         "email",
-        r"<[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?"
-        r"(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*>",
+        (
+            r"<[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?"
+            r"(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*>"
+        ),
     ),
-    # <!--> and <!---> are whole comments; otherwise the text may not end in a dash, so ---> closes nothing.
+    # To the renderer, <!--> and <!---> are whole comments, and no other may end its text in a dash, so ---> closes
+    # none. That decides which backticks a comment holds; COMMENT decides how much of it is hidden.
     ("comment", r"<!--(?:-?>|(?:[^-]|-[^-]|--[^>])*-->)"),
     ("unclosed_comment", r"<!--"),
     ("cdata", r"<!\[(?i:CDATA)\[(?:[^\]]|\][^\]]|\]\][^>])*\]\]>"),
@@ -193,10 +196,9 @@ UNCLOSED = {
 }
 TICKS = re.compile(r"`+")
 MAX_TICKS = 80  # cmark-gfm opens no code span with a longer run
-# Where GitHub's HTML sanitizer, reading a comment again as HTML, ends it: the first --> or --!> past its <!--.
-HTML_COMMENT_END = re.compile(r"--!?>")
-# An HTML block is raw HTML: a renderer hides its comments and nothing else.
-COMMENT = re.compile(r"<!--.*?-->", re.DOTALL)
+# A comment as GitHub's HTML sanitizer reads it, in an HTML block or again inside the renderer's own longer inline
+# comment: <!--> and <!---> are whole, and any other ends at the first --> or --!> past its <!--. It hides that.
+COMMENT = re.compile(r"<!--(?:-?>|.*?--!?>)", re.DOTALL)
 # The first line of a GitHub alert, which GitHub shows as the alert's title instead.
 ALERT = re.compile(r"\[!(?:NOTE|TIP|IMPORTANT|WARNING|CAUTION)\]")
 PREFIX = re.compile(r"[A-Z][A-Z0-9]*")
@@ -546,8 +548,7 @@ def inline(text: str) -> str:
         if m.lastgroup == "ticks" and (span_end := closer(start, end)) is not None:
             end = hide = span_end
         elif m.lastgroup == "comment":
-            first = HTML_COMMENT_END.search(text, start + 4, end)
-            hide = first.end() if first else end
+            hide = COMMENT.match(text, start, end).end()
         skip |= UNCLOSED.get(m.lastgroup, set())
         out += [text[pos:start], spaces(text[start:hide]), text[hide:end]]
         pos = end

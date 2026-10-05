@@ -1137,8 +1137,16 @@ CASES: list[Case] = [
     ("comment text ending in a dash", append(SPEC, "\na <!-- MUST ---> b\n"), 1, "this MUST has no id"),
     ("comment closed after ---> by a later -->", append(SPEC, "\na <!-- MUST ---> b --> c\n"), 0, OK),
     ("comment ends at its first -->", append(SPEC, "\na <!-- x --> MUST --> b\n"), 1, "this MUST has no id"),
-    # The renderer's comment runs on past --->, but GitHub's HTML sanitizer ends it there and shows the rest.
+    # The renderer's comment runs on past --->, but GitHub's HTML sanitizer ends it there and shows the rest. The
+    # sanitizer reads an HTML block's comments the same way: --!> ends one, and <!--> is one.
     ("comment the sanitizer ends at --->", append(SPEC, "\na <!-- x ---> MUST --> b\n"), 1, "this MUST has no id"),
+    (
+        "comment in an HTML block ending at --!>",
+        append(SPEC, "\n<div>\nx <!-- a --!> MUST -->\n</div>\n"),
+        1,
+        "this MUST has no id",
+    ),
+    ("comment block closed by <!-->", append(SPEC, "\n<!-->\nReaders MUST reject it -->\n"), 1, "this MUST has no id"),
     ("backtick in a processing instruction", append(SPEC, "\na <?x `?> MUST `y`\n"), 1, "this MUST has no id"),
     # In ??> the first ? pairs with the second, so the instruction runs on to a later ?>.
     ("processing instruction closed past ??>", append(SPEC, "\na <?a??> ` MUST ` ?> b\n"), 1, "this MUST has no id"),
@@ -1683,6 +1691,10 @@ INLINE_LINES: list[tuple[str, bool]] = [
     ("a <!-- x ---> <b>MUST</b> --> b", True),
     ("a <!--!> MUST --> b", False),
     ("a <!----!> MUST --> b", True),
+    # where the renderer's comment ends decides which backticks it holds: these pair after it
+    ("a <!--> ` MUST ` -->", False),
+    ("a <!---> ` MUST ` -->", False),
+    ("a <!-- x --> ` MUST ` --> b", False),
     ("a <?a?b`?> MUST `y`", True),
     ("a <?x>`?> MUST `y`", True),
     ("a <?x?> ` MUST ` ?> b", False),
