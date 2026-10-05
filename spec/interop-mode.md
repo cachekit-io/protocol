@@ -67,7 +67,7 @@ Interop mode fixes both, opt-in, without touching auto-mode behavior.
 > interop mode is the **only** cross-SDK value format. The Python CK v3 frame and
 > Arrow envelope stay SDK-internal (now documented in wire-format.md so their bytes
 > are identifiable); they will not become cross-SDK wire formats. Any value intended
-> for another SDK to read MUST be written in interop mode — for Python that means
+> for another SDK to read MUST<sup id="iop-1">IOP-1</sup> be written in interop mode — for Python that means
 > the plain-MessagePack value format below, never the CK frame.
 
 ---
@@ -102,17 +102,17 @@ non-opted-in callers remain byte-for-byte identical.
 
 ### Segment grammar
 
-`namespace` and `operation` MUST each match, as a **full-string** match:
+`namespace` and `operation` MUST<sup id="iop-2">IOP-2</sup> each match, as a **full-string** match:
 
 ```text
 ^[a-z0-9][a-z0-9._-]{0,63}$
 ```
 
 Lowercase ASCII letters, digits, `.`, `_`, `-`; 1–64 characters; must start with a
-letter or digit. SDKs MUST reject non-conforming segments with an error at decoration
+letter or digit. SDKs MUST<sup id="iop-3">IOP-3</sup> reject non-conforming segments with an error at decoration
 / registration time — never silently normalize.
 
-`namespace` additionally MUST NOT be `ns` or `nsapi`: the CachekitIO server parses a key
+`namespace` additionally MUST NOT<sup id="iop-4">IOP-4</sup> be `ns` or `nsapi`: the CachekitIO server parses a key
 starting `ns:` or `nsapi:` as namespace-prefixed
 ([cache-key-format.md → Server-Side Requirements](cache-key-format.md#server-side-requirements)),
 so an interop key in either namespace would be rejected or scoped to a namespace named
@@ -123,7 +123,7 @@ reservation is exact-match and namespace-only — `nsapix` is a valid namespace,
 and `nsapi` are valid operations. The `reject_reserved_namespace_*` error vectors and the
 `reservation_scope` key vector pin it.
 
-A segment (`namespace` or `operation`) additionally MUST NOT contain `..`: the server
+A segment (`namespace` or `operation`) additionally MUST NOT<sup id="iop-5">IOP-5</sup> contain `..`: the server
 rejects `..` anywhere in a key
 ([cache-key-format.md → Server-Side Requirements](cache-key-format.md#server-side-requirements),
 the Traversal row), so such a key would fail on every CachekitIO request. The pattern
@@ -187,7 +187,7 @@ Binding rules:
 | Variadic positional (`*args`) | Collected into **one nested array** at its declared position. |
 | Variadic keyword (`**kwargs`) | Collected into **one map** at its declared position (sorted keys, like any map). |
 | Rust | All arguments are always explicit — the flat array is the argument list as written. |
-| TypeScript | The wrapper receives only the arguments actually passed and **cannot see defaults**. Interop-wrapped TS functions MUST NOT use default parameters, and callers MUST pass the full declared arity. |
+| TypeScript | The wrapper receives only the arguments actually passed and **cannot see defaults**. Interop-wrapped TS functions MUST NOT<sup id="iop-6">IOP-6</sup> use default parameters, and callers MUST<sup id="iop-7">IOP-7</sup> pass the full declared arity. |
 
 > [!IMPORTANT]
 > The cross-SDK contract for one operation is: the operation name **plus** the
@@ -200,19 +200,19 @@ Binding rules:
 
 ## The Interop Data Model
 
-Arguments must normalize into this **closed** set of types. Anything outside it MUST
+Arguments must normalize into this **closed** set of types. Anything outside it MUST<sup id="iop-8">IOP-8</sup>
 be rejected with an error — never silently coerced or skipped.
 
 | Source type | Normalized form | Rule |
 | :--- | :--- | :--- |
-| Integer | msgpack int | Range MUST be within `[-2^63, 2^64-1]`. Out of range → error. |
+| Integer | msgpack int | Range MUST<sup id="iop-9">IOP-9</sup> be within `[-2^63, 2^64-1]`. Out of range → error. |
 | Float | msgpack int **or** float64 | [Number canonicalization](#number-canonicalization) below. NaN, `+Inf`, `-Inf` → error. |
-| String | msgpack str | UTF-8 bytes of the string as given. **No Unicode normalization** (no NFC/NFD) is applied. Strings MUST be **well-formed Unicode scalar sequences** — an unpaired surrogate MUST be rejected, never replacement-encoded (JS `Buffer`/`TextEncoder` silently emit U+FFFD, so the TS SDK MUST check `String.prototype.isWellFormed()` first; Rust `String` is immune by construction; Python raises on encode). Pinned by self-tests in both reference tools — portable JSON cannot express a lone surrogate, so there is no error vector for it. |
+| String | msgpack str | UTF-8 bytes of the string as given. **No Unicode normalization** (no NFC/NFD) is applied. Strings MUST<sup id="iop-10">IOP-10</sup> be **well-formed Unicode scalar sequences** — an unpaired surrogate MUST<sup id="iop-11">IOP-11</sup> be rejected, never replacement-encoded (JS `Buffer`/`TextEncoder` silently emit U+FFFD, so the TS SDK MUST<sup id="iop-12">IOP-12</sup> check `String.prototype.isWellFormed()` first; Rust `String` is immune by construction; Python raises on encode). Pinned by self-tests in both reference tools — portable JSON cannot express a lone surrogate, so there is no error vector for it. |
 | Boolean | msgpack bool | |
 | Null / None / nil | msgpack nil | |
 | Bytes | msgpack bin | Never the str family. |
 | List / Array / Tuple | msgpack array | Element order preserved; elements normalized recursively. |
-| Map / Dict | msgpack map | Keys MUST be strings (non-string key → error). Keys sorted by **Unicode code point order** at every nesting level; values normalized recursively. |
+| Map / Dict | msgpack map | Keys MUST<sup id="iop-13">IOP-13</sup> be strings (non-string key → error). Keys sorted by **Unicode code point order** at every nesting level; values normalized recursively. |
 | Set | msgpack array | Each element normalized **and encoded**, then elements sorted by their encoded bytes (unsigned lexicographic); duplicates after normalization removed. See note below. |
 | DateTime (tz-aware) | number | UTC Unix timestamp: floor to integer microseconds since epoch, then **one** IEEE 754 float64 division by 10⁶. Naive datetime → error. Number canonicalization then applies (whole-second datetimes encode as int). |
 | UUID | msgpack str | Lowercase hyphenated: `"550e8400-e29b-41d4-a716-446655440000"`. |
@@ -222,7 +222,7 @@ be rejected with an error — never silently coerced or skipped.
 > JavaScript's default string sort compares UTF-16 code units and gets
 > supplementary-plane characters **backwards**: `"｡"` (U+FF61) sorts *after*
 > `"𐀀"` (U+10000) in UTF-16 order but *before* it in code-point order.
-> The TS SDK MUST sort by comparing UTF-8-encoded key bytes (or by code point), not
+> The TS SDK MUST<sup id="iop-14">IOP-14</sup> sort by comparing UTF-8-encoded key bytes (or by code point), not
 > with `Array.prototype.sort()`'s default comparator. The
 > `map_key_sort_supplementary` test vector exists specifically to catch this.
 
@@ -264,7 +264,7 @@ Consequences, all intentional:
 - A whole-second datetime encodes as an int and therefore equals the same value
   passed as a plain number. Deterministic on both sides; documented, not a bug.
 - Native integers keep the full `[-2^63, 2^64-1]` range (snowflake IDs work). In
-  JavaScript, integers above 2⁵³ MUST be handled as `BigInt`; the SDK MUST error on a
+  JavaScript, integers above 2⁵³ MUST<sup id="iop-15">IOP-15</sup> be handled as `BigInt`; the SDK MUST<sup id="iop-16">IOP-16</sup> error on a
   non-integral-safe `Number` rather than silently rounding.
 
 ### DateTime determinism
@@ -324,13 +324,13 @@ portability; corruption/tamper protection is available by enabling
 [encryption](#encryption-in-interop-mode) (AES-GCM auth tag).
 
 - **Writers** SHOULD emit canonical encoding (shortest forms, sorted map keys) and
-  MUST do so to match the published value vectors. Unlike the args profile, the
+  MUST<sup id="iop-17">IOP-17</sup> do so to match the published value vectors. Unlike the args profile, the
   value profile does **not** apply number canonicalization — a float value `2.0`
   stays float64 so it round-trips as a float. (JS writers cannot make this
   distinction; a JS-written `2` may come back to Python as `int`. Cross-language
   int/float value fidelity is inherently best-effort — do not depend on it.)
-- **Readers** MUST accept any well-formed MessagePack document, canonical or not —
-  and MUST consume **exactly one** document, rejecting trailing bytes. This
+- **Readers** MUST<sup id="iop-18">IOP-18</sup> accept any well-formed MessagePack document, canonical or not —
+  and MUST<sup id="iop-19">IOP-19</sup> consume **exactly one** document, rejecting trailing bytes. This
   strictness is load-bearing: a Python auto-mode CK frame
   ([wire-format.md → SDK Storage Containers](wire-format.md#sdk-storage-containers-auto-mode))
   begins `0x43` (`fixint 67` — a complete 1-byte document), so only the
@@ -338,7 +338,7 @@ portability; corruption/tamper protection is available by enabling
   `msgpack-python` (`unpackb` raises `ExtraData`) and `@msgpack/msgpack` (`decode`
   throws on extra bytes) enforce this by default. **`rmp_serde::from_slice` does
   NOT** — it deserializes one value and ignores trailing bytes — so a Rust interop
-  reader MUST add an explicit end-of-input check (e.g. drive a
+  reader MUST<sup id="iop-20">IOP-20</sup> add an explicit end-of-input check (e.g. drive a
   `Deserializer::from_read_ref` and verify the input is exhausted). On a
   trailing-bytes failure, a reader SHOULD check for the `0x43 0x4B` prefix and
   report a *"Python-SDK-internal auto-mode entry"* diagnostic — pinned by the
@@ -443,7 +443,7 @@ const getUser = cache.wrap(fetchUser, {
 });
 ```
 
-An SDK implementation of interop mode MUST:
+An SDK implementation of interop mode MUST<sup id="iop-21">IOP-21</sup>:
 
 1. Require explicit `namespace` and `operation`, validated against the segment grammar
    (including the reserved namespaces `ns` and `nsapi`, and no `..` in either segment).
@@ -454,7 +454,7 @@ An SDK implementation of interop mode MUST:
 5. Serialize values as plain MessagePack — never the ByteStorage envelope.
 6. Leave auto mode byte-for-byte unchanged.
 7. Pass every vector in [`test-vectors/interop-mode.json`](../test-vectors/interop-mode.json),
-   including the `error_vectors` (which MUST raise) and — when the SDK supports
+   including the `error_vectors` (which MUST<sup id="iop-22">IOP-22</sup> raise) and — when the SDK supports
    encryption — the `interop_encryption_roundtrip` decrypt.
 
 Convenience pre-conversions (non-normative): SDKs MAY map language-specific types
@@ -463,7 +463,7 @@ POSIX string, `Decimal` → string, `tuple` → array. Anything that lands outsi
 data model after conversion is still an error. Beware `Decimal`-style string forms:
 `"1.0"` vs `"1.00"` hash differently; agree on the textual form across SDKs or avoid
 such types in interop arguments. The same applies to **UUIDs passed as plain
-strings** (TypeScript has no UUID type): callers MUST use the lowercase hyphenated
+strings** (TypeScript has no UUID type): callers MUST<sup id="iop-23">IOP-23</sup> use the lowercase hyphenated
 form, or `"550E8400-…"` from TS will silently miss the key a Python `uuid.UUID`
 argument produced.
 
@@ -477,12 +477,12 @@ few KB of nested headers can drive hundreds of MB of transient heap. Measured pe
 heap: 15 KB → ~400 MB in `@msgpack/msgpack` 3.1.3, and 10 KB → ~82 MB in
 `msgpack-python` 1.2.1 with `array32` headers claiming `len(input)` elements (8 bytes
 × 1024 levels × input length: it allocates every level until its nesting limit trips).
-A reader MUST therefore:
+A reader MUST<sup id="iop-24">IOP-24</sup> therefore:
 
 1. **Bound nesting depth.** Depth is the number of collection headers on the
    deepest path from the root. A map counts one level, like an array; str, bin, ext
    and scalars add nothing, so `[[null]]` and `{"": [null]}` both have depth 2. The
-   bound MUST be at least 32 and MUST NOT exceed 1024.
+   bound MUST<sup id="iop-25">IOP-25</sup> be at least 32 and MUST NOT<sup id="iop-26">IOP-26</sup> exceed 1024.
    (Today: TypeScript 100, Rust 100, Python 1024. A single shared value is
    [protocol#20](https://github.com/cachekit-io/protocol/issues/20)'s open item;
    until it is ratified, writers SHOULD keep values within 32 levels.) A recursive
@@ -492,15 +492,15 @@ A reader MUST therefore:
 2. **Never pre-allocate beyond what the input can back.** Every declared element or
    byte (collection elements; str, bin and ext bytes) needs at least one input byte,
    so the declared slots summed over the whole
-   document MUST NOT exceed input bytes − 1, and a document that exceeds it MUST be
+   document MUST NOT<sup id="iop-27">IOP-27</sup> exceed input bytes − 1, and a document that exceeds it MUST<sup id="iop-28">IOP-28</sup> be
    rejected *without* materialising it. Checking each header only against the input
    that remains after it does not satisfy this: nested headers can each fit what
    follows them while together declaring far more than the input holds
    (`nested_array16_each_header_fits_sum_overclaims`). A map pair counts as two slots
    (key + value). Exceeding the sum is sufficient to reject but does not define an
-   incomplete document: `92 dc 00 00` sums to 2 and is still truncated. A reader MUST
+   incomplete document: `92 dc 00 00` sums to 2 and is still truncated. A reader MUST<sup id="iop-29">IOP-29</sup>
    reject a structurally incomplete document as well. Every per-header term and the
-   running sum MUST be computed in at least
+   running sum MUST<sup id="iop-30">IOP-30</sup> be computed in at least
    64 bits or with checked/saturating arithmetic, and an overflow is itself a
    rejection: two `array32` headers already exceed 2³², and a 32-bit accumulator that
    wraps to a small value passes the budget (`array32_sum_wraps_u32`,
@@ -518,19 +518,19 @@ explicitly and regression-tests them, so a decoder dependency bump cannot silent
 re-open the amplifier. A verdict cannot show that, because it does not say *when* a
 reader rejected: a stock decoder's default limits reject every reject vector today,
 and a reader with per-header checks alone rejects the incomplete ones at end of input,
-after it has pre-allocated for them. An SDK's conformance test MUST therefore assert
+after it has pre-allocated for them. An SDK's conformance test MUST<sup id="iop-31">IOP-31</sup> therefore assert
 that a pre-decode check rejects each reject vector before anything is materialised,
 by driving each reject vector through every untrusted decode entry point (value
 reads, and any other untrusted decode such as invalidation events), below the point
 where the SDK turns the error into a cache miss or drops it, and asserting an error
 that only a pre-decode check produces: the structural guard, or a size cap that entry
-point applies ahead of it; where a size cap rejects a vector first, the test MUST
+point applies ahead of it; where a size cap rejects a vector first, the test MUST<sup id="iop-32">IOP-32</sup>
 also call that entry point's structural guard directly with it and assert the
 guard's own rejection. Outside that case, calling the guard directly as well is
 fine, but on its own it does not show that each entry point runs it. A run that
 only asserts that a decode fails does not demonstrate conformance.
 [`test-vectors/decode-bounds.json`](../test-vectors/decode-bounds.json) pins the
-bytes every decoder MUST reject and MUST accept; the same rules apply to
+bytes every decoder MUST<sup id="iop-33">IOP-33</sup> reject and MUST<sup id="iop-34">IOP-34</sup> accept; the same rules apply to
 any other untrusted MessagePack decode in an SDK (auto-mode payloads after the
 envelope is unwrapped, invalidation events).
 
@@ -575,7 +575,7 @@ not re-litigated by accident.
 | `value_vectors` | 4 | Plain-MessagePack value bytes (exact hex), float64 preservation in the value profile, temporal sentinel maps |
 | `aad_vectors` | 1 | AAD v0x03 bytes over an interop key (`format=msgpack`, `compressed=False`) |
 | `encryption_vectors` | 1 | Full HKDF-SHA256 → AES-256-GCM round-trip over plain-msgpack plaintext with the interop AAD (fixed nonce; decrypt-verified) |
-| `error_vectors` | 13 | Inputs that MUST be rejected (NaN, +Inf and −Inf as independent vectors, int overflow/underflow, naive datetime, bad segments incl. trailing newline, the reserved namespaces `ns` and `nsapi`, `..` in either segment). The `error` text is a maintainer note, not a normative message |
+| `error_vectors` | 13 | Inputs that MUST<sup id="iop-35">IOP-35</sup> be rejected (NaN, +Inf and −Inf as independent vectors, int overflow/underflow, naive datetime, bad segments incl. trailing newline, the reserved namespaces `ns` and `nsapi`, `..` in either segment). The `error` text is a maintainer note, not a normative message |
 
 [`test-vectors/decode-bounds.json`](../test-vectors/decode-bounds.json) pins the
 [Decode bounds](#decode-bounds); `tools/decode-bounds-reference.py verify` checks it,
@@ -602,7 +602,7 @@ The encryption vector is decrypt-verified (HKDF derivation + AES-256-GCM tag che
 by the JS cross-check via Node's built-in WebCrypto on every run, and additionally by
 the Python reference when the optional `cryptography` package is present. All of the
 above run in CI (`.github/workflows/verify.yml`).
-SDK implementations (cachekit-py, cachekit-rs, cachekit-ts) MUST additionally verify
+SDK implementations (cachekit-py, cachekit-rs, cachekit-ts) MUST<sup id="iop-36">IOP-36</sup> additionally verify
 against these vectors in their own test suites before claiming interop support.
 
 ---

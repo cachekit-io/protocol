@@ -73,6 +73,7 @@ layer's own store/retrieve flows are specified in
 | [spec/file-backend-format.md](spec/file-backend-format.md) | Shared local File backend filename, header, expiry, and fail-closed flag negotiation |
 | [spec/intent-presets.md](spec/intent-presets.md) | Intent-preset contract — canonical `minimal` / `production` / `secure` / `io` defaults: TTL, L1 and integrity posture, reliability floor, encryption activation and key input, `io` credentials *(normative; per-SDK conformance and alignment tickets inside)* |
 | [sdk-feature-matrix.md](sdk-feature-matrix.md) | Feature parity tracking across Python, Rust, TypeScript, and PHP SDKs |
+| [conformance/coverage.md](conformance/coverage.md) | Which normative requirements each SDK's vendored test vectors cover, generated from the requirement index ([how ids work](conformance/README.md)) |
 | [decisions/key-rotation.md](decisions/key-rotation.md) | Decision records — master-key rotation via client-side keyring (rationale, rejected options, operator runbooks) |
 | [decisions/namespace-isolation.md](decisions/namespace-isolation.md) | Decision record — server-side namespace isolation is a Python-SDK + direct-API (`nsapi:`) feature; other SDKs' namespaces are client-side conventions (rationale, rejected options, residual risk) |
 
@@ -130,6 +131,11 @@ An SDK is protocol-compliant when:
 4. SaaS API integration follows the documented endpoint contracts, including [cache-key path encoding](spec/saas-api.md#cache-key-path-encoding) (`test-vectors/path-encoding.json`)
 
 Test vectors are published in [`test-vectors/`](test-vectors/) as JSON files.
+
+Every MUST and MUST NOT in an indexed spec file carries a requirement id, such as
+`IOP-3`, which [`conformance/requirements.json`](conformance/requirements.json) maps to the
+vectors that exercise it. [`conformance/coverage.md`](conformance/coverage.md) reports which
+requirements each SDK's vendored vectors cover and which no vector reaches yet.
 
 > [!CAUTION]
 > Self-referential tests (SDK encrypts and decrypts its own output) are not sufficient for compliance certification. Use the canonical cross-SDK test vectors to validate interoperability.

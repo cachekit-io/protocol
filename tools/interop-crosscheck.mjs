@@ -382,13 +382,17 @@ for (const v of doc.error_vectors) {
 // Self-test: a lone surrogate cannot be expressed in portable JSON (serde_json
 // rejects it; Rust String is immune by construction), so this rejection is
 // pinned here and in the Python reference's self-check instead of a vector.
-try {
-  encodeToBuffer(String.fromCharCode(0xd800), { collapseFloats: true });
+// A named function, so conformance/requirements.json can cite it.
+function loneSurrogateSelftest() {
+  try {
+    encodeToBuffer(String.fromCharCode(0xd800), { collapseFloats: true });
+  } catch {
+    return; // expected
+  }
   failures++;
   console.error("FAIL lone_surrogate_selftest: expected rejection, encoding succeeded");
-} catch {
-  /* expected */
 }
+loneSurrogateSelftest();
 
 if (failures > 0) {
   console.error(`\n${failures} mismatch(es) — reference and cross-check DISAGREE`);
