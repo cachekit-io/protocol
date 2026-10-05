@@ -1345,8 +1345,7 @@ REPORT_CASES: list[tuple[str, Mutate, dict[str, list[str]], list[str]]] = [
     ),
     (
         # A tab or line break in a name would show as nothing or end the row; a backtick would end the span.
-        # Every SDK is pinned to path-encoding.json 1.1.0, which predates these rows, so the statuses
-        # stay the same as SDKs re-vendor.
+        # Every SDK is pinned to 1.1.0, which lacks these rows, so the statuses do not move as SDKs re-vendor.
         "vector names with a tab, a line break or a backtick stay inside their span and cell",
         both(
             entry(
