@@ -1350,7 +1350,7 @@ REPORT_CASES: list[tuple[str, Mutate, dict[str, list[str]], list[str]]] = [
             "IOP-13",
             vectors=["path-encoding.json:.\t.", "path-encoding.json:.\r\n.", 'path-encoding.json:a"b<c>d^e`f{g|h}i'],
         ),
-        {"IOP-13": ["uncovered (0/3)"] * 3},
+        {"IOP-13": ["partial (gap)", "uncovered (0/3)", "uncovered (0/3)"]},
         ['`".\\t."`, `".\\r\\n."`, ``a"b<c>d^e`f{g\\|h}i``'],
     ),
     (
