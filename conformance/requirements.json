@@ -1033,7 +1033,8 @@
             "interop-mode.json:datetime_sentinel_value",
             "interop-mode.json:proto_key_value",
             "interop-mode.json:bom_strings_value"
-          ]
+          ],
+          "gap": "The vectors pin the bytes an SDK's value encoder emits for each value, not the bytes its write path stores: an SDK whose write path serializes through a general MessagePack library instead, taking map order and number widths from the caller's type, passes them through whichever encoder its test drives; only a test that writes each value through the SDK's write path and compares the stored bytes catches it."
         },
         "IOP-18": {
           "section": "Interop Value Format",
