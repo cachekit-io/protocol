@@ -31,6 +31,7 @@ same text in lowercase. When the keyword is bold, the id goes after the closing 
 | [`spec/cache-key-format.md`](../spec/cache-key-format.md) | `KEY` |
 | [`spec/encryption.md`](../spec/encryption.md) | `ENC` |
 | [`spec/file-backend-format.md`](../spec/file-backend-format.md) | `FILE` |
+| [`spec/intent-presets.md`](../spec/intent-presets.md) | `PRE` |
 | [`spec/interop-mode.md`](../spec/interop-mode.md) | `IOP` |
 | [`spec/saas-api.md`](../spec/saas-api.md) | `API` |
 | [`spec/wire-format.md`](../spec/wire-format.md) | `WIRE` |
