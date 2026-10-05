@@ -14,7 +14,9 @@ Stdlib-only checks (always run):
     row is accepted, and each reject row refused, by a conformant hex entry point
     whether it takes exactly 32 bytes or 32 and more, and under both readings of
     what rule 1 leaves open (an uppercase digit, white space, a 0x prefix); each raw
-    reject row is not 32 bytes; the accept row's fingerprint and AAD. Each mistake a
+    reject row is not 32 bytes; the accept row shares neither its master key nor its
+    cache_key or plaintext with a default_tenant entry; the accept row's fingerprint
+    and AAD. Each mistake a
     row's note names is modelled in WRONG_HEX_ENTRY_POINTS or WRONG_RAW_ENTRY_POINTS
     and must misjudge the rows it lists, so editing a row until it no longer shows
     the mistake goes red.
@@ -378,7 +380,8 @@ def vector_tables(node: object, path: str = "") -> Iterator[str]:
 
 # Plausible wrong hex and raw-bytes entry points, one per mistake a master_key_input note names. Each returns the key
 # bytes it would use, or None for a refusal (one that cannot parse its input refuses it), and must misjudge every row
-# it lists. A decoding mistake sits behind a conformant length rule, so its row must catch the mistake itself, not a
+# it lists; it lists a row only if that row's note names its mistake, so the notes and this table say the same thing.
+# A decoding mistake sits behind a conformant length rule, so its row must catch the mistake itself, not a
 # length check that happens to; where only one of the two rules lets the mistake through, the entry point uses that one.
 HEX_DIGITS = frozenset(string.hexdigits)
 ACCEPT_ROW = "master_key_every_hex_digit"
@@ -488,15 +491,12 @@ SHORT_ROWS = ("master_key_31_bytes", "master_key_24_bytes", "master_key_16_bytes
 # Wrong length rules, shared by both kinds of entry point: each predicate, then the hex rows and the raw rows that
 # show it. A hex entry point decodes strictly before applying the rule.
 WRONG_LENGTH_RULES: dict[str, tuple[Callable[[int], bool], tuple[str, ...], tuple[str, ...]]] = {
-    "no length check": (lambda n: True, SHORT_ROWS, ("raw_key_31_bytes", "raw_key_33_bytes", "raw_key_ascii_hex_string")),
+    "no length check": (lambda n: True, SHORT_ROWS, ("raw_key_31_bytes",)),
     "off by one (31 bytes or more)": (lambda n: n >= KEY_BYTES - 1, ("master_key_31_bytes",), ("raw_key_31_bytes",)),
-    "31 or 32 bytes": (lambda n: n in (KEY_BYTES - 1, KEY_BYTES), ("master_key_31_bytes",), ("raw_key_31_bytes",)),
+    # No hex row: a hex reject row never decodes to 32 bytes, so on hex rows this is off by one.
+    "31 or 32 bytes": (lambda n: n in (KEY_BYTES - 1, KEY_BYTES), (), ("raw_key_31_bytes",)),
     "16 bytes or more, the HKDF floor encryption.md once listed": (lambda n: n >= 16, SHORT_ROWS, ()),
-    "AES key sizes (16, 24 or 32 bytes)": (
-        lambda n: n in (16, 24, 32),
-        ("master_key_24_bytes", "master_key_16_bytes"),
-        ("raw_key_24_bytes", "raw_key_16_bytes"),
-    ),
+    "AES key sizes (16, 24 or 32 bytes)": (lambda n: n in (16, 24, 32), ("master_key_24_bytes",), ("raw_key_24_bytes",)),
     "AES-192 and AES-256 key sizes (24 or 32 bytes)": (lambda n: n in (24, 32), ("master_key_24_bytes",), ("raw_key_24_bytes",)),
     "AES-128 and AES-256 key sizes (16 or 32 bytes)": (lambda n: n in (16, 32), ("master_key_16_bytes",), ("raw_key_16_bytes",)),
 }
@@ -549,10 +549,7 @@ WRONG_HEX_ENTRY_POINTS: dict[str, tuple[Callable[[str], bytes | None], tuple[str
         sign_tolerant_pairs,
         ("master_key_plus_sign",),
     ),
-    "the string read as one integer, int(key, 16), back to 32 bytes": (
-        one_integer,
-        ("master_key_plus_sign", "master_key_0x_and_31_bytes"),
-    ),
+    "the string read as one integer, int(key, 16), back to 32 bytes": (one_integer, ("master_key_plus_sign",)),
     "a 64-character check, then a 0x prefix stripped and the rest decoded": (prefix_stripped, ("master_key_0x_and_31_bytes",)),
     "a 64-character check on the string as given, then a trim and a strict decode": (
         lambda t: read_hex_key(t.strip()) if len(t) == 2 * KEY_BYTES else None,

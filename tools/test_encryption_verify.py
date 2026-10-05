@@ -36,12 +36,21 @@ DOC = json.loads(ev.VECTORS_PATH.read_text())
 HAVE_SEAL = importlib.util.find_spec("cryptography") is not None
 
 
-def run(mutate: Callable[[dict], None]) -> tuple[int, str]:
+def run(mutate: Callable[[dict], None]) -> tuple[int | None, str]:
+    """The verifier's exit status and output on a mutated copy of the fixture; None, and the exception, if it raised.
+
+    The verifier reports a bad fixture with a FAIL line, never a traceback. A raise is caught here so that it is
+    reported against its own case and cannot hide the cases after it.
+    """
     doc = copy.deepcopy(DOC)
     mutate(doc)
     out = io.StringIO()
     with contextlib.redirect_stdout(out):
-        rc = ev.verify(doc, require_seal=HAVE_SEAL)
+        try:
+            rc = ev.verify(doc, require_seal=HAVE_SEAL)
+        except Exception as exc:  # noqa: BLE001 -- any raise is a finding, reported by the caller
+            print(f"RAISED {type(exc).__name__}: {exc}")
+            return None, out.getvalue()
     return rc, out.getvalue()
 
 
@@ -284,19 +293,22 @@ STDLIB_CASES: dict[str, Case] = {
         rekey(SIGN_BYTE_KEY),
         'to_signed_bytes_be)" judges master_key_every_hex_digit correctly',
     ),
-    # PRE-51's pairing needs the accept row and default_tenant_interop under different keys, in different entries. The
-    # AAD is rebuilt, and the guard runs before the seal check, so only the distinctness guard rejects these.
-    "accept row back on default_tenant_interop's cache_key and plaintext": (
+    # PRE-51's pairing needs the accept row and default_tenant_interop under different keys, in different entries. One
+    # case per clause of the guard; the AAD is rebuilt, and the guard runs before the seal check, so only that clause
+    # rejects each.
+    "accept row on default_tenant_interop's cache_key": (
         lambda d: accept_row(d).update(
             cache_key=dt(d)["cache_key"],
-            plaintext_hex=dt(d)["plaintext_hex"],
             aad_hex=ev.aad_v3(ev.DEFAULT_TENANT_ID, dt(d)["cache_key"], fmt="msgpack", compressed=False).hex(),
         ),
         "shares its master key, cache_key or plaintext",
     ),
+    "accept row on default_tenant_interop's plaintext": (
+        lambda d: accept_row(d).__setitem__("plaintext_hex", dt(d)["plaintext_hex"]),
+        "shares its master key, cache_key or plaintext",
+    ),
     "accept row under the main master key": (rekey(bytes.fromhex(DOC["master_key_hex"])), "shares its master key, cache_key or plaintext"),
-    # A row of sound shape that a model cannot parse reaches the models, which report the raise as a failure. Last,
-    # because with the length-rule check removed the verifier's own decode of this row raises (failing closed).
+    # A row of sound shape that a model cannot parse reaches the models, which report the raise as a failure.
     "accept row of 63 digits": (
         lambda d: accept_row(d).__setitem__("master_key_hex", H[:63]),
         "raised on master_key_every_hex_digit",
@@ -348,7 +360,10 @@ def main() -> int:
     for name, case in cases.items():
         mutate, expected = case if isinstance(case, tuple) else (case, None)
         rc, out = run(mutate)
-        if rc == 0:
+        if rc is None:
+            print(f"FAIL mutation '{name}' raised instead of failing a guard:\n{out}")
+            bad += 1
+        elif rc == 0:
             print(f"FAIL mutation '{name}' exited 0:\n{out}")
             bad += 1
         elif expected is not None and expected not in out:

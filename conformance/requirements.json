@@ -400,7 +400,7 @@
             "tools/encryption-verify.py:verify_master_key_input",
             "tools/encryption-verify.py:verify_wrong_entry_points"
           ],
-          "gap": "Whether an SDK's test hands the hex string to its secure preset (which a preset that takes only raw bytes fails), rather than decoding it first for a lower-level API, is SDK test code no vector can check. Only default_tenant_interop and master_key_every_hex_digit reach a preset that takes no tenant; the others are sealed under named tenants. No vector's verdict turns on an uppercase letter, white space or a 0x prefix, which rule 1 does not settle, so none shows what a preset does with a valid key that holds one."
+          "gap": "Whether an SDK's test hands the hex string to its secure preset (which a preset that takes only raw bytes fails), rather than decoding it first for a lower-level API, is SDK test code no vector can check. Only default_tenant_interop and master_key_every_hex_digit reach a preset that takes no tenant; the others are sealed under named tenants. No vector's verdict turns on an uppercase letter, white space or a 0x prefix, which rule 1 does not settle, so none shows what a preset does with a valid key that holds one. No key the vectors accept has its first byte at 80 or above, so a preset that refuses such a key, as a two's-complement big integer padded to 32 bytes does, passes."
         },
         "PRE-17": {
           "section": "Master Key Input",
@@ -428,7 +428,7 @@
             "tools/encryption-verify.py:verify_master_key_input",
             "tools/encryption-verify.py:verify_wrong_entry_points"
           ],
-          "gap": "Every key the vectors accept is exactly 32 bytes, so a decoder that accepts a longer key and cuts it to 32 bytes passes; no vector's verdict turns on an uppercase letter, white space or a 0x prefix, which rule 1 does not settle, so none shows what a decoder does with a valid key that holds one. Whether a test decodes each string through the preset's own path is SDK test code."
+          "gap": "Every key the vectors accept is exactly 32 bytes, so a decoder that accepts a longer key and cuts it to 32 bytes passes, and none has its first byte at 80 or above, so a decoder that refuses such a key (a two's-complement big integer padded to 32 bytes) passes too. No vector's verdict turns on an uppercase letter, white space or a 0x prefix, which rule 1 does not settle, so none shows what a decoder does with a valid key that holds one. Whether a test decodes each string through the preset's own path is SDK test code."
         },
         "PRE-18": {
           "section": "Master Key Input",
@@ -456,7 +456,7 @@
             "tools/encryption-verify.py:verify_master_key_input",
             "tools/encryption-verify.py:verify_wrong_entry_points"
           ],
-          "gap": "As PRE-17: SDKs that disagree on a key longer than 32 bytes, or on a valid key that holds an uppercase letter, white space or a 0x prefix, each pass, and whether each test feeds the string through its SDK's own preset path is SDK test code."
+          "gap": "As PRE-17: SDKs that disagree on a key longer than 32 bytes, on a key whose first byte is 80 or above, or on a valid key that holds an uppercase letter, white space or a 0x prefix, each pass, and whether each test feeds the string through its SDK's own preset path is SDK test code."
         },
         "PRE-19": {
           "section": "Master Key Input",
