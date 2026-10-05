@@ -102,10 +102,12 @@ def retenant(doc: dict) -> None:
 
 
 # The key every master_key_input row comes from, and its hex string.
-KEY = bytes.fromhex("00ff807fa55ac33c1ee12dd24bb469968778f00f01102332455467768998abba")
+KEY = bytes.fromhex("007f80ffa55ac33c1ee12dd24bb469968778f00f01102332455467768998abba")
 H = KEY.hex()
 # Keys that each lack one property of KEY. 00..1f: no byte above 7f, and no letter in a byte's first digit.
 LOW_KEY = bytes(range(32))
+# KEY with bytes 1 and 3 swapped, so byte 1 is ff: a two's-complement decoder's sign byte restores the leading 00.
+SIGN_BYTE_KEY = bytes.fromhex("00ff807fa55ac33c1ee12dd24bb469968778f00f01102332455467768998abba")
 # Digits only, with a leading 00 and bytes above 7f.
 ALL_DIGITS = bytes.fromhex("00" + "".join(f"{n:02d}" for n in range(99, 79, -1)) + "".join(f"{n:02d}" for n in range(79, 68, -1)))
 # A leading 00, bytes above 7f and letters in both digits, reading the same reversed.
@@ -277,6 +279,27 @@ STDLIB_CASES: dict[str, Case] = {
     "accept row that reads the same with each byte's digits swapped": (
         rekey(EQUAL_DIGITS),
         "digits of each byte swapped' judges master_key_every_hex_digit correctly",
+    ),
+    "accept row whose second byte a two's-complement sign byte restores": (
+        rekey(SIGN_BYTE_KEY),
+        'to_signed_bytes_be)" judges master_key_every_hex_digit correctly',
+    ),
+    # PRE-51's pairing needs the accept row and default_tenant_interop under different keys, in different entries. The
+    # AAD is rebuilt, and the guard runs before the seal check, so only the distinctness guard rejects these.
+    "accept row back on default_tenant_interop's cache_key and plaintext": (
+        lambda d: accept_row(d).update(
+            cache_key=dt(d)["cache_key"],
+            plaintext_hex=dt(d)["plaintext_hex"],
+            aad_hex=ev.aad_v3(ev.DEFAULT_TENANT_ID, dt(d)["cache_key"], fmt="msgpack", compressed=False).hex(),
+        ),
+        "shares its master key, cache_key or plaintext",
+    ),
+    "accept row under the main master key": (rekey(bytes.fromhex(DOC["master_key_hex"])), "shares its master key, cache_key or plaintext"),
+    # A row of sound shape that a model cannot parse reaches the models, which report the raise as a failure. Last,
+    # because with the length-rule check removed the verifier's own decode of this row raises (failing closed).
+    "accept row of 63 digits": (
+        lambda d: accept_row(d).__setitem__("master_key_hex", H[:63]),
+        "raised on master_key_every_hex_digit",
     ),
 }
 
