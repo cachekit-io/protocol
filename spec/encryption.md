@@ -221,7 +221,7 @@ and interop mode never do — see below).
 | :--- | :--- | :--- |
 | Version byte | `0x03` | AAD format version |
 | `tenant_id` | Length-prefixed UTF-8 | Tenant identifier |
-| `cache_key` | Length-prefixed UTF-8 | Full cache key (prevents ciphertext swapping between keys) |
+| `cache_key` | Length-prefixed UTF-8 | The **logical backend key**: the full UTF-8 key including every client-side prefix, whichever client-side layer adds it — the SDK (a namespace), its backend (a Memcached backend's `keyPrefix`) or the backend's client library (ioredis `keyPrefix`). It excludes any encoding the backend uses to address its store (percent-encoding, the [File backend](file-backend-format.md)'s BLAKE2b-128 file name, a Cache API URL) and never includes scoping a server applies after it receives the key, such as the SaaS's per-tenant storage. Prevents ciphertext swapping between keys, namespaces and prefixes |
 | `format` | Length-prefixed UTF-8 | Serialization-format token — see [`format` tokens](#format-tokens) |
 | `compressed` | Length-prefixed UTF-8 | Boolean token — exactly `True` or `False`, see [`compressed` tokens](#compressed-tokens) |
 | `original_type` | Length-prefixed UTF-8 | *(Optional)* Original-type hint — see [`original_type`](#original_type-optional-fifth-component) |
@@ -234,7 +234,8 @@ ciphertext so the reader can rebuild the AAD; they are integrity-protected — n
 confidential — because any tampering changes the reconstructed AAD and fails
 authentication. That failure is the intended behavior: readers MUST NOT retry
 decryption with any alternative AAD input — a different `format` or `compressed`
-value, or presence/absence of `original_type`. A reader that probes AAD variants
+value, presence/absence of `original_type`, or a different `cache_key` form (for
+example the key without its namespace or key prefix). A reader that probes AAD variants
 converts an authentication failure into a metadata-tamper oracle. Likewise, the
 post-decryption unenvelope step MUST be selected by the reader's configured
 serializer/mode — never by sniffing the decrypted bytes or falling back between
@@ -414,7 +415,11 @@ Input: user_data, master_key, tenant_id, cache_key
                                       aad       = aad
                                   )
                // Returns: nonce(12) || encrypted_data || auth_tag(16)
-6. Store:      backend.set(cache_key, ciphertext)   // format + compressed stored as cleartext metadata
+6. Store:      backend.set(call_key, ciphertext)    // format + compressed stored as cleartext metadata
+               // cache_key = added_prefix + call_key, where added_prefix is any prefix the
+               // backend or its client library prepends below this call (a Memcached
+               // backend's keyPrefix, ioredis keyPrefix), empty otherwise. Encodings the
+               // backend applies to address its store are not part of the AAD.
 ```
 
 The AAD inputs in step 4 MUST reflect what steps 1–2 actually produced — e.g.
@@ -450,7 +455,8 @@ process but fails authentication for any correct second reader (see
 Input: ciphertext, stored metadata (format, compressed, optional original_type,
        optional per-entry key_fingerprint — SDK-internal storage, e.g.
        cachekit-py's CK frame header), keyring (current master_key +
-       decrypt-only master keys), tenant_id, cache_key
+       decrypt-only master keys), tenant_id, cache_key (the logical backend key,
+       every client-side prefix included — see the cache_key AAD field)
 
 1. Select key:  per [Key Rotation (Keyring)](#key-rotation-keyring) — fingerprint
                 match where the stored key_fingerprint is present (binding: no
