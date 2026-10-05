@@ -32,6 +32,7 @@ same text in lowercase. When the keyword is bold, the id goes after the closing 
 | [`spec/encryption.md`](../spec/encryption.md) | `ENC` |
 | [`spec/file-backend-format.md`](../spec/file-backend-format.md) | `FILE` |
 | [`spec/interop-mode.md`](../spec/interop-mode.md) | `IOP` |
+| [`spec/saas-api.md`](../spec/saas-api.md) | `API` |
 | [`spec/wire-format.md`](../spec/wire-format.md) | `WIRE` |
 
 Each keyword occurrence is one requirement. A sentence with two keywords carries two ids.
