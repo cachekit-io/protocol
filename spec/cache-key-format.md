@@ -73,12 +73,12 @@ identity `cbor` → `x23d5`. Codes are 1 character for the table entries and 5 f
 else.
 
 > [!IMPORTANT]
-> **The code MUST be derived from the serializer the cache is configured with, never a
+> **The code MUST<sup id="key-1">KEY-1</sup> be derived from the serializer the cache is configured with, never a
 > fixed default.** An SDK that emits one constant code collapses every serializer onto a
 > single keyspace: two caches over one function then share a key, each fails the other's
 > serializer-name check on read, evicts, and recomputes — a permanent 0% hit rate.
 >
-> **Two serializer identities that the wire format records differently MUST NOT be mapped
+> **Two serializer identities that the wire format records differently MUST NOT<sup id="key-2">KEY-2</sup> be mapped
 > onto one code by construction.** The guarantee is probabilistic, not absolute: the derived
 > code carries 16 bits, so two identities it records differently can still collide, at ≈1 in
 > 2^16 per pair. Between honestly written entries, such a collision costs hit rate only —
@@ -89,12 +89,12 @@ else.
 > [AAD](encryption.md#additional-authenticated-data-aad) input, so nothing authenticates it,
 > even for encrypted entries (see the [frame header caution](wire-format.md#python-ck-v3-frame)).
 >
-> **An SDK that offers more than one serializer identity MUST record the serializer name in
+> **An SDK that offers more than one serializer identity MUST<sup id="key-3">KEY-3</sup> record the serializer name in
 > the storage container of every serialized entry it stores under a key in this format
 > (Python: the `s` field of the [CK v3 frame](wire-format.md#python-ck-v3-frame)). On every
 > read of a serialized entry under a key in this format, before decoding the payload, such an
-> SDK MUST compare the name the container records with the name it would itself record for
-> its configured serializer, and MUST reject the entry on mismatch — a miss, never a value.
+> SDK MUST<sup id="key-4">KEY-4</sup> compare the name the container records with the name it would itself record for
+> its configured serializer, and MUST<sup id="key-5">KEY-5</sup> reject the entry on mismatch — a miss, never a value.
 > For such an SDK, an entry that records no serializer name is a mismatch.** A colliding
 > entry has the same key as the reader's own, so nothing before this comparison can tell them
 > apart. An SDK that offers exactly one serializer identity is exempt from both the recording
@@ -111,29 +111,29 @@ else.
 > [Encryption](encryption.md#format-tokens)). AAD binding does not separate them,
 > whatever their `format` tokens, and the cipher is not a backstop for a missing name check.
 >
-> **Conversely, one identity MUST always produce one code.** Derive it from the serializer
+> **Conversely, one identity MUST<sup id="key-6">KEY-6</sup> always produce one code.** Derive it from the serializer
 > configuration alone — the canonical name the wire format records, or an SDK-defined
 > refinement of it that never merges two names (see the Python note below; a refinement
 > separates keyspaces, the read-side check still sees only the recorded name) — never from a
 > process-local value such as an object address or a randomised hash, or keys stop being
 > reproducible across processes.
 >
-> **Deriving the identity.** An SDK that accepts alias spellings MUST resolve each accepted
+> **Deriving the identity.** An SDK that accepts alias spellings MUST<sup id="key-7">KEY-7</sup> resolve each accepted
 > spelling to exactly one canonical name, and the code, the recorded name, and the serializer
-> that writes the bytes MUST all be that canonical name's, or a key, its stored entry and its
+> that writes the bytes MUST<sup id="key-8">KEY-8</sup> all be that canonical name's, or a key, its stored entry and its
 > bytes can disagree about which serializer wrote it. An SDK that accepts a serializer object
-> MUST reduce it to a string identity carrying a marker that no code-table name, alias
+> MUST<sup id="key-9">KEY-9</sup> reduce it to a string identity carrying a marker that no code-table name, alias
 > spelling or accepted serializer name contains, so a user-named class can never take a table
 > code (the Python note below gives `cachekit-py`'s marker). An empty or non-string identity
-> MUST be rejected with an error, never mapped to a code: a fallback code is a shared bucket,
+> MUST<sup id="key-10">KEY-10</sup> be rejected with an error, never mapped to a code: a fallback code is a shared bucket,
 > and a key computed from it names an entry nothing wrote.
 >
 > **An SDK SHOULD make the identity distinguish configurations that write different bytes.
 > Wherever its identity does not, configurations that write different bytes and would
-> otherwise share a key MUST be keyed under different `ns:` namespaces**, no namespace
+> otherwise share a key MUST<sup id="key-11">KEY-11</sup> be keyed under different `ns:` namespaces**, no namespace
 > counting as one. Sharing an identity, they share a code, so a key, and a recorded name, so
 > the read-side check cannot tell them apart: one is served the other's bytes as a hit —
-> wrong data, not an eviction. The `ns:` MUST also covers distinct identities that share one
+> wrong data, not an eviction. The `ns:` MUST<sup id="key-12">KEY-12</sup> also covers distinct identities that share one
 > recorded name and write different bytes, because the 16-bit code is NOT a
 > collision-resistant separator: two such identities collide at ≈1 in 2^16 per pair, and key
 > and recorded name then both match. The hit-rate-only collision guarantee above covers only
@@ -314,6 +314,7 @@ Enforcement: cachekit-py vendors a sha256-pinned copy of this file and byte-veri
 <details>
 <summary>Expand full pseudocode</summary>
 
+<!-- not-a-requirement -->
 ```
 SERIALIZER_CODES = {"default": "s", "auto": "a", "orjson": "o", "arrow": "w", "local": "l"}
 
