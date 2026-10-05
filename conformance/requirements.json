@@ -723,7 +723,7 @@
         "API-1": {
           "section": "Authentication",
           "binds": "sdk",
-          "gap": "No vector covers request headers, so nothing here catches a client that sends X-CacheKit-L1-Status on GET and PUT but not on HEAD, DELETE, /ttl, /lock or health requests; the server's 400 shows the omission only on a live call with a ck_sdk_ key."
+          "gap": "No vector covers request headers, so nothing here catches a client that, with a ck_sdk_ key, sends X-CacheKit-L1-Status on GET and PUT but not on HEAD, DELETE, /ttl, /lock or health requests; the server's 400 shows the omission only on a live call."
         },
         "API-2": {
           "section": "Authentication",
@@ -759,14 +759,13 @@
             "path-encoding.json:a b",
             "path-encoding.json:100%",
             "path-encoding.json:a:..",
-            "path-encoding.json:..a",
             "path-encoding.json:ns:key",
             "path-encoding.json:f(x)!*'"
           ],
           "tests": [
             "tools/path-encoding-verify.py:verify"
           ],
-          "gap": "No row holds a character outside ASCII, so an encoder that escapes Latin-1 or UTF-16 code units instead of UTF-8 bytes passes; and the rows pin the encoder, not the request path (API-15)."
+          "gap": "No row holds a byte outside ASCII, or any ASCII character API-7's gap names, so an encoder that escapes Latin-1 or UTF-16 code units instead of UTF-8 bytes, or leaves a backslash raw, passes; and the rows pin the encoder, not the request path (API-15)."
         },
         "API-6": {
           "section": "Encoding rules",
@@ -800,7 +799,7 @@
           "tests": [
             "tools/path-encoding-verify.py:verify"
           ],
-          "gap": "No row holds a backslash (API-4), a byte of 0x80 or above (API-5), a control character, or any of '+', '&', ';', ',', '@', '$', '[' and ']', so an encoder that escapes only the characters the rows hold passes; and the rows pin the encoder, not the request path (API-15)."
+          "gap": "No row holds a backslash (API-4), a backtick, any of '\"', '$', '&', '+', ',', ';', '<', '>', '@', '[', ']', '^', '{', '|' and '}', a control character or a byte of 0x80 or above (API-5), so an encoder that escapes only the characters the rows hold passes; and the rows pin the encoder, not the request path (API-15)."
         },
         "API-8": {
           "section": "Encoding rules",
@@ -839,7 +838,7 @@
             "path-encoding.json:ttl",
             "path-encoding.json:lock"
           ],
-          "gap": "As API-8: none of the six keys reaches the server's validator, so the rows fail a client that leaves the check to the server, but only on the entry points its test drives."
+          "gap": "An SDK must not leave the check to the server, which cannot make it: a dot key never reaches the server's validator, a route-token key addresses another route or key, and an empty key addresses no entry. So the rows fail a client that relies on the server, but, as on API-8, only on the entry points its test drives."
         },
         "API-11": {
           "section": "Encoding rules",
@@ -922,7 +921,7 @@
         "API-18": {
           "section": "GET /v1/cache/{key}",
           "binds": "sdk",
-          "gap": "No vector presents a response, so nothing here catches an SDK that treats an unrecognized X-CacheKit-Freshness token as fresh, or reads 'Fresh' as fresh by matching case-insensitively; the difference shows only where it backfills a local cache (API-58) or revalidates."
+          "gap": "No vector presents a response, so nothing here catches an SDK that treats an unrecognized X-CacheKit-Freshness token as fresh, or reads 'Fresh' as fresh by matching case-insensitively; the difference shows where it backfills a local cache (API-58), revalidates, or treats a stale hit as a miss."
         },
         "API-19": {
           "section": "Remaining Freshness",
@@ -997,7 +996,7 @@
         "API-33": {
           "section": "Remaining Freshness",
           "binds": "sdk",
-          "gap": "No vector holds a header value, so nothing here catches a parser that accepts a sign, white space, a decimal point, eight or more digits, or a value over the cap."
+          "gap": "No vector holds a header value, so nothing here catches a parser that accepts a sign, white space inside the value, a decimal point, eight or more digits, or a value over the cap."
         },
         "API-34": {
           "section": "Remaining Freshness",
@@ -1102,11 +1101,17 @@
         "API-54": {
           "section": "Validation",
           "binds": "sdk",
+          "sdks": [
+            "cachekit-py"
+          ],
           "gap": "As API-42, for X-CacheKit-Stale-TTL."
         },
         "API-55": {
           "section": "Write semantics",
           "binds": "sdk",
+          "sdks": [
+            "cachekit-py"
+          ],
           "gap": "No vector covers request headers, so nothing here catches a revalidation write that omits X-CacheKit-Stale-TTL and so leaves the entry with no stale window."
         },
         "API-56": {
@@ -1137,16 +1142,25 @@
         "API-61": {
           "section": "Revalidation flow (SDK)",
           "binds": "sdk",
+          "sdks": [
+            "cachekit-py"
+          ],
           "gap": "As API-60, for a client that holds a stale read until its recompute or its lock attempt finishes."
         },
         "API-62": {
           "section": "Revalidation flow (SDK)",
           "binds": "sdk",
+          "sdks": [
+            "cachekit-py"
+          ],
           "gap": "No vector presents a lock response, so nothing here catches a client that waits, or retries the lock, when another client holds it."
         },
         "API-63": {
           "section": "Semantics notes",
           "binds": "sdk",
+          "sdks": [
+            "cachekit-py"
+          ],
           "gap": "No vector covers request headers, so nothing here catches a client that counts a background revalidation as a miss in X-CacheKit-Misses."
         },
         "API-64": {
