@@ -152,7 +152,7 @@ The contract a storage backend must satisfy per SDK (bytes in / bytes out; seria
 | Core ops | `get` / `set` / `delete` / `exists` | `get` / `set` / `delete` / `exists` | `get` / `set` / `delete` / `exists` |
 | Health check | ✅ `health_check() -> (bool, details)` required | ✅ `health() -> HealthStatus` required | ❌ not in the interface (SaaS backend has an internal check) |
 | Lifecycle | — | — | ✅ `close()` required |
-| Interop key-prefix guard | ✅ a prefixing backend exposes `key_prefix` (interop mode fails closed on it at decoration and per call) | — no backend key-prefix option | ✅ optional `readonly keyPrefix` (interop mode fails closed on hidden prefixes) |
+| Interop key-prefix guard | ✅ a prefixing backend exposes `key_prefix` (interop mode fails closed on it at decoration and per call) | — no backend key-prefix option; a client `.namespace()` makes `interop_get` / `interop_get_swr` (and so `#[cachekit]`) fail closed, while plain `set` / `set_with_ttl` do not check and write under `{namespace}:{interop_key}` | ✅ optional `readonly keyPrefix` (interop mode fails closed on hidden prefixes) |
 
 ### Optional capabilities — and which shipped backends implement them
 
