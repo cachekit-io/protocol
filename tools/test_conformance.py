@@ -242,6 +242,8 @@ def crlf(rel: str) -> Mutate:
 
 
 IOP3 = marker("IOP-3")
+# The spec's last line: a case that appends "\n<text>" puts <text> on line SPEC_END + 2.
+SPEC_END = (ROOT / SPEC).read_text(encoding="utf-8").count("\n")
 NBSP = chr(0xA0)  # a non-breaking space: text to CommonMark, never blank
 OK = "conformance: OK"
 STALE = f"{REPORT} is stale or missing"
@@ -252,7 +254,12 @@ CASES: list[Case] = [
     ("unmodified tree", lambda _: None, 0, OK),
     # --- every hard keyword in an indexed file carries an id ---
     ("id removed from beside a MUST", edit(SPEC, marker("IOP-19"), ""), 1, "this MUST has no id (the next free id is IOP-37)"),
-    ("new MUST NOT added without an id", append(SPEC, "\nReaders MUST NOT crash.\n"), 1, "this MUST NOT has no id"),
+    (
+        "new MUST NOT added without an id",
+        append(SPEC, "\nReaders MUST NOT crash.\n"),
+        1,
+        f"{SPEC}:{SPEC_END + 2}: this MUST NOT has no id",
+    ),
     ("MUST NOT split across a line break", append(SPEC, "\nReaders MUST\nNOT crash.\n"), 1, "this MUST NOT has no id"),
     ("MUST in a blockquote", append(SPEC, "\n> Readers MUST reject it.\n"), 1, "this MUST has no id"),
     # The id follows the closing `**`, so the check must read past it to find the marker.
@@ -1029,10 +1036,11 @@ CASES: list[Case] = [
         1,
         "a footnote definition",
     ),
-    # A footnote label holds no space and is never empty, and a definition opens its line: these lines are text.
+    # A footnote label holds no space and is never empty, and a definition opens its line, indented less than four
+    # spaces: these lines are text.
     (
         "footnote-like lines that are text",
-        append(SPEC, "\nA lone ` backtick\n[^a b]: one [^1]: two\n[^]: three, and readers MUST reject it ` here.\n"),
+        append(SPEC, "\nA lone ` backtick\n[^a b]: one [^1]: two\n    [^1]: three\n[^]: four, readers MUST reject it ` here.\n"),
         0,
         OK,
     ),
@@ -1051,8 +1059,8 @@ CASES: list[Case] = [
         "a link reference definition",
     ),
     (
-        "indented link reference definition with an escaped bracket",
-        append(SPEC, "\n  [a\\]`]: /u\nReaders MUST reject it `.\n"),
+        "link reference definition indented in a blockquote, with an escaped bracket",
+        append(SPEC, "\n>   [a\\]`]: /u\n> Readers MUST reject it `.\n"),
         1,
         "a link reference definition",
     ),
@@ -1465,6 +1473,15 @@ REPORT_CASES: list[tuple[str, Mutate, dict[str, list[str]], list[str]]] = [
         ),
         {},
         ["*Alert*: A reader **MUST** reject it."],
+    ),
+    (
+        "excerpt of a table keyword is its cell",
+        both(
+            append(SPEC, f"\n## Cell\n\n| a | b |\n| - | - |\n| x | A reader MUST{marker('IOP-37')} reject it |\n"),
+            new_requirement("IOP-37", "Cell"),
+        ),
+        {},
+        ["*Cell*: A reader **MUST** reject it |"],
     ),
     (
         "excerpt of a fenced keyword leaves out the fence lines",

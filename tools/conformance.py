@@ -574,8 +574,8 @@ def scan(text: str) -> Spec:
         # A keyword inside a block is reported, not skipped: if a block was misread, a keyword
         # the renderer shows still fails the check instead of vanishing.
         if block := next((b for b in masked.blocks if b.start <= start < b.end), None):
-            rid, problem = ("", "") if block.exempt else (None, IN_BLOCK[block.kind].format(line=block.line, exempt=EXEMPT))
-            keywords.append(Keyword(word, start, line, section, rid, problem))
+            problem = "" if block.exempt else IN_BLOCK[block.kind].format(line=block.line, exempt=EXEMPT)
+            keywords.append(Keyword(word, start, line, section, "" if block.exempt else None, problem))
             continue
         if masked.text[start] == " ":
             continue  # inline code or an inline comment
