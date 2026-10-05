@@ -512,7 +512,7 @@
           "tests": [
             "tools/wire-format-reference.py:_verify_vector"
           ],
-          "gap": "The bin twins' compressed_data is 1 to 76 bytes and then 303, so a writer that leaves bin8 too early (at 128, reading the length byte as signed) passes them all, and none needs bin32."
+          "gap": "The bin twins' compressed_data is 1, 2, 15, 18, 66, 76 and 303 bytes, so a writer whose bin8 limit is anywhere from 76 to 254 (127 if it treats the length as signed), or whose bin16 limit is anywhere from 303 to 65,534, passes them all, and none needs bin32."
         },
         "WIRE-2": {
           "section": "Byte Layout (canonical encoding)",
@@ -610,7 +610,7 @@
             "tools/test_wire_format_reference.py:check_reader_rejects",
             "tools/test_wire_format_reference.py:_check_allocation_probe"
           ],
-          "gap": "The accept vectors evidence none of the four steps; a verdict on the reject vectors cannot show the order, which only the allocation bound tests (WIRE-11), and each step carries its own limits (step 2: IOP-27; steps 4 and 5: WIRE-7, WIRE-12 and WIRE-14)."
+          "gap": "The accept vectors evidence none of the bounds. A verdict on the reject vectors misses a reader without the zero-length check whose LZ4 decoder refuses an empty block, as liblz4 does, and one without step 9 that zero-pads to original_size and fails the checksum instead; only a test that asserts the named error catches them (WIRE-16). No vector exercises step 2's typed decode (another arity, a checksum that is not 8 integers, a legacy element above 255), and none shows that the envelope's own bytes are pre-scanned (WIRE-8, WIRE-9). The order is WIRE-11's; steps 4 and 5 carry WIRE-7, WIRE-12, WIRE-13 and WIRE-14."
         },
         "WIRE-6": {
           "section": "Compressed-byte reproducibility (per-vector scoping)",
@@ -619,7 +619,10 @@
             "cachekit-py",
             "cachekit-ts"
           ],
-          "gap": "A rule for conformance tests: no vector can show that an SDK's test does not byte-compare a non-canonical writer's compressed bytes."
+          "tests": [
+            "tools/wire-format-reference.py:_verify_vector"
+          ],
+          "gap": "Both bound SDKs write through cachekit-core's lz4_flex, the canonical writer the rule exempts, so it has no subject in either; this repository's verifier is its one live judge, declaring the large_compressible pair's expected divergence (LZ4_ENCODE_DIVERGENT) instead of failing it."
         },
         "WIRE-7": {
           "section": "Security Limits",
@@ -636,7 +639,7 @@
           "tests": [
             "tools/test_wire_format_reference.py:check_reader_rejects"
           ],
-          "gap": "A verdict shows none of the three: a reader without the size cap rejects both cap vectors by the ratio bound, and one without the ratio bound still rejects reject_ratio_bomb, whose block is not valid LZ4, so only a test that asserts the named error does (WIRE-16). No vector reaches the compressed-size cap: only an envelope over 512 MiB gets past step 1, and step 3 cannot fire after it."
+          "gap": "A verdict shows none of the three: a reader without the size cap rejects both cap vectors by the ratio bound, and one without the ratio bound still rejects reject_ratio_bomb, whose block is not valid LZ4, so only a test that asserts the named error does (WIRE-16). No vector sits on the size cap, so a reader that also rejects an original_size of exactly 512 MiB passes them all. No vector reaches the compressed-size cap: compressed_data over 512 MiB needs an envelope over 512 MiB, which step 1 rejects first."
         },
         "WIRE-8": {
           "section": "Security Limits",
@@ -724,7 +727,7 @@
             "tools/test_wire_format_reference.py:check_reader_rejects",
             "tools/test_wire_format_reference.py:_check_allocation_probe"
           ],
-          "gap": "A verdict or an error cannot show the order. The allocation bound the spec requires on these two vectors (WIRE-17) can, but it misses a reader that allocates less than original_size: one that decompresses first with a growing decoder, holds a strict decoder's error until after the checks, or sizes its output from compressed_data or a constant."
+          "gap": "A verdict cannot show the order, and an error shows it only for a reader that decompresses first with a strict decoder and lets its error propagate. The allocation bound the spec requires on these two vectors (WIRE-17) misses a reader that allocates less than original_size: one that decompresses first with a growing decoder, holds a strict decoder's error until after the checks, or sizes its output from compressed_data, a constant, or original_size clamped below itself."
         },
         "WIRE-12": {
           "section": "Decompression Bomb Detection",
@@ -754,7 +757,7 @@
           "tests": [
             "tools/test_wire_format_reference.py:check_32_bit_ratio_readers"
           ],
-          "gap": "A pointer-width product is exact on a 64-bit host, so the vector fails a 32-bit product only on a 32-bit target (WIRE-15); and since it is also the file's only bin32 and multi-megabyte decode, a failure on it shows a 32-bit product only if the rejection reason is checked."
+          "gap": "A pointer-width product is exact on a 64-bit host, so the vector fails it only on a 32-bit target (WIRE-15); an explicit 32-bit multiply fails it on any host. Since it is also the file's only bin32 and multi-megabyte decode, a failure on it shows a 32-bit product only if the rejection reason is checked."
         },
         "WIRE-14": {
           "section": "Decompression Bomb Detection",
@@ -769,7 +772,7 @@
           "tests": [
             "tools/test_wire_format_reference.py:check_reader_rejects"
           ],
-          "gap": "A binary64 ratio, and a division that rounds up, give the product's verdict at every legal size, so no vector can fail them. reject_ratio_bomb's ratio is 1000.001, which even a float32 ratio rejects; no vector puts a one-byte excess on a compressed size over 32,768 B, where float32 rounds it away."
+          "gap": "A binary64 ratio, and a division that rounds up, give the product's verdict at every legal size, so no vector can fail them. A truncating division reads reject_ratio_bomb's 1,000,001 / 1,000 as 1000 but still rejects the vector on its invalid LZ4 block, so only a test that asserts the ratio error catches it (WIRE-16). reject_ratio_bomb's ratio is 1000.001, which even a float32 ratio rejects; no vector puts a one-byte excess on a compressed size of 16,778 B or more, where a ratio of float32 operands rounds it away (from 32,768 B if only the quotient is rounded)."
         },
         "WIRE-15": {
           "section": "Decompression Bomb Detection",
@@ -797,7 +800,7 @@
             "wire-format.json:reject_decompressed_length_mismatch",
             "wire-format.json:reject_checksum_mismatch"
           ],
-          "gap": "Which path an SDK's test drives each vector through, and what it asserts, is SDK test code no vector can check; sdk-feature-matrix.md's \"Test vectors in CI\" row records it per SDK."
+          "gap": "Which path an SDK's test drives each vector through, and what it asserts, is SDK test code no vector can check; sdk-feature-matrix.md's \"Wire format (ByteStorage)\" row and its footnote 16 record it per SDK."
         },
         "WIRE-17": {
           "section": "Reject vectors",
@@ -837,7 +840,7 @@
           "tests": [
             "tools/test_wire_format_reference.py:check_reader_rejects"
           ],
-          "gap": "No vector covers step 1, which needs an envelope over 512 MiB, or step 3, which cannot fire once step 1 has passed; an SDK test reaches step 1 by lowering the cap."
+          "gap": "No vector covers step 1, which needs an envelope over 512 MiB, or step 3, which cannot fire once step 1 has passed. The reference tool reaches step 1 by lowering its cap; for cachekit-py and cachekit-ts, whose step 1 runs in cachekit-core behind compile-time caps, only an envelope over 512 MiB reaches it."
         },
         "WIRE-20": {
           "section": "Datetime Extension Format",
@@ -847,7 +850,10 @@
         "WIRE-21": {
           "section": "SDK Storage Containers (auto mode)",
           "binds": "sdk",
-          "gap": "Each SDK's auto-mode container is its own: python-frame.json's CK frames are foreign only to cachekit-ts and cachekit-rs and carry cachekit-py's own parse rather than a refusal, and no vector holds a cachekit-ts or cachekit-rs container."
+          "vectors": [
+            "python-frame.json:ck_frame_fed_to_interop_reader"
+          ],
+          "gap": "Only a CK frame is pinned for refusal: ck_frame_fed_to_interop_reader pins the trailing-bytes refusal a plain-MessagePack reader (cachekit-rs, or cachekit-ts with compression off) owes it. No vector pins cachekit-py's refusal of a bare envelope (cachekit-ts's default container, the shape of every wire-format.json accept vector) or of plain MessagePack, and none can tell cachekit-ts's uncompressed container from cachekit-rs's: both are plain MessagePack."
         },
         "WIRE-22": {
           "section": "Python: CK v3 frame",
@@ -863,7 +869,7 @@
           "tests": [
             "tools/python-frame-reference.py:verify"
           ],
-          "gap": "Each check has one vector, away from its boundary: the short frame is 3 bytes, not 6, and the header-length check rejects it too; the version is 4, so a reader that rejects only versions above 3 passes; and the header overruns by 253 bytes, not 1."
+          "gap": "Each check has one vector, away from its boundary: the short frame is 3 bytes, not 6, and the header-length check rejects it too; the version is 4, so a reader that rejects only versions above 3 passes; and the header overruns by 253 bytes, not 1. The version and overrun vectors carry the header {} with no serializer name and an empty payload, so a reader that skips the version check, or slices an overrunning header to the 2 bytes present, still returns a miss through the serializer-name rule; only a test that asserts the frame parser's own error catches either."
         },
         "WIRE-23": {
           "section": "Python: CK v3 frame",
@@ -871,7 +877,11 @@
           "sdks": [
             "cachekit-py"
           ],
-          "gap": "No vector holds a forged frame for an encrypted cache, such as plaintext under a header that claims \"encrypted\": false, in python-frame.json or encryption.json."
+          "vectors": [
+            "python-frame.json:default_saas_write_msgpack_bytestorage",
+            "python-frame.json:default_saas_write_msgpack_bytestorage_bin"
+          ],
+          "gap": "The frames are pinned as plaintext reads, so a test plants one under an encrypted cache's key and asserts that the read fails closed, which no vector pins; none carries an explicit \"encrypted\": false, or an s or m naming another serializer."
         },
         "WIRE-24": {
           "section": "Python: CK v3 frame",
@@ -879,7 +889,11 @@
           "sdks": [
             "cachekit-py"
           ],
-          "gap": "No vector holds an entry that fails to authenticate as ciphertext under an encrypted cache's key, in python-frame.json or encryption.json."
+          "vectors": [
+            "python-frame.json:default_saas_write_msgpack_bytestorage",
+            "python-frame.json:default_saas_write_msgpack_bytestorage_bin"
+          ],
+          "gap": "The frames are pinned as plaintext reads, so a test supplies the encrypted configuration and asserts that the read fails closed; no vector frames ciphertext that fails under the cache's own key or AAD, such as another tenant's key or one the keyring lacks."
         }
       },
       "retired": {}
