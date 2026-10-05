@@ -106,7 +106,7 @@ EXEMPT = "<!-- not-a-requirement -->"
 # Why a keyword inside a block is an error, by the kind of block.
 IN_BLOCK = {
     "code fence": (
-        "sits inside the code fence opened at line {line}, which cannot carry an id: put {exempt} on the line before "
+        f"sits inside the code fence opened at line {{line}}, which cannot carry an id: put {EXEMPT} on the line before "
         "the fence if it states no requirement, or state it in prose"
     ),
     "indented code block": (
@@ -479,9 +479,9 @@ class Masked(NamedTuple):
     text: str  # the file with what a renderer hides blanked
     blocks: list[Block]  # its code blocks and comment blocks
     headings: list[tuple[int, str]]  # (offset, title) of each heading
-    at: list[int]  # the offset each line starts at, then one past the end of the file
+    at: list[int]  # the offset each line starts at, then len(text) + 1, where a line after the last would start
     # Per line, its leaf block and the column its text starts at past its containers; None for a line in no
-    # leaf (a blank line, or one that holds only container markers).
+    # leaf (a blank line outside a code or HTML block, or one that holds only container markers).
     leaf_of_line: list[tuple[Leaf, int] | None]
 
 
@@ -576,8 +576,10 @@ def scan(text: str) -> Spec:
         # A keyword inside a block is reported, not skipped: if a block was misread, a keyword
         # the renderer shows still fails the check instead of vanishing.
         if block := next((b for b in masked.blocks if b.start <= start < b.end), None):
-            problem = "" if block.exempt else IN_BLOCK[block.kind].format(line=block.line, exempt=EXEMPT)
-            keywords.append(Keyword(word, start, line, section, "" if block.exempt else None, problem))
+            if block.exempt:
+                keywords.append(Keyword(word, start, line, section, ""))
+                continue
+            keywords.append(Keyword(word, start, line, section, None, IN_BLOCK[block.kind].format(line=block.line)))
             continue
         if masked.text[start] == " ":
             continue  # inline code or an inline comment

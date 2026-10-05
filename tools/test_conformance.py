@@ -643,6 +643,12 @@ CASES: list[Case] = [
         "this MUST NOT has no id",
     ),
     (
+        "id between MUST and NOT across a line of non-breaking spaces",
+        append(SPEC, f"\nReaders MUST{marker('IOP-37')}\n{NBSP}\nNOT crash.\n"),
+        1,
+        "IOP-37 sits between MUST and NOT",
+    ),
+    (
         "literal > on a line between MUST and NOT",
         append(SPEC, f"\nReaders MUST\n    >\nNOT{marker('IOP-37')} crash.\n"),
         1,
