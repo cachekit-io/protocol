@@ -301,7 +301,12 @@ CASES: list[Case] = [
         1,
         "this MUST has no id",
     ),
-    ("MUST in an indented code block", append(SPEC, "\n    Readers MUST reject it.\n"), 1, "sits inside the indented code block"),
+    (
+        "MUST in an indented code block",
+        append(SPEC, "\n    Readers MUST reject it.\n"),
+        1,
+        "sits inside the indented code block",
+    ),
     (
         "stray backtick in a table row without leading pipes",
         append(SPEC, "\nh1 | h2 | h3\n--- | --- | ---\na ` b | Readers MUST reject it | `x`\n"),
@@ -546,6 +551,66 @@ CASES: list[Case] = [
         1,
         "this MUST has no id",
     ),
+    # MUST and NOT are one keyword only where GitHub shows them as one phrase. Where NOT starts
+    # another block, or a literal > parts the two, MUST stands alone and needs its own id, even
+    # when the id after NOT is indexed.
+    (
+        "MUST and NOT in two paragraphs",
+        both(
+            append(SPEC, f"\n## Phrase\n\nReaders MUST\n\nNOT{marker('IOP-37')} accept unauthenticated bytes.\n"),
+            new_requirement("IOP-37", "Phrase"),
+        ),
+        1,
+        "this MUST has no id",
+    ),
+    (
+        "MUST in a heading, NOT after it",
+        append(SPEC, f"\n### Readers MUST\nNOT{marker('IOP-37')} crash.\n"),
+        1,
+        "this MUST has no id",
+    ),
+    (
+        "NOT in a blockquote after MUST",
+        append(SPEC, f"\nReaders MUST\n> NOT{marker('IOP-37')} crash.\n"),
+        1,
+        "this MUST has no id",
+    ),
+    (
+        "MUST and NOT in two table rows",
+        append(SPEC, f"\n| a | b |\n| - | - |\n| Readers MUST\nNOT{marker('IOP-37')} crash | c |\n"),
+        1,
+        "this MUST has no id",
+    ),
+    (
+        "literal > between MUST and NOT",
+        append(SPEC, f"\nReaders MUST > NOT{marker('IOP-37')} crash.\n"),
+        1,
+        "this MUST has no id",
+    ),
+    (
+        "literal > ending MUST's line",
+        append(SPEC, f"\nReaders MUST >\nNOT{marker('IOP-37')} crash.\n"),
+        1,
+        "this MUST has no id",
+    ),
+    (
+        "literal > on an indented continuation line",
+        append(SPEC, f"\nReaders MUST\n    > NOT{marker('IOP-37')} crash.\n"),
+        1,
+        "this MUST has no id",
+    ),
+    ("MUST NOT across a lazy continuation line", append(SPEC, "\n> Readers MUST\nNOT crash.\n"), 1, "this MUST NOT has no id"),
+    ("MUST NOT across a setext heading's lines", append(SPEC, "\nReaders MUST\nNOT crash\n---\n"), 1, "this MUST NOT has no id"),
+    (
+        "id after MUST, with NOT opening the next paragraph",
+        both(
+            append(SPEC, f"\n## Phrase\n\nReaders MUST{marker('IOP-37')}\n\nNOT that one.\n"),
+            new_requirement("IOP-37", "Phrase"),
+            report,
+        ),
+        0,
+        OK,
+    ),
     # Pipe-led lines with no delimiter row are a paragraph, so this span runs from the first line
     # to the third and the keyword is inside it, as GitHub renders it.
     (
@@ -741,7 +806,12 @@ CASES: list[Case] = [
         "this MUST has no id",
     ),
     # A lazy continuation line cannot be an underline, so this quote paragraph runs on and its span hides MUST.
-    ("two-dash line continuing a quote paragraph", append(SPEC, "\n> A lone ` backtick\n--\nReaders MUST reject it ` here.\n"), 0, OK),
+    (
+        "two-dash line continuing a quote paragraph",
+        append(SPEC, "\n> A lone ` backtick\n--\nReaders MUST reject it ` here.\n"),
+        0,
+        OK,
+    ),
     # Only a list item that starts at 1 and holds text interrupts a paragraph; these lines continue it.
     ("ordered marker 2 inside a paragraph", append(SPEC, "\nA lone ` backtick\n2. Readers MUST reject it ` here.\n"), 0, OK),
     # Splitting there instead would pair the second line's own backticks around MUST and hide it.
@@ -794,7 +864,12 @@ CASES: list[Case] = [
     ),
     # Container rules: how far a line must be indented to stay in a list item or blockquote decides
     # whether it is prose there, prose outside, or an indented code block.
-    ("quote marker indented four spaces", append(SPEC, "\n> a\n>\n    > Readers MUST reject it.\n"), 1, "sits inside the indented code block"),
+    (
+        "quote marker indented four spaces",
+        append(SPEC, "\n> a\n>\n    > Readers MUST reject it.\n"),
+        1,
+        "sits inside the indented code block",
+    ),
     ("blockquote takes one space after its marker", append(SPEC, "\n>    Readers MUST reject it.\n"), 1, "this MUST has no id"),
     ("indented line continuing a paragraph", append(SPEC, "\nReaders reject it\n    MUST here.\n"), 1, "this MUST has no id"),
     (
@@ -803,10 +878,25 @@ CASES: list[Case] = [
         1,
         "this MUST has no id",
     ),
-    ("blank line ends an empty list item", append(SPEC, "\n-\n\n    Readers MUST reject it.\n"), 1, "sits inside the indented code block"),
+    (
+        "blank line ends an empty list item",
+        append(SPEC, "\n-\n\n    Readers MUST reject it.\n"),
+        1,
+        "sits inside the indented code block",
+    ),
     ("blank line inside a list item", append(SPEC, "\n- a\n\n    Readers MUST reject it.\n"), 1, "this MUST has no id"),
-    ("list item content after a three-space gap", append(SPEC, "\n-   a\n\n      Readers MUST reject it.\n"), 1, "this MUST has no id"),
-    ("list item opening with indented code", append(SPEC, "\n-      Readers MUST reject it.\n"), 1, "sits inside the indented code block"),
+    (
+        "list item content after a three-space gap",
+        append(SPEC, "\n-   a\n\n      Readers MUST reject it.\n"),
+        1,
+        "this MUST has no id",
+    ),
+    (
+        "list item opening with indented code",
+        append(SPEC, "\n-      Readers MUST reject it.\n"),
+        1,
+        "sits inside the indented code block",
+    ),
     ("bare quote marker ends a paragraph", append(SPEC, "\nA lone ` backtick\n>\nso ` MUST ` here\n"), 0, OK),
     # Interrupting blocks: each ends the paragraph, so the span pairs on the next line and hides MUST.
     ("thematic break ends a paragraph", append(SPEC, "\nA lone ` backtick\n***\nso ` MUST ` here\n"), 0, OK),
@@ -815,17 +905,42 @@ CASES: list[Case] = [
     ("tag line inside a paragraph", append(SPEC, "\nA lone ` backtick\n<span>\nReaders MUST reject it ` here.\n"), 0, OK),
     ("tag line opening an HTML block", append(SPEC, "\n<span>\n`MUST`\n</span>\n"), 1, "this MUST has no id"),
     # Two dashes under a paragraph line make a heading, not a one-column table, so the next lines are a paragraph.
-    ("two-dash underline is not a delimiter row", append(SPEC, "\nTitle\n--\nA lone ` backtick\nReaders MUST reject it ` here.\n"), 0, OK),
+    (
+        "two-dash underline is not a delimiter row",
+        append(SPEC, "\nTitle\n--\nA lone ` backtick\nReaders MUST reject it ` here.\n"),
+        0,
+        OK,
+    ),
     # A table takes the paragraph's last line as its header; the lines before it stay a paragraph.
-    ("table header row leaves its paragraph", append(SPEC, "\nReaders ` MUST reject it\n| b ` | c |\n| - | - |\n"), 1, "this MUST has no id"),
+    (
+        "table header row leaves its paragraph",
+        append(SPEC, "\nReaders ` MUST reject it\n| b ` | c |\n| - | - |\n"),
+        1,
+        "this MUST has no id",
+    ),
     ("trailing pipe on one table row only", append(SPEC, "\n| a ` | b\n| - | - |\n| MUST ` | c\n"), 1, "this MUST has no id"),
     # A delimiter row inside a blockquote the line opens cannot turn the paragraph before it into a table.
     ("delimiter row inside a new blockquote", append(SPEC, "\n| a ` | MUST ` |\n> | - | - |\n"), 0, OK),
     # A closing fence is indented at most 3 spaces and holds nothing but the fence.
-    ("fence closer indented four spaces", append(SPEC, "\n```text\ncode\n    ```\nMUST inside\n```\n"), 1, "sits inside the code fence opened at line"),
-    ("fence closer with an info string", append(SPEC, "\n```text\n``` inner\nMUST inside\n```\n"), 1, "sits inside the code fence opened at line"),
+    (
+        "fence closer indented four spaces",
+        append(SPEC, "\n```text\ncode\n    ```\nMUST inside\n```\n"),
+        1,
+        "sits inside the code fence opened at line",
+    ),
+    (
+        "fence closer with an info string",
+        append(SPEC, "\n```text\n``` inner\nMUST inside\n```\n"),
+        1,
+        "sits inside the code fence opened at line",
+    ),
     # An HTML block passes through as it stands, so a comment it leaves open hides the rest of the file.
-    ("comment left open in an HTML block", append(SPEC, "\n<div>\n<!-- note\n\nReaders MUST reject it.\n"), 1, "unclosed HTML comment"),
+    (
+        "comment left open in an HTML block",
+        append(SPEC, "\n<div>\n<!-- note\n\nReaders MUST reject it.\n"),
+        1,
+        "unclosed HTML comment",
+    ),
     ("tab in a spec file", append(SPEC, "\n\tReaders MUST reject it.\n"), 1, "a tab; indent with spaces"),
     # --- ids are never reused: next only grows ---
     (
@@ -853,7 +968,11 @@ CASES: list[Case] = [
     (
         "lead-in and item entries mapping the same vector",
         both(
-            append(SPEC, f"\n## Lead-in\n\nA reader MUST{marker('IOP-37')}:\n\n- reject NaN, and it MUST{marker('IOP-38')} say so.\n"),
+            append(
+                SPEC,
+                f"\n## Lead-in\n\nA reader MUST{marker('IOP-37')}:\n\n"
+                f"- reject NaN, and it MUST{marker('IOP-38')} say so.\n",
+            ),
             new_requirement("IOP-37", "Lead-in"),
             new_requirement("IOP-38", "Lead-in"),
             entry("IOP-37", vectors=["interop-mode.json:reject_nan"], gap=None),

@@ -26,7 +26,10 @@ Keywords are found the way GitHub renders them. The file is read into blocks by 
 parsing strategy as GitHub's cmark-gfm applies it: blockquotes and list items, lazy
 continuation lines, HTML blocks, and GFM tables. Inline code and inline comments are skipped
 within one paragraph, heading or table cell, so a code span may cross a line break but never
-a block or cell boundary. An HTML block is raw HTML, so only its comments are hidden. A
+a block or cell boundary. MUST NOT is one keyword only where both words sit in one paragraph
+or heading with nothing a reader sees between them, so an id after a NOT in another block, or
+past a literal >, never marks the MUST before it. An HTML block is raw HTML, so only its
+comments are hidden. A
 keyword inside a code block or an HTML comment block is an error, unless the block is a fence
 that opens at column 0, outside every container, with <!-- not-a-requirement --> on the line
 before it: if a block were misread, an error fails closed where skipping would hide text.
@@ -67,6 +70,7 @@ from __future__ import annotations
 import argparse
 import ast
 import hashlib
+from bisect import bisect_right
 import json
 import re
 import subprocess
@@ -86,7 +90,8 @@ FIELDS = {"section", "binds", "sdks", "vectors", "tests", "gap"}
 FILE_FIELDS = {"prefix", "next", "requirements", "retired"}
 
 # A hard keyword is a whole word (an underscore around it is emphasis, not a letter). MUST NOT
-# may be split by a line break, a blockquote marker, or emphasis closed after MUST.
+# may be split by a line break, a blockquote marker, or emphasis closed after MUST; scan() keeps
+# the two words together only where a renderer shows them as one phrase.
 KEYWORD = re.compile(r"(?<![A-Za-z0-9])MUST(?:(?:\*{1,3}|_{1,3})?[\s>]+NOT)?(?![A-Za-z0-9])")
 MARKER = re.compile(r'<sup id="([a-z0-9-]+)">([A-Z][A-Z0-9]*-([1-9][0-9]*))</sup>')
 EXEMPT = "<!-- not-a-requirement -->"
@@ -406,8 +411,9 @@ def title(leaf: Leaf, lines: list[str]) -> str:
     return re.sub(r"(?:^| +)#+ *$", "", text).strip(" ")
 
 
-def mask(text: str) -> tuple[str, list[Block], list[tuple[int, str]], frozenset[int]]:
-    """(text with what a renderer hides blanked, the code and comment blocks, (offset, title) of each heading, table lines).
+def mask(text: str) -> tuple[str, list[Block], list[tuple[int, str]], frozenset[int], list[tuple[int, int] | None]]:
+    """(text with what a renderer hides blanked, the code and comment blocks, (offset, title) of each heading, table
+    lines, and per line its (paragraph or heading number, column its text starts at), None for any other line).
 
     Blanked are code blocks, comment blocks, and inline code and comments. Blanking keeps every
     offset and line break, so a position in the masked text maps back to `text`.
@@ -420,9 +426,12 @@ def mask(text: str) -> tuple[str, list[Block], list[tuple[int, str]], frozenset[
     found: list[Block] = []
     headings: list[tuple[int, str]] = []
     rows: set[int] = set()
-    for leaf in layout(lines):
+    prose: list[tuple[int, int] | None] = [None] * len(lines)
+    for number, leaf in enumerate(layout(lines)):
         first, last = leaf.lines[0], leaf.lines[-1]
         if leaf.kind in ("paragraph", "heading"):
+            for i, start in zip(leaf.lines, leaf.starts):
+                prose[i] = (number, start)
             # A code span may cross a line break inside one paragraph or heading, never out of it.
             spans = leaf.lines[:-1] if leaf.kind == "heading" and len(leaf.lines) > 1 else leaf.lines
             for i, part in zip(spans, INLINE.sub(blank, "\n".join(lines[i] for i in spans)).split("\n")):
@@ -452,18 +461,40 @@ def mask(text: str) -> tuple[str, list[Block], list[tuple[int, str]], frozenset[
                 # A comment block: its last line is the first to hold -->.
                 end = at[last] + lines[last].index("-->") + 3
                 found.append(Block("HTML comment", at[first] + lines[first].index("<!--"), end, first + 1, False))
-    return "\n".join(masked), found, headings, frozenset(rows)
+    return "\n".join(masked), found, headings, frozenset(rows), prose
 
 
 def scan(text: str) -> Spec:
     """Every hard keyword in `text` (LF line endings), with the id beside it and its section."""
-    masked, regions, headings, rows = mask(text)
+    masked, regions, headings, rows, prose = mask(text)
+    line_starts = [0, *(i + 1 for i, c in enumerate(text) if c == "\n")]
+
+    def one_phrase(gap_start: int, gap_end: int) -> bool:
+        """Whether the text between MUST and a NOT after it renders as space, so the two read as one MUST NOT.
+
+        Both words must sit in one paragraph or heading, and a > between them must be one of the
+        container markers that open a continuation line; anywhere else a renderer shows it.
+        """
+        first = bisect_right(line_starts, gap_start) - 1
+        last = bisect_right(line_starts, gap_end) - 1
+        blocks = {prose[i][0] if prose[i] is not None else None for i in range(first, last + 1)}
+        if first != last and (None in blocks or len(blocks) > 1):
+            return False
+        for p in range(gap_start, gap_end):
+            if text[p] == ">":
+                line = bisect_right(line_starts, p) - 1
+                if line == first or p - line_starts[line] >= prose[line][1]:
+                    return False
+        return True
+
     markers = {m.start(): m for m in MARKER.finditer(masked)}
     used: set[int] = set()
     keywords: list[Keyword] = []
     for m in KEYWORD.finditer(text):
         start = m.start()
-        word = "MUST NOT" if m.group(0).endswith("NOT") else "MUST"
+        # MUST and NOT are one keyword only where a renderer shows them as one phrase; otherwise MUST stands alone.
+        end = m.end() if m.group(0).endswith("NOT") and one_phrase(start + 4, m.end() - 3) else start + 4
+        word = "MUST NOT" if end > start + 4 else "MUST"
         section = next((title for at, title in reversed(headings) if at < start), "")
         line = text.count("\n", 0, start) + 1
         # A keyword inside a block is reported, not skipped: if a block was misread, a keyword
@@ -492,7 +523,7 @@ def scan(text: str) -> Spec:
             continue
         if masked[start] == " ":
             continue  # inline code or an inline comment
-        pos = m.end()
+        pos = end
         if closer := CLOSER.match(text, pos):
             pos = closer.end()
         rid: str | None = None
@@ -505,7 +536,11 @@ def scan(text: str) -> Spec:
             rid = marker.group(2)
             if marker.group(1) != rid.lower():
                 problem = f'anchor id="{marker.group(1)}" does not match {rid} (it must be "{rid.lower()}")'
-            elif word == "MUST" and NOT_AFTER.match(text, marker.end()):
+            elif (
+                word == "MUST"
+                and (after := NOT_AFTER.match(text, marker.end()))
+                and one_phrase(marker.end(), after.end() - 3)
+            ):
                 problem = f"{rid} sits between MUST and NOT; it goes after NOT"
         elif text.startswith("<sup", pos):
             problem = 'malformed id marker (expected <sup id="iop-3">IOP-3</sup>)'

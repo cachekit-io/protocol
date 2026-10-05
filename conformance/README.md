@@ -32,8 +32,11 @@ same text in lowercase. When the keyword is bold, the id goes after the closing 
 | [`spec/interop-mode.md`](../spec/interop-mode.md) | `IOP` |
 | [`spec/wire-format.md`](../spec/wire-format.md) | `WIRE` |
 
-Each keyword occurrence is one requirement. A sentence with two keywords carries two ids. A
-keyword that introduces a list ("An SDK implementation of interop mode MUST:") carries one id,
+Each keyword occurrence is one requirement. A sentence with two keywords carries two ids.
+MUST NOT is one keyword, with its id after NOT, only where a reader sees one phrase: both
+words in one paragraph or heading, parted by nothing but spaces, a line break or emphasis. A
+MUST whose NOT starts another block, or sits past a literal `>`, stands alone and carries its
+own id. A keyword that introduces a list ("An SDK implementation of interop mode MUST:") carries one id,
 and a keyword inside one of the list's items carries its own; the lead-in's *gap* records only
 what no item's id owns. A capitalised keyword used as a word rather than as a requirement
 carries `<!-- not-a-requirement -->` in place of an id. Lowercase "must", SHOULD and MAY carry
