@@ -1084,7 +1084,7 @@
             "interop-mode.json",
             "interop-mode.json:small_int_as_bigint"
           ],
-          "gap": "The list's demands on segment validation, normalization and hashing share the holes still recorded on IOP-2, IOP-8, IOP-10, IOP-13 and IOP-16; no vector reaches the 32-bit length tier (untested by design); binding named and defaulted arguments to their positions is an SDK API property no vector observes; leaving auto mode unchanged is pinned only where an SDK vendors cache-keys.json or wire-format.json."
+          "gap": "The list's demands on segment validation, normalization, value encoding and hashing share the holes still recorded on IOP-2, IOP-8, IOP-10, IOP-13, IOP-16 and IOP-17; no vector reaches the 32-bit length tier (untested by design); binding named and defaulted arguments to their positions is an SDK API property no vector observes; leaving auto mode unchanged is pinned only where an SDK vendors cache-keys.json or wire-format.json."
         },
         "IOP-22": {
           "section": "SDK Implementation Requirements",
