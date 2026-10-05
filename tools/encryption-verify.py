@@ -87,7 +87,16 @@ FROZEN_DEFAULT_TENANT_VECTOR_NAMES = frozenset({"default_tenant_interop"})
 # keys a raw-bytes entry point must refuse. Names are frozen per table, and each table's rows have exactly its fields.
 FROZEN_MASTER_KEY_INPUT_VECTORS = {
     "accept_vectors": frozenset({"master_key_distinct_bytes"}),
-    "reject_vectors": frozenset({"master_key_odd_length", "master_key_non_hex_digit", "master_key_31_bytes", "master_key_16_bytes"}),
+    "reject_vectors": frozenset(
+        {
+            "master_key_odd_65_digits",
+            "master_key_odd_63_digits",
+            "master_key_non_hex_digit",
+            "master_key_trailing_non_hex",
+            "master_key_31_bytes",
+            "master_key_16_bytes",
+        }
+    ),
     "raw_reject_vectors": frozenset({"raw_key_31_bytes", "raw_key_33_bytes", "raw_key_ascii_hex_string"}),
 }
 MASTER_KEY_INPUT_FIELDS = {
@@ -349,13 +358,18 @@ def vector_tables(node: object, path: str = "") -> Iterator[str]:
 
 
 # Plausible wrong hex and raw-bytes entry points, one per mistake a master_key_input note names. Each returns the key
-# bytes it would use, or None for a refusal, and must misjudge every row it lists. A decoding mistake is paired with the
-# conformant rule "32 bytes or more", so its row must catch the mistake itself, not a length check that happens to.
+# bytes it would use, or None for a refusal, and must misjudge every row it lists. A decoding mistake sits behind a
+# conformant length rule, so its row must catch the mistake itself, not a length check that happens to; where only
+# one of the two rules lets the mistake through, the entry point uses that one.
 HEX_DIGITS = frozenset(string.hexdigits)
 
 
 def at_least_32(key: bytes | None) -> bytes | None:
     return key if key is not None and len(key) >= KEY_BYTES else None
+
+
+def exactly_32(key: bytes | None) -> bytes | None:
+    return key if key is not None and len(key) == KEY_BYTES else None
 
 
 def buffer_from_hex(text: str) -> bytes:
@@ -407,16 +421,19 @@ WRONG_HEX_ENTRY_POINTS: dict[str, tuple[Callable[[str], bytes | None], tuple[str
         ("master_key_distinct_bytes",),
     ),
     "a letter read as ord(c) - ord('0')": (lambda t: at_least_32(digits_only_decoder(t)), ("master_key_distinct_bytes",)),
-    "an odd last digit dropped (Node's Buffer.from)": (lambda t: at_least_32(buffer_from_hex(t)), ("master_key_odd_length",)),
-    "an odd string padded with a leading 0": (
-        lambda t: at_least_32(bytes.fromhex(t if len(t) % 2 == 0 else "0" + t)),
-        ("master_key_odd_length",),
+    "Node's Buffer.from(key, 'hex'), then a check that the key is 32 bytes": (
+        lambda t: exactly_32(buffer_from_hex(t)),
+        ("master_key_odd_65_digits", "master_key_trailing_non_hex"),
+    ),
+    "an odd string padded with a leading 0, then a check that the key is exactly 32 bytes": (
+        lambda t: exactly_32(bytes.fromhex(t if len(t) % 2 == 0 else "0" + t)),
+        ("master_key_odd_63_digits",),
     ),
     "a character that is not a hex digit read as 0": (
-        lambda t: at_least_32(bytes.fromhex("".join(c if c in HEX_DIGITS else "0" for c in t))),
+        lambda t: exactly_32(bytes.fromhex("".join(c if c in HEX_DIGITS else "0" for c in t))),
         ("master_key_non_hex_digit",),
     ),
-    "decoding stops at a character that is not a hex digit, and only the string's length is checked": (
+    "Node's Buffer.from(key, 'hex'), with only the string's length checked": (
         lambda t: buffer_from_hex(t) if len(t) == 2 * KEY_BYTES else None,
         ("master_key_non_hex_digit",),
     ),

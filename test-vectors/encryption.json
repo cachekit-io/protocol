@@ -155,24 +155,34 @@
     ],
     "reject_vectors": [
       {
-        "name": "master_key_odd_length",
+        "name": "master_key_odd_65_digits",
         "master_key_hex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f0",
-        "note": "The accept row's 64 characters followed by a 0: 65 characters, so not hex. A decoder that drops the odd last digit (as Node's Buffer.from does) reads the accept row's key, and one that pads the string with a leading 0 reads 33 bytes, so it accepts the row unless it checks for an odd length. An entry point that requires exactly 64 characters refuses it for its length."
+        "note": "The accept row's 64 digits followed by 0: 65 characters, so not hex. A decoder that drops the odd last digit, as Node's Buffer.from does, reads the accept row's key, so it accepts the string unless it checks for an odd length. An entry point that requires exactly 64 characters refuses it for its length."
+      },
+      {
+        "name": "master_key_odd_63_digits",
+        "master_key_hex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1",
+        "note": "The accept row's first 63 digits, so not hex. A decoder that pads an odd string with a leading 0 reads 32 bytes, so it accepts the string even behind a check that the key is exactly 32 bytes. An entry point that requires exactly 64 characters refuses it for its length."
       },
       {
         "name": "master_key_non_hex_digit",
         "master_key_hex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1g",
-        "note": "The accept row's 64 characters with the last replaced by g. A decoder that reads a character that is not a hex digit as 0 accepts it as 32 bytes. One that stops at that character (as Node's Buffer.from does) accepts the 31 bytes before it when only the string's length is checked, or when no length is checked behind a pattern anchored only at the start (re.match, or /^[0-9a-f]+/ without $), which the last character slips past."
+        "note": "The accept row's 64 digits with the last replaced by g. A decoder that reads a character that is not a hex digit as 0 accepts it as 32 bytes. One that stops at that character, as Node's Buffer.from does, keeps the 31 bytes before it, and accepts them when only the string's length is checked, or behind a pattern anchored only at the start (re.match, or /^[0-9a-f]+/ without $) with no length check: the g comes last, so such a pattern passes it."
+      },
+      {
+        "name": "master_key_trailing_non_hex",
+        "master_key_hex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1fgg",
+        "note": "The accept row's 64 digits followed by gg: 66 characters. A decoder that stops at the first pair that is not hex, as Node's Buffer.from does, reads the accept row's key and accepts it behind either length rule: the shape of Buffer.from(key, \"hex\") followed by key.length === 32."
       },
       {
         "name": "master_key_31_bytes",
         "master_key_hex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e",
-        "note": "The accept row's first 31 bytes (62 characters). An entry point with no length check, one that accepts the 16 bytes HKDF itself needs, or one that pads a short key to 32 bytes accepts it."
+        "note": "The accept row's first 31 bytes (62 characters). An entry point with no length check, one that accepts 31 bytes (off by one) or 16 (the HKDF floor encryption.md once listed as the minimum), or one that pads a short key to 32 bytes accepts it."
       },
       {
         "name": "master_key_16_bytes",
         "master_key_hex": "000102030405060708090a0b0c0d0e0f",
-        "note": "The accept row's first 16 bytes (32 characters). Besides the mistakes the 31-byte row catches, a validator that admits AES key sizes (16, 24 or 32 bytes) accepts it while refusing 31 bytes."
+        "note": "The accept row's first 16 bytes (32 characters). Besides the mistakes the 31-byte row catches, other than off by one, a validator that admits AES key sizes (16, 24 or 32 bytes) accepts it while refusing 31 bytes."
       }
     ],
     "raw_reject_vectors": [

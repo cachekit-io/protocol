@@ -165,14 +165,17 @@ STDLIB_CASES: dict[str, Callable[[dict], None]] = {
     "raw_key_hex in uppercase": lambda d: mk(d, "raw_key_33_bytes").__setitem__("raw_key_hex", (D + b"\x20").hex().upper()),
     "row note blank": lambda d: mk(d, "master_key_16_bytes").__setitem__("note", " "),
     "unknown field on a row": lambda d: mk(d, "master_key_16_bytes").__setitem__("reject", True),
-    "frozen master_key_input row renamed": lambda d: mk(d, "raw_key_31_bytes").__setitem__("name", "renamed"),
+    # Deleted, not renamed: a renamed row is also a row no wrong entry point lists, which the next case's guard catches.
+    "frozen master_key_input row deleted": lambda d: d["master_key_input"]["raw_reject_vectors"].remove(mk(d, "raw_key_31_bytes")),
     "row added with no wrong entry point to show its mistake": lambda d: d["master_key_input"]["reject_vectors"].append(
         {"name": "master_key_20_bytes", "master_key_hex": D.hex()[:40], "note": "The accept row's first 20 bytes."}
     ),
     # Each row edited so that a mistake its note names no longer misjudges it; only the wrong-entry-point check
     # rejects these.
-    "odd-length row also short": set_key("master_key_odd_length", D.hex()[:63]),
+    "65-digit row cut to 63 digits": set_key("master_key_odd_65_digits", D.hex()[:63]),
+    "63-digit row cut to 61 digits": set_key("master_key_odd_63_digits", D.hex()[:61]),
     "non-hex row also short": set_key("master_key_non_hex_digit", D.hex()[:61] + "g"),
+    "trailing non-hex pair moved inside the first 32 bytes": set_key("master_key_trailing_non_hex", D.hex()[:62] + "gg"),
     "non-hex digit first, where a start-anchored pattern sees it": set_key("master_key_non_hex_digit", "g" + D.hex()[1:]),
     "31-byte row cut to 30 bytes": set_key("master_key_31_bytes", D.hex()[:60]),
     "16-byte row grown to 20 bytes": set_key("master_key_16_bytes", D.hex()[:40]),
