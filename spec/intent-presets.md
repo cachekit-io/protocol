@@ -4,7 +4,7 @@
 
 # Intent Presets
 
-**The canonical contract behind `minimal` / `production` / `secure` / `io` — what a preset name MUST configure, in every SDK.**
+**The canonical contract behind `minimal` / `production` / `secure` / `io` — what a preset name MUST<!-- not-a-requirement --> configure, in every SDK.**
 
 > **Status**: SPECIFIED (protocol 1.x) — normative. Specified under LAB-514 from the
 > LAB-274 parity audit and the code-verified divergence table in the
@@ -50,7 +50,7 @@ semantics in every SDK. Four names are canonical: **`minimal`**, **`production`*
 posture, the integrity posture, the reliability floor, how encryption is activated and
 how its key is supplied, and where `io` takes its credentials.
 
-The key words MUST, MUST NOT, SHOULD, SHOULD NOT and MAY are used as in RFC 2119.
+The key words MUST<!-- not-a-requirement -->, MUST NOT<!-- not-a-requirement -->, SHOULD, SHOULD NOT and MAY are used as in RFC 2119.
 
 This specification does **not** govern:
 
@@ -83,11 +83,11 @@ The sections below give the normative rule and the rationale for each column.
 
 ## Default TTL
 
-1. Every preset **MUST** apply a finite default TTL when the caller supplies none:
+1. Every preset **MUST**<sup id="pre-1">PRE-1</sup> apply a finite default TTL when the caller supplies none:
    `minimal` **300 s**, `production` **600 s**, `secure` **600 s**, `io` **3 600 s**.
-2. An explicit TTL (per call, per decorator, per builder) **MUST** override the preset
+2. An explicit TTL (per call, per decorator, per builder) **MUST**<sup id="pre-2">PRE-2</sup> override the preset
    default.
-3. An SDK **MUST NOT** offer a process-wide default-TTL override (an environment
+3. An SDK **MUST NOT**<sup id="pre-3">PRE-3</sup> offer a process-wide default-TTL override (an environment
    variable or equivalent global switch). The only overrides on the default TTL are rule
    1 (the preset default) and rule 2 (an explicit per-call/decorator/builder TTL). A
    process-wide override is optional in name only — an SDK that reads it in one
@@ -95,9 +95,9 @@ The sections below give the normative rule and the rationale for each column.
    namespace differently, which is exactly the divergence this specification exists to
    close. `CACHEKIT_DEFAULT_TTL` is reserved: no SDK may repurpose that name for a
    different meaning.
-4. "Never expire" **MUST** be an explicit opt-in (spelling is SDK-local). It **MUST NOT**
+4. "Never expire" **MUST**<sup id="pre-4">PRE-4</sup> be an explicit opt-in (spelling is SDK-local). It **MUST NOT**<sup id="pre-5">PRE-5</sup>
    be a preset default.
-5. An SDK that changes a shipped default to conform **MUST** announce it in its changelog
+5. An SDK that changes a shipped default to conform **MUST**<sup id="pre-6">PRE-6</sup> announce it in its changelog
    and **SHOULD** emit a one-time deprecation warning for one minor release before the
    change takes effect.
 
@@ -112,16 +112,16 @@ the same freshness window everywhere; through `cachekit` 0.19.0 a Python
 
 ## L1 Posture
 
-1. `minimal`, `production` and `io` **MUST** enable L1 by default.
-2. `minimal` **MUST NOT** enable stale-while-revalidate or cross-process invalidation by
+1. `minimal`, `production` and `io` **MUST**<sup id="pre-7">PRE-7</sup> enable L1 by default.
+2. `minimal` **MUST NOT**<sup id="pre-8">PRE-8</sup> enable stale-while-revalidate or cross-process invalidation by
    default. `production` and `io` **SHOULD** enable both where the backend supports
    invalidation. **SWR** here means serving an entry after its freshness window has
    elapsed but before a refresh completes — the entry is stale, not phantom, and the
    refresh mechanism (background refresh, request-collapsed refetch, or a bounded grace
    window past TTL) is SDK-local; only the default-on behaviour for `production`/`io` is
    normative.
-3. `secure` **MUST** enable L1 by default and **MUST** hold only ciphertext in it. An SDK
-   **MUST NOT** place plaintext in any cache layer for the encrypted preset. This ratifies
+3. `secure` **MUST**<sup id="pre-9">PRE-9</sup> enable L1 by default and **MUST**<sup id="pre-10">PRE-10</sup> hold only ciphertext in it. An SDK
+   **MUST NOT**<sup id="pre-11">PRE-11</sup> place plaintext in any cache layer for the encrypted preset. This ratifies
    the 2025-11-13 cachekit-py decision ("L1 stores encrypted bytes") cross-SDK; Rust's
    `SecureCache` and TypeScript already comply.
 
@@ -140,14 +140,14 @@ only at read time, on the client) and removes the incentive to trade security fo
 
 Integrity checksums (xxHash3-64 in the [ByteStorage envelope](wire-format.md)) are a
 property of the SDK's auto-mode storage container, which is SDK-internal (protocol#11).
-This specification therefore fixes **no MUST** on integrity:
+This specification therefore fixes **no MUST**<!-- not-a-requirement --> on integrity:
 
 1. Where the container carries an integrity check, `production`, `secure` and `io`
    **SHOULD** enable it and `minimal` **MAY** disable it.
 2. On `secure`, AES-GCM authentication already detects tampering; the checksum is
    redundant and **MAY** be disabled (forcing it on, as cachekit-py does, is conformant).
 3. An SDK whose container has no checksum — cachekit-rs stores plain MessagePack — is
-   conformant; its documentation **MUST** say so, and the
+   conformant; its documentation **MUST**<sup id="pre-12">PRE-12</sup> say so, and the
    [feature matrix](../sdk-feature-matrix.md#intent-preset-semantics-parity-not-presence)
    records the per-SDK reality.
 
@@ -155,11 +155,11 @@ This specification therefore fixes **no MUST** on integrity:
 
 ## Reliability Floor
 
-1. `production`, `secure` and `io` **MUST** enable the SDK's reliability stack by default —
+1. `production`, `secure` and `io` **MUST**<sup id="pre-13">PRE-13</sup> enable the SDK's reliability stack by default —
    whatever the SDK ships of retry, circuit breaker, backpressure / timeouts and graceful
    degradation. The stack's *composition* is SDK-local; its *default-on* status is not.
 2. `minimal` **MAY** run with the reliability stack off.
-3. Every preset's documentation **MUST** state what happens when the backend is
+3. Every preset's documentation **MUST**<sup id="pre-14">PRE-14</sup> state what happens when the backend is
    unreachable — whether the error propagates to the caller or the wrapped function runs
    uncached. The behaviour is the thing a user picks a preset to know; it is documented,
    never inferred.
@@ -185,7 +185,7 @@ recorded as such in the matrix.
    accessor `secure_cache()` and removed `::encrypted`, so it is a superseded spelling,
    not a second one.
 4. No SDK **MAY** introduce a further name or alias for this preset. In particular Python
-   and TypeScript **MUST NOT** add `encrypted` aliases "for parity" — that creates a third
+   and TypeScript **MUST NOT**<sup id="pre-15">PRE-15</sup> add `encrypted` aliases "for parity" — that creates a third
    spelling, not a second.
 
 ---
@@ -195,29 +195,29 @@ recorded as such in the matrix.
 [encryption.md → Master Key](encryption.md#master-key) is normative for the key itself
 (hex-encoded, `CACHEKIT_MASTER_KEY`). This section fixes how the **preset** takes it.
 
-1. The `secure` preset **MUST** accept the master key as a **hex string** and **MUST**
-   derive the key bytes as `hex_decode(string)`. The same string **MUST** yield the same
+1. The `secure` preset **MUST**<sup id="pre-16">PRE-16</sup> accept the master key as a **hex string** and **MUST**<sup id="pre-17">PRE-17</sup>
+   derive the key bytes as `hex_decode(string)`. The same string **MUST**<sup id="pre-18">PRE-18</sup> yield the same
    key bytes in every SDK.
-2. When no key argument is supplied, `secure` **MUST** fall back to `CACHEKIT_MASTER_KEY`.
-   When neither is present it **MUST** fail at construction (raise / `Err` / throw). It
-   **MUST NOT** fall back to plaintext.
-3. Length: an SDK **MUST** accept a key of exactly **32 bytes (64 hex characters)** and
-   **MUST** reject anything shorter. It **MAY** accept longer keys. Because TypeScript
+2. When no key argument is supplied, `secure` **MUST**<sup id="pre-19">PRE-19</sup> fall back to `CACHEKIT_MASTER_KEY`.
+   When neither is present it **MUST**<sup id="pre-20">PRE-20</sup> fail at construction (raise / `Err` / throw). It
+   **MUST NOT**<sup id="pre-21">PRE-21</sup> fall back to plaintext.
+3. Length: an SDK **MUST**<sup id="pre-22">PRE-22</sup> accept a key of exactly **32 bytes (64 hex characters)** and
+   **MUST**<sup id="pre-23">PRE-23</sup> reject anything shorter. It **MAY** accept longer keys. Because TypeScript
    accepts exactly 32 bytes while Python and Rust accept ≥ 32, portability across SDKs is
-   guaranteed **only at exactly 32 bytes** — documentation **MUST** recommend exactly 32.
+   guaranteed **only at exactly 32 bytes** — documentation **MUST**<sup id="pre-24">PRE-24</sup> recommend exactly 32.
 4. An SDK **MAY** additionally accept raw key bytes (the Rust idiom) through a
-   *distinctly named* parameter or method. The hex form **MUST** be available on the
-   preset itself, not only on a lower-level builder. A raw-bytes entry point **MUST**
+   *distinctly named* parameter or method. The hex form **MUST**<sup id="pre-25">PRE-25</sup> be available on the
+   preset itself, not only on a lower-level builder. A raw-bytes entry point **MUST**<sup id="pre-26">PRE-26</sup>
    require **exactly 32 bytes** and reject anything else — the same 64-ASCII-character
    hex string that legitimately passes the ≥ 32-byte check on the hex path derives a
    different, silently-wrong key on a raw-bytes path that only checks length.
 5. The master key alone does not determine the key bytes actually used: derivation is
    domain-separated by `tenant_id` ([encryption.md → Tenant Key
-   Derivation](encryption.md#tenant-key-derivation)). The `secure` preset **MUST**
+   Derivation](encryption.md#tenant-key-derivation)). The `secure` preset **MUST**<sup id="pre-27">PRE-27</sup>
    default `tenant_id` to the literal string `"default"` when the caller supplies none,
-   and **MUST** use that identical resolved value for both HKDF derivation and AAD
+   and **MUST**<sup id="pre-28">PRE-28</sup> use that identical resolved value for both HKDF derivation and AAD
    construction ([encryption.md → AAD](encryption.md#additional-authenticated-data-aad)).
-   Two SDKs pointed at the same key and the same default `tenant_id` **MUST** derive the
+   Two SDKs pointed at the same key and the same default `tenant_id` **MUST**<sup id="pre-29">PRE-29</sup> derive the
    same key bytes and produce mutually decryptable ciphertext; an SDK that resolves a
    different implicit `tenant_id` (a deployment UUID, a namespace, an empty string) or
    that lets HKDF and AAD diverge on the resolved value breaks interop silently — not as
@@ -247,14 +247,14 @@ only entry point that did not, and from `cachekit-rs` 0.8.0 it takes hex too.
 
 **`CACHEKIT_MASTER_KEY` is a key *source*, not an activation *switch*.**
 
-1. Encryption **MUST** be activated only by explicit intent: choosing the `secure`
+1. Encryption **MUST**<sup id="pre-30">PRE-30</sup> be activated only by explicit intent: choosing the `secure`
    preset, or passing an explicit encryption option / builder call on another preset
    (`encryption=True`, `.encryption(...)`, `{ encryption: … }`). An explicit encryption
-   option **MUST** cause every operation on the constructed client to encrypt — an SDK
-   **MUST NOT** accept the option, report success, and leave any read or write path
+   option **MUST**<sup id="pre-31">PRE-31</sup> cause every operation on the constructed client to encrypt — an SDK
+   **MUST NOT**<sup id="pre-32">PRE-32</sup> accept the option, report success, and leave any read or write path
    unencrypted (including a build where the encryption capability is compiled out); an
-   unsupported combination **MUST** be rejected at construction, never silently ignored.
-2. The presence of `CACHEKIT_MASTER_KEY` **MUST NOT** change the encryption state of
+   unsupported combination **MUST**<sup id="pre-33">PRE-33</sup> be rejected at construction, never silently ignored.
+2. The presence of `CACHEKIT_MASTER_KEY` **MUST NOT**<sup id="pre-34">PRE-34</sup> change the encryption state of
    `minimal`, `production` or `io` — **no constructor is exempt**, including an
    explicit *configure-everything-from-environment* constructor (e.g.
    `CacheKit::from_env()`). Such a constructor **MAY** source the master key from the
@@ -262,7 +262,7 @@ only entry point that did not, and from `cachekit-rs` 0.8.0 it takes hex too.
    encryption option), but with no portable activation variable (rationale 4, below) and
    no argument list to carry an explicit spelling, a zero-argument env constructor has
    **no path to activate encryption on its own** — it can only supply a key that a
-   subsequent explicit call consumes. It **MUST NOT** infer encryption state from the
+   subsequent explicit call consumes. It **MUST NOT**<sup id="pre-35">PRE-35</sup> infer encryption state from the
    key's mere presence any more than any other constructor does. `CACHEKIT_MASTER_KEY`'s
    only roles are:
    - the key fallback for `secure` ([above](#master-key-input));
@@ -273,7 +273,7 @@ only entry point that did not, and from `cachekit-rs` 0.8.0 it takes hex too.
      This is a read-side obligation, not an activation path — it does not put the
      client in an encrypting state and does not satisfy rule 1's "explicit intent" for
      new writes.
-3. An explicit opt-out (`encryption=False` or equivalent) **MUST** be honoured even when
+3. An explicit opt-out (`encryption=False` or equivalent) **MUST**<sup id="pre-36">PRE-36</sup> be honoured even when
    a key is present.
 
 **Rationale (security).**
@@ -313,23 +313,23 @@ transparently decrypts stale ciphertext left behind after encryption is turned o
 (**legacy-decrypt**) through a separate path — the encryption wrapper resolves
 `CACHEKIT_MASTER_KEY` itself when the handler holds no key. Rule 2's constructor list
 above governs *activation*, not this read-side role, and removing auto-activation
-**MUST NOT** remove the ability to decrypt what a still-encrypting peer already wrote
+**MUST NOT**<sup id="pre-37">PRE-37</sup> remove the ability to decrypt what a still-encrypting peer already wrote
 into a CK-framed (cachekit-py auto-mode) cache. An interop cache never had that ability
 on a non-encrypting client (step 3's `encryption=False` branch). For one transitional
 minor release (`cachekit` 0.20.0) Python:
 
-1. **MUST** keep decrypting existing ciphertext on the legacy-decrypt path.
-2. **MUST** keep the auto-*activation* of new writes, but **MUST** emit a
+1. **MUST**<sup id="pre-38">PRE-38</sup> keep decrypting existing ciphertext on the legacy-decrypt path.
+2. **MUST**<sup id="pre-39">PRE-39</sup> keep the auto-*activation* of new writes, but **MUST**<sup id="pre-40">PRE-40</sup> emit a
    one-time warning via `logger.warning` (not `DeprecationWarning` alone — Python
    silences `DeprecationWarning` by default outside `__main__`, so on every
    uvicorn/gunicorn/celery deployment the notice would otherwise never surface) naming
    the explicit spellings (`@cache.secure(...)` or `encryption=True`).
-3. The following release (`cachekit` 0.21.0) **MUST** remove auto-*activation* of new writes. The gate tests
+3. The following release (`cachekit` 0.21.0) **MUST**<sup id="pre-41">PRE-41</sup> remove auto-*activation* of new writes. The gate tests
    only inputs known at construction — never "does legacy-decrypt apply", which is a
    property of per-entry backend state discovered on read, not of construction inputs,
    and so cannot gate construction without leaving a branch undefined:
    - `encryption=True` (or `@cache.secure(...)`) → construct encrypting.
-   - `encryption=False` → construct **not** encrypting new writes, and **MUST** still
+   - `encryption=False` → construct **not** encrypting new writes, and **MUST**<sup id="pre-42">PRE-42</sup> still
      retain legacy-decrypt from `CACHEKIT_MASTER_KEY` if present — the read-side role
      rule 2 names above, unaffected by this branch. That obligation holds for
      cachekit-py's auto-mode caches, whose [CK v3 frame](wire-format.md#python-ck-v3-frame)
@@ -345,9 +345,9 @@ minor release (`cachekit` 0.20.0) Python:
      is cachekit-py's
      [Turning Encryption Off in an Interop Cache](https://github.com/cachekit-io/cachekit-py/blob/main/docs/features/zero-knowledge-encryption.md#turning-encryption-off-in-an-interop-cache).
    - `CACHEKIT_MASTER_KEY` present with **neither** an explicit `encryption=` nor
-     `@cache.secure(...)` → construction **MUST** fail, naming both explicit spellings.
+     `@cache.secure(...)` → construction **MUST**<sup id="pre-43">PRE-43</sup> fail, naming both explicit spellings.
      Presence alone is no longer read as intent to activate, and a variable the
-     deployment set for encryption **MUST NOT** be silently interpreted as "don't
+     deployment set for encryption **MUST NOT**<sup id="pre-44">PRE-44</sup> be silently interpreted as "don't
      encrypt" either — ambiguous intent is an error, not a default.
 
    Every branch is decidable at construction; none strands the legacy-decrypt migration
@@ -364,10 +364,10 @@ The rejected alternatives are in [Design Decisions](#design-decisions).
 
 ## `io` Credentials
 
-1. `io` **MUST** accept the API key as an explicit argument **and** fall back to
+1. `io` **MUST**<sup id="pre-45">PRE-45</sup> accept the API key as an explicit argument **and** fall back to
    `CACHEKIT_API_KEY` when no argument is given. An explicit argument wins.
-2. When neither is present, `io` **MUST** fail at construction with a configuration error.
-3. `io` **MUST NOT** read `CACHEKIT_MASTER_KEY` to activate encryption
+2. When neither is present, `io` **MUST**<sup id="pre-46">PRE-46</sup> fail at construction with a configuration error.
+3. `io` **MUST NOT**<sup id="pre-47">PRE-47</sup> read `CACHEKIT_MASTER_KEY` to activate encryption
    ([above](#encryption-activation)); it **MAY** accept an explicit encryption option.
 
 **Rationale.** Environment-only forbids two keys in one process (multi-tenant services,
@@ -382,25 +382,25 @@ call.
 
 Across all presets:
 
-1. An explicit argument **MUST** override the preset default.
-2. An argument the preset does not support **MUST** be rejected with a configuration
+1. An explicit argument **MUST**<sup id="pre-48">PRE-48</sup> override the preset default.
+2. An argument the preset does not support **MUST**<sup id="pre-49">PRE-49</sup> be rejected with a configuration
    error — never silently dropped. (cachekit-py's `@cache.io(backend=…)` raises
    `ConfigurationError` from `cachekit` 0.20.0; through 0.19.0 it discarded `backend=`.)
-3. A missing master key (`secure`) or API key (`io`) **MUST** fail at construction.
+3. A missing master key (`secure`) or API key (`io`) **MUST**<sup id="pre-50">PRE-50</sup> fail at construction.
    Other misconfiguration **SHOULD** surface at construction rather than on first use.
 4. In a language without optional arguments, the environment fallback of
    [Master Key Input](#master-key-input) rule 2 or [`io` Credentials](#io-credentials)
    rule 1 **MAY** be a companion constructor that takes no key argument (Rust:
    `CacheKit::secure_from_env`, `CacheKit::io_from_env`). It builds the same preset and is
    not a further name under [Encrypted Preset Name](#encrypted-preset-name) rule 4. It
-   **MUST** read that preset's environment configuration:
+   **MUST**<sup id="pre-51">PRE-51</sup> read that preset's environment configuration:
    - for `secure`, `CACHEKIT_MASTER_KEY` and `CACHEKIT_PREVIOUS_MASTER_KEYS`
      ([encryption.md → Key Rotation](encryption.md#key-rotation-keyring)); if it does not
-     support previous keys, it **MUST** fail at construction when that variable is set,
+     support previous keys, it **MUST**<sup id="pre-52">PRE-52</sup> fail at construction when that variable is set,
      never ignore it (rule 2);
    - for `io`, `CACHEKIT_API_KEY` only.
 
-   It **MUST NOT** read a variable that changes encryption activation
+   It **MUST NOT**<sup id="pre-53">PRE-53</sup> read a variable that changes encryption activation
    ([Encryption Activation](#encryption-activation)).
 
 ---
@@ -408,7 +408,7 @@ Across all presets:
 ## SDK-Local Presets
 
 An SDK **MAY** ship presets beyond the four canonical names (cachekit-py: `.dev`, `.test`,
-`.local`). They **MUST NOT** reuse a canonical name with different semantics, **MUST** be
+`.local`). They **MUST NOT**<sup id="pre-54">PRE-54</sup> reuse a canonical name with different semantics, **MUST**<sup id="pre-55">PRE-55</sup> be
 documented as SDK-local, and other SDKs are not required to mirror them. Python's
 `.local` is an in-process object cache that bypasses backends, serialization and
 encryption entirely; it is not a member of this family.
@@ -495,8 +495,8 @@ outside `from_env()`.
 required Rust and TypeScript to *remove* expiry defaults — the only direction that makes
 every deployment worse.
 
-**No MUST on integrity.** The checksum lives in the storage container, which
-protocol#11 makes SDK-internal; a MUST here would legislate the container by the back
+**No MUST<!-- not-a-requirement --> on integrity.** The checksum lives in the storage container, which
+protocol#11 makes SDK-internal; a MUST<!-- not-a-requirement --> here would legislate the container by the back
 door.
 
 **Hex on the preset, bytes allowed elsewhere.** The contract protects the shared
