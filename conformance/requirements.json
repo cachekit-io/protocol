@@ -45,7 +45,6 @@
             "cachekit-py"
           ],
           "vectors": [
-            "python-frame.json:raw_payload_frame",
             "python-frame.json:default_saas_write_msgpack_bytestorage",
             "python-frame.json:default_saas_write_msgpack_bytestorage_bin",
             "python-frame.json:arrow_dataframe_write"
@@ -66,7 +65,7 @@
             "python-frame.json:default_saas_write_msgpack_bytestorage_bin",
             "python-frame.json:arrow_dataframe_write"
           ],
-          "gap": "The frames are pinned as reads under their own serializer, so a test plants one under another serializer's key and asserts a miss, which no vector pins; default and arrow write payloads neither decodes, so a reader that skips the check misses on a decode error anyway, and no frame records auto, which writes the same envelope as default."
+          "gap": "The frames are reads under the serializer that wrote them, so only a test that plants one under another serializer's key and asserts a miss exercises the check, and no vector pins that; such a test still passes a reader that skips the check (neither the default nor the arrow payload decodes under the other serializer, so it misses on a decode error), one that decodes the payload before comparing names, and one that compares its key identity (<custom>:ArrowSerializer) instead of the name it records (ArrowSerializer), since every frame is configured by name; no frame records auto, which writes the same envelope as default."
         },
         "KEY-5": {
           "section": "Serializer Codes",
@@ -74,12 +73,7 @@
           "sdks": [
             "cachekit-py"
           ],
-          "vectors": [
-            "python-frame.json:default_saas_write_msgpack_bytestorage",
-            "python-frame.json:default_saas_write_msgpack_bytestorage_bin",
-            "python-frame.json:arrow_dataframe_write"
-          ],
-          "gap": "No vector pins the miss: the frames are pinned as reads under their own serializer, and no frame that otherwise parses records no name or an empty one; tools/python-frame-reference.py refuses a nameless frame only as a malformed vector."
+          "gap": "No vector pins the miss: python-frame.json's frames are reads under the serializer that wrote them, so the reject path never runs, and no frame that otherwise parses records another writer's name, no name or an empty one; a reader that returns the decoded value on a mismatch, or treats a nameless frame as a match, passes every vector, and tools/python-frame-reference.py refuses a nameless frame only as a malformed vector."
         },
         "KEY-6": {
           "section": "Serializer Codes",
@@ -106,15 +100,6 @@
           ],
           "vectors": [
             "cache-keys.json:single_integer",
-            "cache-keys.json:single_string",
-            "cache-keys.json:multiple_args",
-            "cache-keys.json:kwargs_only",
-            "cache-keys.json:mixed_args_kwargs",
-            "cache-keys.json:no_namespace",
-            "cache-keys.json:empty_args",
-            "cache-keys.json:none_arg",
-            "cache-keys.json:boolean_args",
-            "cache-keys.json:nested_dict",
             "cache-keys.json:serializer_pythonic_alias"
           ],
           "gap": "The vectors resolve each alias only in key generation, so an SDK that resolves a spelling to another name where it records or writes the entry passes (KEY-8)."
@@ -127,15 +112,6 @@
           ],
           "vectors": [
             "cache-keys.json:single_integer",
-            "cache-keys.json:single_string",
-            "cache-keys.json:multiple_args",
-            "cache-keys.json:kwargs_only",
-            "cache-keys.json:mixed_args_kwargs",
-            "cache-keys.json:no_namespace",
-            "cache-keys.json:empty_args",
-            "cache-keys.json:none_arg",
-            "cache-keys.json:boolean_args",
-            "cache-keys.json:nested_dict",
             "cache-keys.json:serializer_pythonic_alias"
           ],
           "gap": "No vector writes an entry under an alias, so only the code is pinned; a writer that records the alias as given, or picks a serializer by the raw spelling, passes."
@@ -167,7 +143,7 @@
         "KEY-12": {
           "section": "Serializer Codes",
           "binds": "caller",
-          "gap": "Which namespace an application keys each identity under is its own choice, which no vector or SDK test can observe."
+          "gap": "As KEY-11, for distinct identities that share one recorded name: the namespace is the application's choice, which no vector or SDK test can observe."
         }
       },
       "retired": {}
@@ -179,7 +155,7 @@
         "ENC-1": {
           "section": "AAD v0x03 Format",
           "binds": "sdk",
-          "gap": "Every vector carries the metadata and key it was sealed under, so a reader that retries with another format or compressed value, with or without original_type, or with its key stripped of a namespace or prefix decrypts each one at its first attempt; no vector presents metadata or a key other than those its ciphertext was sealed under."
+          "gap": "Every vector outside the draft interop-v2 profile carries the metadata and key it was sealed under, so a reader that retries with another format or compressed value, with or without original_type, or with its key stripped of a namespace or prefix, decrypts each one at its first attempt; interop-v2.json's crypto_reject_vectors present a ciphertext under the other compressed value, but no SDK implements that draft profile, and no vector presents another format, original_type or key form."
         },
         "ENC-2": {
           "section": "AAD v0x03 Format",
@@ -206,7 +182,7 @@
             "python-frame.json:default_saas_write_msgpack_bytestorage_bin",
             "python-frame.json:arrow_dataframe_write"
           ],
-          "gap": "Only cachekit-py's default and Arrow writes and the interop AAD are pinned against the token a writer emits: no vector holds an OrjsonSerializer write or an auto-mode cachekit-ts or cachekit-rs write, and encryption.json takes the token as an input, so a writer that emits an off-registry token in any of those passes."
+          "gap": "Only cachekit-py's default and Arrow writes, on plaintext frames, and the interop AAD are pinned against the token a writer emits: no vector holds an OrjsonSerializer write or an auto-mode cachekit-ts or cachekit-rs write, and encryption.json takes the token as an input, so a writer that emits an off-registry token in any of those passes."
         },
         "ENC-6": {
           "section": "`compressed` tokens",
@@ -247,7 +223,7 @@
             "python-frame.json:default_saas_write_msgpack_bytestorage_bin",
             "python-frame.json:arrow_dataframe_write"
           ],
-          "gap": "Only cachekit-py's default and Arrow writes, on plaintext frames, and the interop write are pinned against their containers; no vector holds a cachekit-ts write with compression on or off, a cachekit-py write with integrity checking off, or an ArrowSerializer write with compression disabled, the case the spec names, so a writer whose flag ignores what its envelope step did passes there."
+          "gap": "Only cachekit-py's StandardSerializer writes, on plaintext frames, and the interop write are pinned against their containers: arrow_dataframe_write checks frame structure, not its IPC bytes, so an Arrow writer that records compressed true over uncompressed buffers passes it; no vector holds a cachekit-ts write with compression on or off, a cachekit-py write with integrity checking off, or an ArrowSerializer write with compression disabled (the case the spec names), so a writer whose flag ignores what its envelope step did passes there."
         }
       },
       "retired": {}

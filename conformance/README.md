@@ -108,7 +108,7 @@ and its `retired` ids. Each requirement entry has these fields:
 | :--- | :--- |
 | `section` | The heading the id sits under. `check` compares it with the spec. |
 | `binds` | Who must comply: `sdk`, `server` (the CachekitIO service) or `caller` (application code that uses an SDK). |
-| `sdks` | Optional. The SDKs a language-specific requirement binds, such as `["cachekit-ts"]`. Omitted, it binds every SDK. |
+| `sdks` | Optional. The SDKs a requirement binds when it binds only some of them, such as `["cachekit-ts"]`: one that is language-specific, or conditional on a format or feature only those SDKs implement. Omitted, it binds every SDK. |
 | `vectors` | Vectors that exercise the requirement: `<fixture>.json:<name>`, or `<fixture>.json` for every vector in the fixture. A `path-encoding.json` vector is named by its `key`. |
 | `tests` | Tests in this repository's tools that exercise it, as `tools/<file>:<name>`. `<name>` must be a function the tool defines: a `def` in a `.py` tool (found with Python's `ast`), or a `function` declared at the start of a line in a `.mjs` tool, outside comments, strings, template literals and regular expressions. These run only against the reference implementations. |
 | `gap` | One line naming what no vector or test reaches, and why. Required when there are no vectors and no tests. Name what is missing by its content, not its position ("item 5" breaks when a list is reordered); an id the gap names must be an indexed requirement. A known SDK violation is not a gap: [`sdk-feature-matrix.md`](../sdk-feature-matrix.md) records it, and a gap may point there. |
