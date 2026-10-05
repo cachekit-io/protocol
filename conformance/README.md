@@ -79,12 +79,16 @@ Keywords are found the way GitHub renders them: `check` reads a spec file into b
 CommonMark's rules, as GitHub's renderer applies them, with GFM tables. A keyword in a table,
 a list, a blockquote or emphasis (`**MUST**`, `_MUST_`) needs an id; one in inline code or an
 inline comment does not. Inline code may cross a line break inside a paragraph, but never
-leave its paragraph or table cell. A table starts where a header row is followed by a
-delimiter row with the same number of cells (a one-column table needs no pipe), and its body
-runs to the first blank line or the first line that starts another block, such as a heading,
-a list item or an HTML block. An HTML block (a line that opens with a block tag such as
-`<div>` or `<details>`, up to the next blank line) is raw HTML: a keyword in it shows even
-between backticks, and only its comments are hidden.
+leave its paragraph or table cell. A backtick inside an HTML tag, an autolink such as
+`<https://example.com/>`, an inline comment or an escape (`\` before it) opens no code span,
+as on GitHub, so it cannot pair with a later backtick and hide the text between them. `check`
+reads a link's destination and title, a footnote reference and a bare `www.` or `http://`
+address as plain text, where GitHub does not, so keep backticks out of them. A table starts
+where a header row is followed by a delimiter row with the same number of cells (a one-column
+table needs no pipe), and its body runs to the first blank line or the first line that starts
+another block, such as a heading, a list item or an HTML block. An HTML block (a line that
+opens with a block tag such as `<div>` or `<details>`, up to the next blank line) is raw HTML:
+a keyword in it shows even between backticks, and only its comments are hidden.
 
 A keyword inside a code block, or inside an HTML comment block that spans lines, is an error,
 so that a block the checker misreads fails instead of hiding text:

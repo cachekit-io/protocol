@@ -1092,6 +1092,69 @@ CASES: list[Case] = [
         0,
         OK,
     ),
+    # --- inline markup: whichever opens first takes its whole extent, as GitHub's renderer reads it ---
+    # A backtick inside a tag, an autolink, a comment, a processing instruction, a declaration, a CDATA section or
+    # an escape opens no code span, so it cannot pair with a later one and hide the keyword between them.
+    ("backtick in a double-quoted attribute", append(SPEC, '\na <span title="`">MUST</span> `x`\n'), 1, "this MUST has no id"),
+    ("backtick in a single-quoted attribute", append(SPEC, "\na <span title='`'>MUST</span> `x`\n"), 1, "this MUST has no id"),
+    # An unquoted attribute value cannot hold a backtick, so this is no tag and the backtick opens a code span.
+    ("backtick in an unquoted attribute value", append(SPEC, "\na <span title=`>MUST</span> `x`\n"), 0, OK),
+    ("backtick in a URI autolink", append(SPEC, "\na <http://x.y/`> MUST `x`\n"), 1, "this MUST has no id"),
+    ("backtick in an email autolink", append(SPEC, "\na <b`c@d.e> MUST `x`\n"), 1, "this MUST has no id"),
+    # A code span that opens first hides a tag inside it, or ends at a backtick inside a tag-like string.
+    ("tag inside a code span", append(SPEC, "\nUse `<span title='x'>MUST</span>` as markup.\n"), 0, OK),
+    (
+        "code span closed inside a tag-like string",
+        append(SPEC, "\nUse `<span title='` MUST `'>` here.\n"),
+        1,
+        "this MUST has no id",
+    ),
+    ("escaped < opens no tag", append(SPEC, "\na \\<span title='`'>MUST</span> `x`\n"), 0, OK),
+    ("escaped backslash before a tag", append(SPEC, "\na \\\\<span title='`'>MUST</span> `x`\n"), 1, "this MUST has no id"),
+    ("escaped backslash before a code span", append(SPEC, "\na \\\\` b ` MUST ` c\n"), 1, "this MUST has no id"),
+    # A run of backticks starts wherever the escape before it ends, even right after an escaped backtick.
+    ("escaped backtick before a run", append(SPEC, "\na \\``x` MUST `\n"), 1, "this MUST has no id"),
+    (
+        "tag after a run that closes no code span",
+        append(SPEC, "\na `` <span title='`'>MUST</span> `x`\n"),
+        1,
+        "this MUST has no id",
+    ),
+    # GitHub opens no code span with a run of more than 80 backticks.
+    ("runs of 81 backticks", append(SPEC, f"\na {'`' * 81} MUST {'`' * 81} b\n"), 1, "this MUST has no id"),
+    # <!--> and <!---> are whole comments, and a comment's text may not end in a dash: a ---> closes nothing.
+    ("comment closed by <!-->", append(SPEC, "\na <!--> MUST -->\n"), 1, "this MUST has no id"),
+    ("comment closed by <!--->", append(SPEC, "\na <!---> MUST -->\n"), 1, "this MUST has no id"),
+    ("comment text ending in a dash", append(SPEC, "\na <!-- MUST ---> b\n"), 1, "this MUST has no id"),
+    ("comment closed after ---> by a later -->", append(SPEC, "\na <!-- MUST ---> b --> c\n"), 0, OK),
+    ("comment ends at its first -->", append(SPEC, "\na <!-- x --> MUST --> b\n"), 1, "this MUST has no id"),
+    ("backtick in a processing instruction", append(SPEC, "\na <?x `?> MUST `y`\n"), 1, "this MUST has no id"),
+    # In ??> the first ? pairs with the second, so the instruction runs on to a later ?>.
+    ("processing instruction closed past ??>", append(SPEC, "\na <?a??> ` MUST ` ?> b\n"), 1, "this MUST has no id"),
+    ("backtick in a declaration", append(SPEC, "\na <!X `> MUST `y`\n"), 1, "this MUST has no id"),
+    ("lowercase declaration", append(SPEC, "\na <!x `> MUST `y`\n"), 0, OK),
+    ("backtick in a CDATA section", append(SPEC, "\na <![CDATA[ ` ]]> MUST `y`\n"), 1, "this MUST has no id"),
+    ("lowercase CDATA section", append(SPEC, "\na <![cdata[ ` ]]> MUST `y`\n"), 1, "this MUST has no id"),
+    ("CDATA section closed past ]]]>", append(SPEC, "\na <![CDATA[ x ]]]> ` MUST ` ]]> b\n"), 1, "this MUST has no id"),
+    # A tag may span lines; the blockquote's > on the second line is not part of it.
+    (
+        "tag across lines in a blockquote",
+        append(SPEC, "\n> a <span\n> title='`'>MUST</span> `x`\n"),
+        1,
+        "this MUST has no id",
+    ),
+    # After a <!-- that closes no comment, GitHub reads no <! markup in the rest of the paragraph: the backtick in
+    # <!X `> pairs with the next one, hiding the first MUST, and the second MUST shows.
+    (
+        "declaration after a comment that does not close",
+        append(SPEC, "\na <!-- x ---> <!X `> MUST\nb ` MUST ` z\n"),
+        1,
+        f"{SPEC}:{SPEC_END + 3}: this MUST has no id",
+    ),
+    # An email autolink is tried before a comment.
+    ("email autolink before a comment", append(SPEC, "\na <!--@x.y> MUST --> b\n"), 1, "this MUST has no id"),
+    ("tag in a table cell", append(SPEC, "\n| h |\n| - |\n| a <span title='`'>MUST</span> `x` |\n"), 1, "this MUST has no id"),
+    ("tag in a heading", append(SPEC, "\n## a <span title='`'>MUST</span> `x`\n"), 1, "this MUST has no id"),
     # --- ids are never reused: next only grows ---
     (
         "new id at or above next",

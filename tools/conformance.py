@@ -24,16 +24,20 @@ things in step:
 
 Keywords are found the way GitHub renders them. The file is read into blocks by CommonMark's
 parsing strategy as GitHub's cmark-gfm applies it: blockquotes and list items, lazy
-continuation lines, HTML blocks, and GFM tables. Inline code and inline comments are skipped
-within one paragraph, heading or table cell, so a code span may cross a line break but never
-a block or cell boundary. MUST NOT is one keyword only where a reader sees one phrase: both
-words on one line, or across a line break inside one paragraph or heading, with nothing a
-reader sees between them. So an id after a NOT in another block, or past a literal >, never
-marks the MUST before it. An HTML block is raw HTML, so only its comments are hidden. A
-keyword inside a code block, or inside an HTML comment block that spans lines, is an error
-(a comment on one line is hidden like an inline one), unless the block is a fence that opens
-at column 0, outside every container, with <!-- not-a-requirement --> on the line before it:
-if a block were misread, an error fails closed where skipping would hide text.
+continuation lines, HTML blocks, and GFM tables. Within one paragraph, heading or table cell,
+inline markup is read from left to right by cmark-gfm's grammar, and whichever construct opens
+first takes its whole extent, so a backtick inside an HTML tag, an autolink, a comment or an
+escape opens no code span. Inline code and inline comments are skipped, so a code span may
+cross a line break but never a block or cell boundary. Links, footnote references and GFM's
+extended autolinks (a bare www. or http:// address) are read as plain text. MUST NOT is one
+keyword only where a reader sees one phrase: both words on one line, or across a line break
+inside one paragraph or heading, with nothing a reader sees between them. So an id after a
+NOT in another block, or past a literal >, never marks the MUST before it. An HTML block is
+raw HTML, so only its comments are hidden. A keyword inside a code block, or inside an HTML
+comment block that spans lines, is an error (a comment on one line is hidden like an inline
+one), unless the block is a fence that opens at column 0, outside every container, with
+<!-- not-a-requirement --> on the line before it: if a block were misread, an error fails
+closed where skipping would hide text.
 
 **What this does NOT catch.** It checks that a mapping exists and that it names real vectors
 and tests. It cannot check that they exercise the requirement: whether a plausible wrong
@@ -80,6 +84,7 @@ import subprocess
 import sys
 import unicodedata
 from dataclasses import dataclass, field
+from functools import cache
 from pathlib import Path
 from typing import NamedTuple
 
@@ -146,14 +151,48 @@ HTML_BLOCKS = (
     (re.compile(r"<!\[CDATA\["), re.compile(r"\]\]>")),
     (re.compile(rf"</?(?:{BLOCK_TAGS})(?:[ >]|/>|$)", re.I), None),
 )
-ATTRIBUTE = r" +[A-Za-z_:][A-Za-z0-9_.:-]*(?: *= *(?:[^ \"'=<>`]+|'[^']*'|\"[^\"]*\"))?"
+# An open or closing tag. Space inside one may include a line break (the other whitespace cmark-gfm allows, a tab,
+# vertical tab, form feed or carriage return, is an error in layout()).
+ATTRIBUTE = r"[ \n]+[A-Za-z_:][A-Za-z0-9_.:-]*(?:[ \n]*=[ \n]*(?:[^ \n\"'=<>`]+|'[^']*'|\"[^\"]*\"))?"
+OPEN_TAG = rf"<[A-Za-z][A-Za-z0-9-]*(?:{ATTRIBUTE})*[ \n]*/?>"
+CLOSING_TAG = r"</[A-Za-z][A-Za-z0-9-]*[ \n]*>"
 # HTML block type 7: one complete open or closing tag alone on its line. It ends at a blank line.
-HTML_TAG_LINE = re.compile(rf"(?:<[A-Za-z][A-Za-z0-9-]*(?:{ATTRIBUTE})* */?>|</[A-Za-z][A-Za-z0-9-]* *>) *")
+HTML_TAG_LINE = re.compile(rf"(?:{OPEN_TAG}|{CLOSING_TAG}) *")
 PIPE = re.compile(r"(?<!\\)\|")
-# Inline code or an inline comment, whichever opens first, within one paragraph (so it may
-# cross a line break) or one table cell. A backtick that is escaped, or that sits inside a
-# longer run, opens no code span.
-INLINE = re.compile(r"(?<![`\\])(`+)(?!`).+?(?<!`)\1(?!`)|<!--.*?-->", re.DOTALL)
+# The inline markup that can hold a backtick, by cmark-gfm's grammar, in the order it tries them at the character
+# that opens them. inline() reads a paragraph, heading or table cell from left to right, and each construct takes
+# its whole extent from where it opens: a backtick inside a tag, an autolink, a comment or an escape opens no code
+# span, and a < inside a code span opens nothing. Each unclosed_ kind is an opener that finds no end, which is text.
+INLINE = (
+    # A run of up to 80 backticks opens a code span, which the next run of the same length closes.
+    ("code", r"(?P<run>`{1,80})(?!`).+?(?<!`)(?P=run)(?!`)"),
+    ("backticks", r"`+"),  # a run that closes no code span, or one too long to open one
+    ("escape", r"\\[!-/:-@\[-`{-~]"),  # ASCII punctuation after a backslash
+    ("autolink", r"<[A-Za-z][A-Za-z0-9.+-]{1,31}:[^\x01-\x20<>]*>"),  # cmark-gfm reads NUL as U+FFFD
+    (
+        "email",
+        r"<[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?"
+        r"(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*>",
+    ),
+    # <!--> and <!---> are whole comments; otherwise the text may not end in a dash, so ---> closes nothing.
+    ("comment", r"<!--(?:-?>|(?:[^-]|-[^-]|--[^>])*-->)"),
+    ("unclosed_comment", r"<!--"),
+    ("cdata", r"<!\[(?i:CDATA)\[(?:[^\]]|\][^\]]|\]\][^>])*\]\]>"),
+    ("unclosed_cdata", r"<!\[(?i:CDATA)\["),
+    ("declaration", r"<![A-Z]+[ \n][^>]*>"),
+    ("unclosed_declaration", r"<![A-Z]+[ \n]"),
+    ("instruction", r"<\?(?:[^?>]|\?[^>]|>)*\?>"),  # in ??> the first ? pairs with the second, so it runs on
+    ("unclosed_instruction", r"<\?"),
+    ("tag", f"{OPEN_TAG}|{CLOSING_TAG}"),
+)
+# What cmark-gfm stops trying in the rest of a paragraph, heading or cell after each unclosed opener: after a <!--
+# that closes no comment, it reads no <! markup at all.
+UNCLOSED = {
+    "unclosed_comment": {"comment", "unclosed_comment", "cdata", "unclosed_cdata", "declaration", "unclosed_declaration"},
+    "unclosed_cdata": {"cdata", "unclosed_cdata"},
+    "unclosed_declaration": {"declaration", "unclosed_declaration"},
+    "unclosed_instruction": {"instruction", "unclosed_instruction"},
+}
 # An HTML block is raw HTML: a renderer hides its comments and nothing else.
 COMMENT = re.compile(r"<!--.*?-->", re.DOTALL)
 # The first line of a GitHub alert, which GitHub shows as the alert's title instead.
@@ -456,13 +495,36 @@ def blank(match: re.Match[str]) -> str:
     return re.sub(r"[^\n]", " ", match.group(0))
 
 
+@cache
+def inline_pattern(skip: frozenset[str]) -> re.Pattern[str]:
+    """The INLINE kinds not in `skip`, as one alternation: the first that matches where one opens wins."""
+    return re.compile("|".join(f"(?P<{kind}>{pattern})" for kind, pattern in INLINE if kind not in skip), re.DOTALL)
+
+
+def inline(text: str) -> str:
+    """One paragraph, heading or table cell with its code spans and comments blanked, read as GitHub reads it.
+
+    Nothing else is blanked: a keyword inside a tag or an instruction, which GitHub does not show, is
+    still read, which fails closed. An unclosed opener stops the kinds UNCLOSED names being tried in the
+    rest of `text`.
+    """
+    out: list[str] = []
+    pos = 0
+    skip: frozenset[str] = frozenset()
+    while m := inline_pattern(skip).search(text, pos):
+        skip |= UNCLOSED.get(m.lastgroup, set())
+        out += [text[pos : m.start()], blank(m) if m.lastgroup in ("code", "comment") else m.group(0)]
+        pos = m.end()
+    return "".join(out) + text[pos:]
+
+
 def mask_cells(row: str) -> str:
     """A table row with its inline code and comments blanked cell by cell: GFM splits cells first."""
     out, start = [], 0
     for pipe in PIPE.finditer(row):
-        out += [INLINE.sub(blank, row[start : pipe.start()]), "|"]
+        out += [inline(row[start : pipe.start()]), "|"]
         start = pipe.end()
-    return "".join(out) + INLINE.sub(blank, row[start:])
+    return "".join(out) + inline(row[start:])
 
 
 def title(leaf: Leaf, lines: list[str]) -> str:
@@ -504,10 +566,14 @@ def mask(text: str) -> Masked:
         for i, start in zip(leaf.lines, leaf.starts):
             leaf_of_line[i] = (leaf, start)
         if leaf.kind in ("paragraph", "heading"):
-            # A code span may cross a line break inside one paragraph or heading, never out of it.
-            spans = leaf.lines[:-1] if leaf.kind == "heading" and len(leaf.lines) > 1 else leaf.lines
-            for i, part in zip(spans, INLINE.sub(blank, "\n".join(lines[i] for i in spans)).split("\n")):
-                masked[i] = part
+            # A code span or a tag may cross a line break inside one paragraph or heading, never out of it. Each
+            # line is read past its container markers: a > that continues a blockquote is not part of a tag.
+            spans = list(zip(leaf.lines, leaf.starts))
+            if leaf.kind == "heading" and len(spans) > 1:
+                spans.pop()  # a setext heading's underline
+            read = inline("\n".join(lines[i][s:] for i, s in spans))
+            for (i, s), part in zip(spans, read.split("\n")):
+                masked[i] = lines[i][:s] + part
             if leaf.kind == "heading":
                 headings.append((at[first], title(leaf, lines)))
         elif leaf.kind == "table":
