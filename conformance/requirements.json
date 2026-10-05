@@ -937,7 +937,9 @@
             "interop-mode.json:uint64_max",
             "interop-mode.json:int64_min",
             "interop-mode.json:reject_int_overflow_in_list",
-            "interop-mode.json:reject_int_underflow_in_map"
+            "interop-mode.json:reject_int_underflow_in_list",
+            "interop-mode.json:reject_int_underflow_in_map",
+            "interop-mode.json:reject_int_overflow_in_map"
           ]
         },
         "IOP-10": {
@@ -1112,7 +1114,9 @@
             "interop-mode.json:reject_naive_datetime_nested",
             "interop-mode.json:reject_nan_nested",
             "interop-mode.json:reject_int_overflow_in_list",
-            "interop-mode.json:reject_int_underflow_in_map"
+            "interop-mode.json:reject_int_underflow_in_map",
+            "interop-mode.json:reject_int_overflow_in_map",
+            "interop-mode.json:reject_int_underflow_in_list"
           ]
         },
         "IOP-23": {
@@ -1337,7 +1341,9 @@
             "interop-mode.json:reject_naive_datetime_nested",
             "interop-mode.json:reject_nan_nested",
             "interop-mode.json:reject_int_overflow_in_list",
-            "interop-mode.json:reject_int_underflow_in_map"
+            "interop-mode.json:reject_int_underflow_in_map",
+            "interop-mode.json:reject_int_overflow_in_map",
+            "interop-mode.json:reject_int_underflow_in_list"
           ]
         },
         "IOP-36": {

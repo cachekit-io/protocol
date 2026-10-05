@@ -1390,7 +1390,7 @@ REPORT_CASES: list[tuple[str, Mutate, dict[str, list[str]], list[str]]] = [
         lambda _: None,
         {
             "IOP-5": ["partial (gap)"] * 3,
-            "IOP-9": ["partial (4/6)"] * 3,
+            "IOP-9": ["partial (4/8)"] * 3,
             "IOP-17": ["partial (4/6)"] * 3,
             "IOP-2": ["partial (3/19)"] * 3,
             "IOP-10": ["uncovered"] * 3,
@@ -1433,7 +1433,7 @@ REPORT_CASES: list[tuple[str, Mutate, dict[str, list[str]], list[str]]] = [
     (
         "a vector changed in place no longer counts as held",
         reworded("interop-mode.json", "reject_nan"),
-        {"IOP-22": ["partial (12/32)"] * 3, "IOP-17": ["partial (4/6)"] * 3},
+        {"IOP-22": ["partial (12/34)"] * 3, "IOP-17": ["partial (4/6)"] * 3},
         [],
     ),
     (

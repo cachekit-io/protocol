@@ -1098,6 +1098,16 @@ ERROR_VECTORS: list[dict] = [
         "args": [{"id": {"$int": "-9223372036854775809"}}],
         "error": "integer below -2^63 inside a map value",
     },
+    {
+        "name": "reject_int_overflow_in_map",
+        "args": [{"id": {"$int": "18446744073709551616"}}],
+        "error": "integer above 2^64-1 inside a map value (with reject_int_underflow_in_list, each bound is pinned on both paths)",
+    },
+    {
+        "name": "reject_int_underflow_in_list",
+        "args": [[1, {"$int": "-9223372036854775809"}]],
+        "error": "integer below -2^63 inside a list",
+    },
 ]
 
 # Value reader inputs (spec: Interop Value Format). Accept vectors are well-formed documents no
@@ -1147,7 +1157,8 @@ READER_REJECT_VECTORS: list[dict] = [
         "name": "reader_trailing_byte",
         "description": (
             "The issue_example_object value followed by one 0x00 byte: a complete document and a trailing "
-            "byte, with no CK frame prefix, so only the general trailing-bytes check rejects it"
+            "byte, with no CK frame prefix, so only the general trailing-bytes check rejects it. A reader that "
+            "strips trailing NUL padding before a strict decode accepts it, so it fails this vector too"
         ),
         "msgpack_hex": "82a36167651ea46e616d65a5616c69636500",
         "error": "trailing bytes after one complete document",
