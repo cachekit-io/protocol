@@ -32,6 +32,7 @@ same text in lowercase. When the keyword is bold, the id goes after the closing 
 | [`spec/encryption.md`](../spec/encryption.md) | `ENC` |
 | [`spec/file-backend-format.md`](../spec/file-backend-format.md) | `FILE` |
 | [`spec/interop-mode.md`](../spec/interop-mode.md) | `IOP` |
+| [`spec/saas-api.md`](../spec/saas-api.md) | `API` |
 | [`spec/wire-format.md`](../spec/wire-format.md) | `WIRE` |
 
 Each keyword occurrence is one requirement. A sentence with two keywords carries two ids.
@@ -107,7 +108,7 @@ and its `retired` ids. Each requirement entry has these fields:
 | Field | Meaning |
 | :--- | :--- |
 | `section` | The heading the id sits under. `check` compares it with the spec. |
-| `binds` | Who must comply: `sdk`, `server` (the CachekitIO service) or `caller` (application code that uses an SDK). |
+| `binds` | Who must comply: `sdk`, `server` (the CachekitIO service) or `caller` (application code that uses an SDK, or its deployment). |
 | `sdks` | Optional. The SDKs a requirement binds when it binds only some of them, such as `["cachekit-ts"]`: one that is language-specific, or conditional on a format or feature only those SDKs implement. Omitted, it binds every SDK. |
 | `vectors` | Vectors that exercise the requirement: `<fixture>.json:<name>`, or `<fixture>.json` for every vector in the fixture. A `path-encoding.json` vector is named by its `key`. |
 | `tests` | Tests in this repository's tools that exercise it, as `tools/<file>:<name>`. `<name>` must be a function the tool defines: a `def` in a `.py` tool (found with Python's `ast`), or a `function` declared at the start of a line in a `.mjs` tool, outside comments, strings, template literals and regular expressions. These run only against the reference implementations. |

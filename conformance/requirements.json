@@ -716,6 +716,491 @@
       },
       "retired": {}
     },
+    "spec/saas-api.md": {
+      "prefix": "API",
+      "next": 75,
+      "requirements": {
+        "API-1": {
+          "section": "Authentication",
+          "binds": "sdk",
+          "gap": "No vector covers request headers, so nothing here catches a client that, with a ck_sdk_ key, sends X-CacheKit-L1-Status on GET and PUT but not on HEAD, DELETE, /ttl, /lock or health requests; the server's 400 shows the omission only on a live call."
+        },
+        "API-2": {
+          "section": "Authentication",
+          "binds": "server",
+          "gap": "No public vector exercises the server's responses, so nothing here catches a server that omits either header on one path, such as an error raised before the cache handler, the OPTIONS preflight or the health endpoint."
+        },
+        "API-3": {
+          "section": "Authentication",
+          "binds": "server",
+          "gap": "A tier's internal cache key is invisible to any public vector; only a test that sends two tenants' requests for one path through the tier catches a tier keyed by URL alone."
+        },
+        "API-4": {
+          "section": "Encoding rules",
+          "binds": "sdk",
+          "vectors": [
+            "path-encoding.json:default:../../admin",
+            "path-encoding.json:x/../../health",
+            "path-encoding.json:k?x=1#f"
+          ],
+          "tests": [
+            "tools/path-encoding-verify.py:verify"
+          ],
+          "gap": "No row holds a backslash, which a WHATWG URL parser reads as '/' (an encoder that leaves it raw passes every row, and the key `a\\..\\health` then reaches /v1/cache/health), a raw tab, LF or CR, which the parser strips (so `.<TAB>.` arrives as `..`), or an existing percent-escape, which an encoder that keeps escapes raw (API-7) sends unchanged, so the key `%2e%2e` becomes a dot segment and /v1/cache/%2e%2e/ttl becomes /v1/ttl; and the rows pin the encoder, not the request path (API-15)."
+        },
+        "API-5": {
+          "section": "Encoding rules",
+          "binds": "sdk",
+          "vectors": [
+            "path-encoding.json:ns:test:func:__main__.get_user:args:3870b2ea5735ae639ded9450ef117768db676f037bec636503796c5b81095153:1s",
+            "path-encoding.json:default:../../admin",
+            "path-encoding.json:x/../../health",
+            "path-encoding.json:k?x=1#f",
+            "path-encoding.json:a b",
+            "path-encoding.json:100%",
+            "path-encoding.json:a:..",
+            "path-encoding.json:ns:key",
+            "path-encoding.json:f(x)!*'"
+          ],
+          "tests": [
+            "tools/path-encoding-verify.py:verify"
+          ],
+          "gap": "No row holds a byte outside ASCII, an existing percent-escape, or any ASCII character API-7's gap names, so an encoder that escapes Latin-1 or UTF-16 code units instead of UTF-8 bytes, leaves a backslash raw, or keeps an existing escape raw (API-7) passes; and the rows pin the encoder, not the request path (API-15)."
+        },
+        "API-6": {
+          "section": "Encoding rules",
+          "binds": "sdk",
+          "vectors": [
+            "path-encoding.json:ns:test:func:__main__.get_user:args:3870b2ea5735ae639ded9450ef117768db676f037bec636503796c5b81095153:1s",
+            "path-encoding.json:default:../../admin",
+            "path-encoding.json:x/../../health",
+            "path-encoding.json:a:..",
+            "path-encoding.json:..a"
+          ],
+          "tests": [
+            "tools/path-encoding-verify.py:verify"
+          ],
+          "gap": "No row holds an uppercase letter, '-' or '~', so an encoder whose safe set is lowercase-only, or that escapes '-' or '~', passes; uppercase letters and '-' are in the server's key charset, so escaping them changes the wire bytes the spec promises are identical across SDKs for every key the server accepts; and the rows pin the encoder, not the request path (API-15)."
+        },
+        "API-7": {
+          "section": "Encoding rules",
+          "binds": "sdk",
+          "vectors": [
+            "path-encoding.json:ns:test:func:__main__.get_user:args:3870b2ea5735ae639ded9450ef117768db676f037bec636503796c5b81095153:1s",
+            "path-encoding.json:default:../../admin",
+            "path-encoding.json:x/../../health",
+            "path-encoding.json:k?x=1#f",
+            "path-encoding.json:a b",
+            "path-encoding.json:100%",
+            "path-encoding.json:a:..",
+            "path-encoding.json:ns:key",
+            "path-encoding.json:f(x)!*'"
+          ],
+          "tests": [
+            "tools/path-encoding-verify.py:verify"
+          ],
+          "gap": "No row holds a backslash (API-4), a backtick, any of '\"', '$', '&', '+', ',', ';', '<', '>', '@', '[', ']', '^', '{', '|' and '}', a control character, a byte of 0x80 or above (API-5), or an existing percent-escape. So an encoder that escapes only the characters the rows hold passes, and so does one that keeps an existing escape raw, as never-double-encode encoders do: the key `ns%3Akey` then reaches the server as `ns:key`, and `%2e%2e` as a dot segment (API-4). And the rows pin the encoder, not the request path (API-15)."
+        },
+        "API-8": {
+          "section": "Encoding rules",
+          "binds": "sdk",
+          "vectors": [
+            "path-encoding.json:",
+            "path-encoding.json:.",
+            "path-encoding.json:..",
+            "path-encoding.json:health",
+            "path-encoding.json:ttl",
+            "path-encoding.json:lock"
+          ],
+          "gap": "The rows reach whichever function an SDK's test calls: a client that guards the key where it builds one endpoint's URL but builds its /ttl or /lock URLs elsewhere passes them, and so does one that raises only after a request is built, unless the test asserts the raise comes first (API-14)."
+        },
+        "API-9": {
+          "section": "Encoding rules",
+          "binds": "sdk",
+          "vectors": [
+            "path-encoding.json:",
+            "path-encoding.json:.",
+            "path-encoding.json:..",
+            "path-encoding.json:health",
+            "path-encoding.json:ttl",
+            "path-encoding.json:lock"
+          ],
+          "gap": "As API-8: the rows reach only the entry points an SDK's test drives, and only the test discipline of API-14 shows the error comes before a URL is built."
+        },
+        "API-10": {
+          "section": "Encoding rules",
+          "binds": "sdk",
+          "vectors": [
+            "path-encoding.json:",
+            "path-encoding.json:.",
+            "path-encoding.json:..",
+            "path-encoding.json:health",
+            "path-encoding.json:ttl",
+            "path-encoding.json:lock"
+          ],
+          "gap": "An SDK must not leave the check to the server, which cannot make it: a dot key never reaches the server's validator, a route-token key addresses another route or key, and an empty key addresses no entry. So the rows fail a client that relies on the server, but, as on API-8, only on the entry points its test drives."
+        },
+        "API-11": {
+          "section": "Encoding rules",
+          "binds": "sdk",
+          "vectors": [
+            "path-encoding.json:default:../../admin",
+            "path-encoding.json:x/../../health",
+            "path-encoding.json:a:..",
+            "path-encoding.json:..a"
+          ],
+          "tests": [
+            "tools/path-encoding-verify.py:verify"
+          ],
+          "gap": "The rows pin the encoder, not the request path (API-15): a client whose request builder refuses any key that contains '..' as a traversal guard passes them when its test calls only the encoder."
+        },
+        "API-12": {
+          "section": "Encoding rules",
+          "binds": "server",
+          "gap": "No public vector exercises the server's routes: the route-token rows pin the reserved set clients hard-code, which a server that adds a route under /v1/cache/ leaves unchanged."
+        },
+        "API-13": {
+          "section": "Encoding rules",
+          "binds": "server",
+          "gap": "As API-12: the empty-key row pins only that clients never send /v1/cache/ itself, not what the server serves there."
+        },
+        "API-14": {
+          "section": "Encoding rules",
+          "binds": "sdk",
+          "gap": "Whether an SDK's test asserts that each row raises before any URL or request is built, on every entry point, is SDK test code no vector can check: a suite that asserts something weaker passes every reject row."
+        },
+        "API-15": {
+          "section": "Encoding rules",
+          "binds": "sdk",
+          "gap": "Whether an SDK's test reads the parsed path of the request it actually builds, rather than the encoder's return value or a template string, is SDK test code no vector can check; until it does, the encoding rules' rows pin the encoder alone."
+        },
+        "API-16": {
+          "section": "Encoding rules",
+          "binds": "sdk",
+          "vectors": [
+            "path-encoding.json:default:../../admin",
+            "path-encoding.json:x/../../health"
+          ],
+          "tests": [
+            "tools/path-encoding-verify.py:verify"
+          ],
+          "gap": "The lead-in's one item without an id of its own, a '/' in a key reaching the server as %2F, is pinned on the encoder, not the request path (API-15); API-17 owns the other item."
+        },
+        "API-17": {
+          "section": "Encoding rules",
+          "binds": "sdk",
+          "vectors": [
+            "path-encoding.json:100%",
+            "path-encoding.json:ns:key"
+          ],
+          "tests": [
+            "tools/path-encoding-verify.py:verify"
+          ],
+          "gap": "The rows pin one call of the encoder: a client that hands the encoded segment to a URL builder that escapes '%' again, turning ns%3Akey into ns%253Akey, passes them unless its test asserts on the parsed request path (API-15). No row holds an existing percent-escape, so the opposite mistake passes too: an encoder that avoids double-encoding by keeping an existing escape raw (API-7)."
+        },
+        "API-18": {
+          "section": "GET /v1/cache/{key}",
+          "binds": "sdk",
+          "gap": "No vector presents a response, so nothing here catches an SDK that treats an unrecognized X-CacheKit-Freshness token as fresh, or reads 'Fresh' as fresh by matching case-insensitively; the difference shows where it backfills a local cache (API-58), revalidates, or treats a stale hit as a miss."
+        },
+        "API-19": {
+          "section": "Remaining Freshness",
+          "binds": "server",
+          "gap": "No public vector exercises a re-serving tier, so nothing here catches a tier that passes a pre-signal store's missing X-CacheKit-Fresh-For through, or omits it for a copy it populated without a hint."
+        },
+        "API-20": {
+          "section": "Remaining Freshness",
+          "binds": "server",
+          "gap": "As API-19, for a tier that stamps each hit with its copy's original bound instead of the decayed remainder."
+        },
+        "API-21": {
+          "section": "Remaining Freshness",
+          "binds": "server",
+          "gap": "As API-19, for a tier that emits its own copy TTL when that is larger than the decayed remainder."
+        },
+        "API-22": {
+          "section": "Remaining Freshness",
+          "binds": "server",
+          "gap": "As API-19, for a tier that reads only X-CacheKit-TTL and so records a write that carried legacy X-TTL as unbounded."
+        },
+        "API-23": {
+          "section": "Remaining Freshness",
+          "binds": "server",
+          "gap": "As API-19, for a tier that omits the header, rather than sending 0, for a copy whose remainder it does not know."
+        },
+        "API-24": {
+          "section": "Remaining Freshness",
+          "binds": "server",
+          "gap": "As API-19, for a tier that strips a received X-CacheKit-Fresh-For, or drops it when it re-serves the copy."
+        },
+        "API-25": {
+          "section": "Remaining Freshness",
+          "binds": "server",
+          "gap": "As API-19, for a tier that keeps no record at populate of whether its copy was unbounded or merely unhinted."
+        },
+        "API-26": {
+          "section": "Remaining Freshness",
+          "binds": "server",
+          "gap": "As API-19, for a tier that cannot tell an unbounded copy from an unhinted one and omits the header for both."
+        },
+        "API-27": {
+          "section": "Remaining Freshness",
+          "binds": "server",
+          "gap": "As API-19, for a tier that stamps a positive value on a stale, exhausted or unknown copy, or rewrites its freshness label."
+        },
+        "API-28": {
+          "section": "Remaining Freshness",
+          "binds": "sdk",
+          "gap": "No vector reaches an SDK's local cache, so nothing here catches one that creates a local entry, or extends its deadline, on a HEAD 200."
+        },
+        "API-29": {
+          "section": "Remaining Freshness",
+          "binds": "sdk",
+          "gap": "No vector reaches an SDK's local cache, so nothing here catches one that backfills with its configured local TTL whatever X-CacheKit-Fresh-For says."
+        },
+        "API-30": {
+          "section": "Remaining Freshness",
+          "binds": "sdk",
+          "gap": "As API-29, for an SDK that backfills a fresh response whose X-CacheKit-Fresh-For is 0."
+        },
+        "API-31": {
+          "section": "Remaining Freshness",
+          "binds": "sdk",
+          "gap": "As API-29, for an SDK that serves a local copy past its bound through client-side stale-while-revalidate or a local stale-grace policy."
+        },
+        "API-32": {
+          "section": "Remaining Freshness",
+          "binds": "server",
+          "gap": "No public vector exercises the server's headers, so nothing here catches a server or tier that emits a value of more than seven digits or over 2,592,000; API-33 is the SDK side."
+        },
+        "API-33": {
+          "section": "Remaining Freshness",
+          "binds": "sdk",
+          "gap": "No vector holds a header value, so nothing here catches a parser that accepts a sign, white space inside the value, a decimal point, eight or more digits, or a value over the cap."
+        },
+        "API-34": {
+          "section": "Remaining Freshness",
+          "binds": "sdk",
+          "gap": "As API-33, for a parser that converts to a wrapping fixed-width integer before it checks the length, so 4297559296 reads as 2,592,000."
+        },
+        "API-35": {
+          "section": "Remaining Freshness",
+          "binds": "sdk",
+          "gap": "No vector reaches an SDK's write path or its local cache, so nothing here catches one that bounds its copy of an accepted write by the local TTL alone, or lengthens it by X-CacheKit-Stale-TTL."
+        },
+        "API-36": {
+          "section": "Remaining Freshness",
+          "binds": "sdk",
+          "gap": "As API-35, for an SDK that keeps a copy after a timeout or a transport error and starts its clock only at a later read, or never."
+        },
+        "API-37": {
+          "section": "Remaining Freshness",
+          "binds": "sdk",
+          "gap": "As API-35, for an SDK that serves such a copy past its bound through a local stale-grace policy."
+        },
+        "API-38": {
+          "section": "Remaining Freshness",
+          "binds": "caller",
+          "gap": "The TTL an application gives a security-sensitive cache, and whether it versions its keys, are its own choices, which no vector or SDK test can observe."
+        },
+        "API-39": {
+          "section": "Remaining Freshness",
+          "binds": "caller",
+          "gap": "As API-38: whether a key whose TTL is a revocation boundary is written with an explicit TTL is the application's configuration."
+        },
+        "API-40": {
+          "section": "PUT /v1/cache/{key}",
+          "binds": "server",
+          "gap": "No public vector exercises the server, so nothing here catches one that stores a write without TTL headers under a tenant default TTL."
+        },
+        "API-41": {
+          "section": "PUT /v1/cache/{key}",
+          "binds": "server",
+          "gap": "As API-40, and for a server whose validation consults a default the client cannot see."
+        },
+        "API-42": {
+          "section": "PUT /v1/cache/{key}",
+          "binds": "sdk",
+          "gap": "No vector maps a duration to a header, so nothing here catches a client that sends a sub-second TTL unrounded, or truncates it to 0 and then rejects it or sends 0."
+        },
+        "API-43": {
+          "section": "PUT /v1/cache/{key}",
+          "binds": "server",
+          "gap": "No public vector exercises the server, so nothing here catches one that ignores X-TTL, or prefers it to X-CacheKit-TTL when a write carries both."
+        },
+        "API-44": {
+          "section": "PUT /v1/cache/{key}",
+          "binds": "sdk",
+          "gap": "No vector covers request headers, so nothing here catches a client that sends X-TTL instead of, or beside, X-CacheKit-TTL."
+        },
+        "API-45": {
+          "section": "PUT /v1/cache/{key}",
+          "binds": "sdk",
+          "gap": "No vector presents an error response, so nothing here catches a client whose retry policy counts 413 as transient."
+        },
+        "API-46": {
+          "section": "PUT /v1/cache/{key}",
+          "binds": "sdk",
+          "gap": "As API-45, for a client that reports a value too large only when its own size check says so, and surfaces any other 413 as a generic error."
+        },
+        "API-47": {
+          "section": "HEAD /v1/cache/{key}",
+          "binds": "server",
+          "gap": "No public vector exercises the server, so nothing here catches a HEAD handler that answers 404 for an entry in its stale window, which GET still serves, or returns a body."
+        },
+        "API-48": {
+          "section": "HEAD /v1/cache/{key}",
+          "binds": "sdk",
+          "gap": "No vector presents a response, so nothing here catches a client that reports a key absent when its HEAD response is labelled stale."
+        },
+        "API-49": {
+          "section": "HEAD /v1/cache/{key}",
+          "binds": "sdk",
+          "gap": "As API-48, for a client that applies GET's defaulting to a HEAD label, for example firing revalidation on an unrecognized one (API-60)."
+        },
+        "API-50": {
+          "section": "Entry lifecycle",
+          "binds": "server",
+          "gap": "No public vector exercises the store's clock, so nothing here catches a store that stamps from the unfloored time, putting fresh_until between seconds."
+        },
+        "API-51": {
+          "section": "Entry lifecycle",
+          "binds": "server",
+          "gap": "As API-50, for PATCH /v1/cache/{key}/ttl."
+        },
+        "API-52": {
+          "section": "Entry lifecycle",
+          "binds": "server",
+          "gap": "No public vector exercises the store, so nothing here catches one that serves a stale entry past evict_at, for example until a background sweep removes it."
+        },
+        "API-53": {
+          "section": "Entry lifecycle",
+          "binds": "sdk",
+          "gap": "No vector presents a response, so nothing here catches an SDK that computes an entry's freshness from its own clock and the TTL it wrote, instead of the server's label."
+        },
+        "API-54": {
+          "section": "Validation",
+          "binds": "sdk",
+          "sdks": [
+            "cachekit-py"
+          ],
+          "gap": "As API-42, for X-CacheKit-Stale-TTL."
+        },
+        "API-55": {
+          "section": "Write semantics",
+          "binds": "sdk",
+          "sdks": [
+            "cachekit-py"
+          ],
+          "gap": "No vector covers request headers, so nothing here catches a revalidation write that omits X-CacheKit-TTL, which stores a no-expiry entry (or draws a 400 if it still sends X-CacheKit-Stale-TTL), or omits X-CacheKit-Stale-TTL, which leaves no stale window."
+        },
+        "API-56": {
+          "section": "Write semantics",
+          "binds": "server",
+          "gap": "No public vector exercises the server, so nothing here catches a PATCH /ttl handler that renews an entry past fresh_until instead of answering 409."
+        },
+        "API-57": {
+          "section": "Reading a stale entry",
+          "binds": "sdk",
+          "gap": "No vector presents a response, so nothing here catches a client that raises on a stale label it does not expect."
+        },
+        "API-58": {
+          "section": "Reading a stale entry",
+          "binds": "sdk",
+          "gap": "No vector reaches an SDK's local cache, so nothing here catches one that backfills a stale response, as fresh or as locally stale."
+        },
+        "API-59": {
+          "section": "Reading a stale entry",
+          "binds": "sdk",
+          "gap": "As API-58, for an SDK whose local copy outlives the store's evict_at because it ignores X-CacheKit-Fresh-For."
+        },
+        "API-60": {
+          "section": "Reading a stale entry",
+          "binds": "sdk",
+          "gap": "No vector drives a background recompute, so nothing here catches a client that starts one from a HEAD labelled stale. Unlike API-61 to API-63, the rule binds every SDK: a local refresh-ahead is a background recompute too."
+        },
+        "API-61": {
+          "section": "Revalidation flow (SDK)",
+          "binds": "sdk",
+          "sdks": [
+            "cachekit-py"
+          ],
+          "gap": "As API-60, for a client that holds a stale read until its recompute or its lock attempt finishes."
+        },
+        "API-62": {
+          "section": "Revalidation flow (SDK)",
+          "binds": "sdk",
+          "sdks": [
+            "cachekit-py"
+          ],
+          "gap": "No vector presents a lock response, so nothing here catches a client that waits, or retries the lock, when another client holds it."
+        },
+        "API-63": {
+          "section": "Semantics notes",
+          "binds": "sdk",
+          "sdks": [
+            "cachekit-py"
+          ],
+          "gap": "No vector covers request headers, so nothing here catches a client that counts a background revalidation as a miss in X-CacheKit-Misses."
+        },
+        "API-64": {
+          "section": "Semantics notes",
+          "binds": "caller",
+          "gap": "Whether a key's readers rely on hard expiry is a fact of the deployment, which no vector or SDK test can observe."
+        },
+        "API-65": {
+          "section": "POST /v1/cache/{key}/lock",
+          "binds": "sdk",
+          "gap": "No vector presents a lock response, so nothing here catches a client that takes a 200 as its lease unless lock_id is null, so that an absent or empty lock_id counts as held."
+        },
+        "API-66": {
+          "section": "POST /v1/cache/{key}/lock",
+          "binds": "sdk",
+          "gap": "As API-65, for a client that decides on the status alone, for example taking every non-200 for contention."
+        },
+        "API-67": {
+          "section": "DELETE /v1/cache/{key}/lock",
+          "binds": "sdk",
+          "gap": "No vector covers request headers, so nothing here catches a client that sends the lock id as ?lock_id=."
+        },
+        "API-68": {
+          "section": "DELETE /v1/cache/{key}/lock",
+          "binds": "server",
+          "gap": "No public vector exercises the server, so nothing here catches a release handler that ignores the legacy ?lock_id=, or prefers it to the header."
+        },
+        "API-69": {
+          "section": "DELETE /v1/cache/{key}/lock",
+          "binds": "sdk",
+          "gap": "As API-67, for a client that sends both the header and the query parameter."
+        },
+        "API-70": {
+          "section": "GET /v1/cache/{key}/ttl",
+          "binds": "server",
+          "gap": "No public vector exercises the server, so nothing here catches a /ttl handler that answers 404 for a no-expiry entry."
+        },
+        "API-71": {
+          "section": "GET /v1/cache/{key}/ttl",
+          "binds": "sdk",
+          "gap": "No vector presents a /ttl response, so nothing here catches a client that coerces a null ttl to 0 or to a negative sentinel such as -1, or raises on it."
+        },
+        "API-72": {
+          "section": "GET /v1/cache/{key}/ttl",
+          "binds": "caller",
+          "gap": "Whether every /ttl reader of a key accepts null is a fact of the deployment, which no vector or SDK test can observe."
+        },
+        "API-73": {
+          "section": "PATCH /v1/cache/{key}/ttl",
+          "binds": "server",
+          "gap": "As API-56."
+        },
+        "API-74": {
+          "section": "SSRF Protection",
+          "binds": "sdk",
+          "gap": "No vector holds an API URL, so nothing here checks HTTPS-only, the listed private ranges or the hostname allowlist."
+        }
+      },
+      "retired": {}
+    },
     "spec/wire-format.md": {
       "prefix": "WIRE",
       "next": 25,
