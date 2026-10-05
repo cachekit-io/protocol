@@ -234,10 +234,11 @@ def layout(lines: list[str]) -> list[Leaf]:
     Each line first continues every open blockquote and list item it can. It may then open
     new ones, and a new leaf block. A line that opens nothing joins the open paragraph, even
     one whose containers it did not continue (a lazy continuation line), or else continues an
-    open table or starts a paragraph. A list item that would interrupt a paragraph must hold
-    text and, if ordered, start at 1; a setext underline, a table and an HTML block of type 7
-    are judged by the same rule. Only spaces are read as indentation, so a tab is an error, and
-    so is a code fence still open at the end of the file.
+    open table or starts a paragraph. Only a list item that holds text and, if ordered, starts
+    at 1 interrupts a paragraph, and an HTML block of type 7 never does; a setext underline or
+    a table's delimiter row acts only on a paragraph whose containers the line continues. Only
+    spaces are read as indentation, so a tab is an error, and so is a code fence still open at
+    the end of the file.
     """
     stack: list[object] = []  # open containers, outermost first: QUOTE or an Item
     leaves: list[Leaf] = []
@@ -331,7 +332,7 @@ def layout(lines: list[str]) -> list[Leaf]:
                 break
             if not opened:
                 del stack[matched:]
-                leaf, opened = None, True
+                opened = True
             if stack and isinstance(stack[-1], Item):
                 stack[-1].filled = True
             stack.append(container)

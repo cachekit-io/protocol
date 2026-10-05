@@ -365,6 +365,13 @@ CASES: list[Case] = [
         1,
         "has no vector named 'reject_int_overflowed'",
     ),
+    # Every defect is reported, not just the first: the second misspelt name must be named too.
+    (
+        "two misspelt vectors in one entry",
+        entry("IOP-9", vectors=["interop-mode.json:reject_int_overflowed", "interop-mode.json:reject_nan_twice"]),
+        1,
+        "has no vector named 'reject_nan_twice'",
+    ),
     (
         "fixture that does not exist",
         entry("IOP-36", vectors=["interop-modes.json"]),
@@ -436,8 +443,8 @@ CASES: list[Case] = [
         both(
             append(
                 "tools/interop-crosscheck.mjs",
-                '\nconst opener = "\\"/*";\nconst slashes = /\\/*/;\nconst again = () => { return /\\/*/; };\n'
-                "const klass = /[/]/*2;\n// a lone ` in a comment\nfunction realProbe() {}\n",
+                "\nconst slashes = /\\/*/;\nconst again = () => { return /\\/*/; };\nconst klass = /[/]/*2;\n"
+                'const opener = "\\"/*";\n// a lone ` in a comment\nfunction realProbe() {}\n',
             ),
             entry("IOP-10", tests=["tools/interop-crosscheck.mjs:realProbe"]),
             report,
