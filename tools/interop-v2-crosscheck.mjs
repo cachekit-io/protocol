@@ -124,7 +124,8 @@ function parseContainer(data) {
   const body = data.subarray(2);
   let pos = 0;
   const need = (k) => {
-    // k against the bytes left, never pos + k, which wraps in a 32-bit type.
+    // k against the bytes left: the spec's form, since pos + k wraps in a 32-bit
+    // reader. JS numbers do not wrap at these sizes; this mirrors the spec.
     if (k > body.length - pos) throw new Error("container body truncated");
   };
 
@@ -192,8 +193,7 @@ function parseContainer(data) {
     } else {
       throw new Error(`payload must be msgpack bin (0xc4/0xc5/0xc6), got marker 0x${m.toString(16)}`);
     }
-    // The remaining-bytes check, made before any data byte is read. With count === 3
-    // checked first, it also keeps the body within rule 2's declared-length budget.
+    // The remaining-bytes check, made before any data byte is read.
     if (len > body.length - pos) throw new Error("bin length header exceeds remaining input");
     const p = body.subarray(pos, pos + len);
     pos += len;

@@ -194,7 +194,7 @@
     },
     {
       "name": "reject_forged_bin32_length",
-      "description": "bin32 payload header declaring 4 GiB (0xffffffff) with no data following. Rule 2's declared-length budget forbids allocating for the declared length, and the remaining-bytes check rejects it before any data byte is read. A reader that allocates 4 GiB and then hits the end of input also errors, so the conformance test of spec/interop-v2.md#sdk-implementation-requirements, item 7, asserts which check rejected it",
+      "description": "bin32 payload header declaring 4 GiB (0xffffffff) with no data following; the remaining-bytes check rejects it before any allocation (spec item 7)",
       "container_hex": "c102930005c6ffffffff",
       "error": "bin length header exceeds remaining input"
     },
@@ -267,20 +267,44 @@
     {
       "name": "reject_count_array16_forged",
       "description": "array16 header declaring 65,535 elements, followed by three complete elements",
-      "container_hex": "c102dcffff0000c400",
+      "container_hex": "c102dcffff0001c401c0",
       "error": "container body must be a 3-element array"
     },
     {
       "name": "reject_count_array32_forged",
       "description": "array32 header declaring 4,294,967,295 elements, followed by three complete elements",
-      "container_hex": "c102ddffffffff0000c400",
+      "container_hex": "c102ddffffffff0001c401c0",
       "error": "container body must be a 3-element array"
     },
     {
       "name": "reject_count_four",
       "description": "fixarray(4) header followed by three complete elements",
-      "container_hex": "c102940000c400",
+      "container_hex": "c102940001c401c0",
       "error": "container body must be a 3-element array"
+    },
+    {
+      "name": "reject_forged_bin32_length_within_caps",
+      "description": "method 0, original_size and bin32 length both 2^29 - 1 (inside every Security Limit, and equal), no data following. Only the remaining-bytes check or the declared-length budget can reject it, so a reader that applies the caps to the declared length and then allocates for it fails here",
+      "container_hex": "c1029300ce1fffffffc61fffffff",
+      "error": "bin length header exceeds remaining input"
+    },
+    {
+      "name": "reject_container_empty",
+      "description": "Zero-byte container",
+      "container_hex": "",
+      "error": "truncated container (magic + version bytes required)"
+    },
+    {
+      "name": "reject_container_magic_only",
+      "description": "One-byte container: the magic byte alone",
+      "container_hex": "c1",
+      "error": "truncated container (magic + version bytes required)"
+    },
+    {
+      "name": "reject_truncated_empty_body",
+      "description": "Magic and version, then no body",
+      "container_hex": "c102",
+      "error": "container body truncated"
     },
     {
       "name": "reject_truncated_uint64",
