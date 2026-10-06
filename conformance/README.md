@@ -41,10 +41,13 @@ MUST NOT is one keyword, with its id after NOT, only where a reader sees one phr
 words parted only by white space, after any emphasis that closes on MUST (`**MUST** NOT`).
 On one line that holds in any block, a table row included. Across a line break, both words
 must sit in one paragraph or heading, and a `>` between them must be one of the quote markers
-that continue it. In an HTML block a line break parts them, because a `<pre>` element keeps it
-and `check` does not track elements, so keep MUST NOT on one line there. A MUST whose NOT
-starts another block, sits past a literal `>`, or opens emphasis of its own (`MUST **NOT**`)
-stands alone and carries its own id. A keyword that
+that continue it. Two lines of an HTML block, or a hard line break (two spaces or a backslash
+at the end of a line), may show apart: a `<pre>` element keeps a line break, a `<div>` does not, and `check`
+does not track elements. So `check` reports MUST and NOT across one of those breaks wherever
+the id sits: keep MUST NOT on one line there. For the same reason, a raw `<pre>` tag inside a
+paragraph, heading or table cell is an error; start the element on a line of its own. A MUST
+whose NOT starts another block, sits past a literal `>`, or opens emphasis of its own
+(`MUST **NOT**`) stands alone and carries its own id. A keyword that
 introduces a list ("An SDK implementation of interop mode MUST:") carries one id,
 and a keyword inside one of the list's items carries its own; the lead-in's *gap* records only
 what no item's id owns. A capitalised keyword used as a word rather than as a requirement

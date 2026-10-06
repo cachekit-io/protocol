@@ -35,12 +35,15 @@ footnote references and GFM's extended autolinks (a bare www. or http:// address
 plain text. MUST NOT is one keyword only where a reader sees one phrase: both words on one
 line, or across a line break inside one paragraph or heading, with nothing a reader sees
 between them. So an id after a NOT in another block, or past a literal >, never marks the
-MUST before it. An HTML block is raw HTML, so only its comments are hidden, each as far as
-GitHub's HTML sanitizer ends it, at its first --> or --!>. A keyword inside a code block, or
-inside an HTML comment that spans lines of an HTML block, is an error (a comment on one line
-is hidden like an inline one), unless the block is a fence that opens at column 0, outside
-every container, with <!-- not-a-requirement --> on the line before it: if a block were
-misread, an error fails closed where skipping would hide text.
+MUST before it. MUST and NOT on two lines of an HTML block, or across a hard line break, are
+an error wherever the id sits: GitHub may show the two lines apart (a <pre> keeps the break,
+a <div> does not, and elements are not tracked). An HTML block is raw HTML, so only its
+comments are hidden, each as far as GitHub's HTML sanitizer ends it, at its first --> or
+--!>. A keyword inside a code block, or inside an HTML comment that spans lines of an HTML
+block, is an error (a comment on one line is hidden like an inline one), unless the block is
+a fence that opens at column 0, outside every container, with <!-- not-a-requirement --> on
+the line before it: if a block were misread, an error fails closed where skipping would hide
+text.
 
 **What this does NOT catch.** It checks that a mapping exists and that it names real vectors
 and tests. It cannot check that they exercise the requirement: whether a plausible wrong
@@ -54,11 +57,12 @@ and `next` going down; it cannot tell an existing id moved onto a different rule
 Fails closed: an unreadable or malformed file, a duplicate JSON key, a duplicate vector name,
 a tab, vertical tab, form feed or lone carriage return in a spec file (only spaces and line
 feeds are modelled), a footnote definition, or a paragraph that opens like a link reference
-definition (GitHub moves or hides their text, which is not modelled either), a code fence open
-at the end of the file, an HTML block that leaves a comment open, an index that lists no spec
-file, or a vendored sha256 that matches no revision of its fixture is an error, not a pass. A
-guard that silently checks nothing is worse than no guard. Uses explicit failures rather than
-`assert`, so it cannot be defanged by `-O`.
+definition (GitHub moves or hides their text, which is not modelled either), a raw <pre> tag
+inside a paragraph, heading or table cell (GitHub keeps the line breaks inside it), a code
+fence open at the end of the file, an HTML block that leaves a comment open, an index that
+lists no spec file, or a vendored sha256 that matches no revision of its fixture is an
+error, not a pass. A guard that silently checks nothing is worse than no guard. Uses
+explicit failures rather than `assert`, so it cannot be defanged by `-O`.
 
 Usage:
     python3 tools/conformance.py check [--base REF] [ROOT]   exit 1 on any defect
@@ -103,13 +107,21 @@ FILE_FIELDS = {"prefix", "next", "requirements", "retired"}
 
 # A hard keyword is a whole word (an underscore around it is emphasis, not a letter). MUST NOT
 # may be split by a line break, a blockquote marker, or emphasis closed after MUST; scan() keeps
-# the two words together only where a renderer shows them as one phrase.
+# the two words together only where a renderer shows them as one phrase. A hard line break counts
+# with any escaped backslashes (\\) before it, so an id after MUST cannot hide a split behind them.
 CLOSER = re.compile(r"\*{1,3}|_{1,3}")
-GAP = rf"(?:{CLOSER.pattern})?[\s>]+"
+GAP = rf"(?:{CLOSER.pattern})?(?: *(?:\\\\)*(?:\\| {{2,}})(?=\n))?[\s>]+"
+# A hard line break in a paragraph or heading: two spaces, or a backslash, at the end of a line. Only GAP's
+# matches are searched, and GAP admits a backslash before a line break only as the last of an odd run.
+HARD_BREAK = re.compile(r"(?:  |\\)\n")
 KEYWORD = re.compile(rf"(?<![A-Za-z0-9])(?P<must>MUST)(?:{GAP}(?P<not>NOT))?(?![A-Za-z0-9])")
 NOT_AFTER = re.compile(rf"{GAP}(?P<not>NOT)(?![A-Za-z0-9])")
 MARKER = re.compile(r'<sup id="([a-z0-9-]+)">([A-Z][A-Z0-9]*-([1-9][0-9]*))</sup>')
 EXEMPT = "<!-- not-a-requirement -->"
+SPLIT = (
+    "MUST and NOT sit on two lines that GitHub may show apart (in an HTML block, or past a hard line break); "
+    "put MUST NOT on one line"
+)
 # Why a keyword inside a block is an error, by the kind of block.
 IN_BLOCK = {
     "code fence": (
@@ -192,6 +204,8 @@ INLINE = re.compile(
 # A comment as GitHub's HTML sanitizer reads it, in an HTML block or again inside the renderer's own longer inline
 # comment: <!--> and <!---> are whole, and any other ends at the first --> or --!> past its <!--. It hides that.
 COMMENT = re.compile(r"<!--(?:-?>|.*?--!?>)", re.DOTALL)
+# A raw <pre> tag: GitHub keeps the line breaks inside the element, which inline() does not model.
+PRE_TAG = re.compile(r"<pre(?=[ \n/>])", re.I)
 # The first line of a GitHub alert, which GitHub shows as the alert's title instead.
 ALERT = re.compile(r"\[!(?:NOTE|TIP|IMPORTANT|WARNING|CAUTION)\]")
 PREFIX = re.compile(r"[A-Z][A-Z0-9]*")
@@ -495,21 +509,37 @@ def blank(match: re.Match[str]) -> str:
     return spaces(match.group(0))
 
 
-def inline(text: str) -> str:
-    """One paragraph, heading or table cell with its code spans and comments blanked, read as GitHub reads it.
+def inline(text: str, line: int) -> str:
+    """One paragraph, heading or table cell, starting on line `line`, with its code spans and comments blanked,
+    read as GitHub reads it.
 
     A comment is blanked only as far as GitHub's HTML sanitizer hides it (COMMENT), though the renderer's
     own comment, sometimes longer, still holds every backtick in it. At the first opener that closes nothing
     (INLINE's stop), the rest of `text` is read as it stands: GitHub may hide part of it, but its reading
     there depends on renderer state this check does not keep, and reading more can only fail closed.
-    Nothing else is blanked: a keyword inside a tag, which GitHub does not show, is still read.
+    Nothing else is blanked: a keyword inside a tag, which GitHub does not show, is still read. A raw <pre>
+    tag is an error, and so is any <pre past a stop: GitHub closes the paragraph before the element and
+    keeps the line breaks inside it, so MUST and NOT on two of its lines would read as one phrase here and
+    show on two lines there.
     """
+
+    def no_pre(start: int) -> None:
+        if pre := PRE_TAG.search(text, start):
+            raise Defect(
+                f"line {line + text.count(chr(10), 0, pre.start())}: a raw <pre> tag inside a paragraph, heading or "
+                "table cell; start the <pre> on a line of its own (GitHub keeps the line breaks inside it, which this "
+                "check models only in an HTML block)"
+            )
+
     out: list[str] = []
     pos = 0
     for m in INLINE.finditer(text):
         if m.lastgroup == "stop":
+            no_pre(m.start())
             break
         start, end = m.span()
+        if PRE_TAG.match(m.group(0)):
+            no_pre(start)
         if m.lastgroup == "code":
             hide = end
         elif m.lastgroup == "comment":
@@ -521,13 +551,13 @@ def inline(text: str) -> str:
     return "".join(out) + text[pos:]
 
 
-def mask_cells(row: str) -> str:
-    """A table row with its inline code and comments blanked cell by cell: GFM splits cells first."""
+def mask_cells(row: str, line: int) -> str:
+    """A table row, on line `line`, with its inline code and comments blanked cell by cell: GFM splits cells first."""
     out, start = [], 0
     for pipe in PIPE.finditer(row):
-        out += [inline(row[start : pipe.start()]), "|"]
+        out += [inline(row[start : pipe.start()], line), "|"]
         start = pipe.end()
-    return "".join(out) + inline(row[start:])
+    return "".join(out) + inline(row[start:], line)
 
 
 def title(leaf: Leaf, lines: list[str]) -> str:
@@ -574,14 +604,14 @@ def mask(text: str) -> Masked:
             spans = list(zip(leaf.lines, leaf.starts))
             if leaf.kind == "heading" and len(spans) > 1:
                 spans.pop()  # a setext heading's underline
-            read = inline("\n".join(lines[i][s:] for i, s in spans))
+            read = inline("\n".join(lines[i][s:] for i, s in spans), first + 1)
             for (i, s), part in zip(spans, read.split("\n")):
                 masked[i] = lines[i][:s] + part
             if leaf.kind == "heading":
                 headings.append((at[first], title(leaf, lines)))
         elif leaf.kind == "table":
             for i in leaf.lines:
-                masked[i] = mask_cells(lines[i])
+                masked[i] = mask_cells(lines[i], i + 1)
         elif leaf.kind in ("code fence", "indented code block"):
             # Only a fence at column 0, outside every container, can be exempted: a line that starts
             # with its run of backticks or tildes, which no indented code block can.
@@ -613,19 +643,37 @@ def scan(text: str) -> Spec:
         """The index of the line that holds `offset`."""
         return bisect_right(masked.at, offset) - 1
 
+    def split(gap_start: int, gap_end: int) -> bool:
+        """Whether MUST and a NOT after it sit on two lines of one block that GitHub may show as two lines.
+
+        In an HTML block a <pre> element keeps a line break and a <div> renders it as a space, and elements
+        are not tracked, so any two of its lines may show apart. In a paragraph or heading, a hard line break
+        (two spaces or a backslash at the end of a line) shows, too. Either way MUST NOT is not one phrase, and an id beside
+        MUST would sit between the words wherever the break renders as a space: such a pair is an error.
+        """
+        first, last = line_of(gap_start), line_of(gap_end)
+        leaf = masked.leaf_of_line[first][0]
+        if first == last or masked.leaf_of_line[last][0] is not leaf:
+            return False
+        if leaf.kind == "html":
+            return True
+        return leaf.kind in ("paragraph", "heading") and HARD_BREAK.search(text, gap_start, gap_end) is not None
+
     def one_phrase(gap_start: int, gap_end: int) -> bool:
         """Whether the text between MUST and a NOT after it renders as space, so the two read as one MUST NOT.
 
         On one line the words join in any block unless a > parts them. Across lines, both must sit in one
-        paragraph or heading, whose line breaks render as spaces, and a > on a later line only as one of
-        the container markers before its text; anywhere else a renderer shows a >. An HTML block can keep
-        its line breaks (inside <pre>), and elements are not tracked, so two of its lines never join.
+        paragraph or heading, whose line breaks render as spaces, with no hard line break between them (see
+        split()), and a > on a later line only as one of the container markers before its text; anywhere
+        else a renderer shows a >.
         """
         first, last = line_of(gap_start), line_of(gap_end)
         if first == last:
             return ">" not in text[gap_start:gap_end]
         leaf = masked.leaf_of_line[first][0]
         if leaf.kind not in ("paragraph", "heading") or masked.leaf_of_line[last][0] is not leaf:
+            return False
+        if split(gap_start, gap_end):
             return False
         # What a reader sees of the gap: the rest of MUST's line, and each later line past its container markers.
         shown = [text[gap_start : masked.at[first + 1]]]
@@ -666,14 +714,16 @@ def scan(text: str) -> Spec:
             rid = marker.group(2)
             if marker.group(1) != rid.lower():
                 problem = f'anchor id="{marker.group(1)}" does not match {rid} (it must be "{rid.lower()}")'
-            elif (
-                word == "MUST"
-                and (after := NOT_AFTER.match(text, marker.end()))
-                and one_phrase(marker.end(), after.start("not"))
-            ):
-                problem = f"{rid} sits between MUST and NOT; it goes after NOT"
+            elif word == "MUST" and (after := NOT_AFTER.match(text, marker.end())):
+                if one_phrase(marker.end(), after.start("not")):
+                    problem = f"{rid} sits between MUST and NOT; it goes after NOT"
+                elif split(marker.end(), after.start("not")):
+                    problem = SPLIT
         elif text.startswith("<sup", pos):
             problem = 'malformed id marker (expected <sup id="iop-3">IOP-3</sup>)'
+        # Two words that did not join and sit on two lines of one block (only white space parts them, so no id).
+        if m.group("not") is not None and split(m.end("must"), m.start("not")):
+            problem = SPLIT
         keywords.append(Keyword(word, start, line, section, rid, problem))
     stray = [(line_of(offset) + 1, mk.group(2)) for offset, mk in markers.items() if offset not in used]
     return Spec(text, keywords, stray, masked.leaf_of_line)

@@ -626,14 +626,162 @@ CASES: list[Case] = [
         1,
         "this MUST NOT has no id",
     ),
-    # A pre block keeps its line breaks, and the check tracks no HTML elements, so two lines of an HTML block
-    # never join: the id after NOT does not mark the MUST, which needs its own.
+    # --- MUST and NOT on two lines that GitHub may show apart: an error wherever the id sits ---
+    # A pre block keeps its line breaks and a div renders them as spaces, and the check tracks no HTML elements, so
+    # two lines of an HTML block never join, and the pair is an error: past a <pre> the id after NOT does not mark
+    # the MUST, and in a <div> an id after MUST shows between the words. Each was checked against GitHub's renderer.
     (
         "MUST and NOT on two lines of a pre block",
         append(SPEC, f"\n<pre>\nReaders MUST\nNOT{marker('IOP-37')} crash.\n</pre>\n"),
         1,
+        f"{SPEC}:{SPEC_END + 3}: MUST: MUST and NOT sit on two lines that GitHub may show apart",
+    ),
+    (
+        "id after MUST, with NOT on the next line of a div",
+        append(SPEC, f"\n<div>\nReaders MUST{marker('IOP-37')}\nNOT crash.\n</div>\n"),
+        1,
+        f"{SPEC}:{SPEC_END + 3}: MUST: MUST and NOT sit on two lines that GitHub may show apart",
+    ),
+    (
+        "MUST and NOT across a blank line of a pre block",
+        append(SPEC, f"\n<pre>\nReaders MUST\n\nNOT{marker('IOP-37')} crash.\n</pre>\n"),
+        1,
+        "MUST and NOT sit on two lines that GitHub may show apart",
+    ),
+    # A hard line break (two spaces ending the line) shows in a paragraph or heading, too.
+    (
+        "MUST and NOT across a hard line break",
+        append(SPEC, f"\nReaders **MUST**  \nNOT{marker('IOP-37')} crash.\n"),
+        1,
+        f"{SPEC}:{SPEC_END + 2}: MUST: MUST and NOT sit on two lines that GitHub may show apart",
+    ),
+    (
+        "id after MUST, with NOT past a hard line break",
+        append(SPEC, f"\nReaders MUST{marker('IOP-37')}  \nNOT crash.\n"),
+        1,
+        "MUST and NOT sit on two lines that GitHub may show apart",
+    ),
+    # A backslash at the end of a line is a hard line break too, after emphasis and a space as well; past it, a
+    # space shows the backslash and the words join, and an escaped backslash is text.
+    (
+        "id after MUST, with NOT past a backslash hard line break",
+        append(SPEC, f"\nReaders MUST{marker('IOP-37')}\\\nNOT crash.\n"),
+        1,
+        f"{SPEC}:{SPEC_END + 2}: MUST: MUST and NOT sit on two lines that GitHub may show apart",
+    ),
+    (
+        "MUST and NOT across a backslash hard line break after emphasis",
+        append(SPEC, f"\nReaders **MUST** \\\nNOT{marker('IOP-37')} crash.\n"),
+        1,
+        f"{SPEC}:{SPEC_END + 2}: MUST: MUST and NOT sit on two lines that GitHub may show apart",
+    ),
+    (
+        "MUST and NOT across a backslash hard line break in a blockquote",
+        append(SPEC, "\n> Readers MUST\\\n> NOT crash.\n"),
+        1,
+        "MUST and NOT sit on two lines that GitHub may show apart",
+    ),
+    # A run of backslashes is read in pairs: an odd run ends in a hard line break, after the escaped ones, and so
+    # do two spaces after an escaped backslash; an escaped backslash and one space are text, so MUST stands alone.
+    (
+        "id after MUST, with NOT past three backslashes",
+        append(SPEC, f"\nReaders MUST{marker('IOP-37')}\\\\\\\nNOT crash.\n"),
+        1,
+        f"{SPEC}:{SPEC_END + 2}: MUST: MUST and NOT sit on two lines that GitHub may show apart",
+    ),
+    (
+        "MUST and NOT past five backslashes after emphasis",
+        append(SPEC, f"\nReaders **MUST** \\\\\\\\\\\nNOT{marker('IOP-37')} crash.\n"),
+        1,
+        f"{SPEC}:{SPEC_END + 2}: MUST: MUST and NOT sit on two lines that GitHub may show apart",
+    ),
+    (
+        "id after MUST, with NOT past an escaped backslash and two spaces",
+        append(SPEC, f"\nReaders MUST{marker('IOP-37')}\\\\  \nNOT crash.\n"),
+        1,
+        f"{SPEC}:{SPEC_END + 2}: MUST: MUST and NOT sit on two lines that GitHub may show apart",
+    ),
+    ("escaped backslash and a space ending MUST's line", append(SPEC, "\nReaders MUST\\\\ \nNOT crash.\n"), 1, "this MUST has no id"),
+    ("backslash and a space ending MUST's line", append(SPEC, "\nReaders MUST\\ \nNOT crash.\n"), 1, "this MUST has no id"),
+    ("escaped backslash ending MUST's line", append(SPEC, "\nReaders MUST\\\\\nNOT crash.\n"), 1, "this MUST has no id"),
+    ("backslash ending a table row", append(SPEC, "\n| a |\n| - |\n| Readers MUST\\\nNOT crash.\n"), 1, "this MUST has no id"),
+    (
+        "MUST and NOT across a hard line break in a setext heading",
+        append(SPEC, "\nReaders MUST  \nNOT crash\n---\n"),
+        1,
+        "MUST and NOT sit on two lines that GitHub may show apart",
+    ),
+    # One space ending the line is no hard line break, and the words join; on one line of a div they join too.
+    ("MUST NOT across one trailing space", append(SPEC, "\nReaders MUST \nNOT crash.\n"), 1, "this MUST NOT has no id"),
+    ("MUST NOT on one line of a div", append(SPEC, "\n<div>\nReaders MUST NOT crash.\n</div>\n"), 1, "this MUST NOT has no id"),
+    ("literal > between MUST and NOT on one line of a div", append(SPEC, "\n<div>\nReaders MUST > NOT crash.\n</div>\n"), 1, "this MUST has no id"),
+    # Table rows never join, and a row's trailing spaces are no hard line break.
+    ("MUST ending a table row with two spaces", append(SPEC, "\n| a |\n| - |\n| Readers MUST  \nNOT crash.\n"), 1, "this MUST has no id"),
+    # A MUST that ends an HTML block stands alone when NOT opens the paragraph after it.
+    # Only a MUST stands apart from a NOT after it: a MUST NOT with its id is whole, whatever follows.
+    (
+        "id after MUST NOT, with another NOT on the next line of a div",
+        both(
+            append(SPEC, f"\n## Phrase\n\n<div>\nReaders MUST NOT{marker('IOP-37')}\nNOT twice.\n</div>\n"),
+            new_requirement("IOP-37", "Phrase"),
+            report,
+        ),
+        0,
+        OK,
+    ),
+    ("NOT opening the paragraph after an HTML block", append(SPEC, "\n<div>\nReaders MUST\n\nNOT crash.\n"), 1, "this MUST has no id"),
+    (
+        "two spaces ending an HTML block, NOT opening the paragraph after it",
+        append(SPEC, "\n<div>\nReaders MUST  \n\nNOT crash.\n"),
+        1,
         "this MUST has no id",
     ),
+    # GitHub closes a paragraph before an inline <pre> element and keeps the line breaks inside it, which the check
+    # models only in an HTML block, so a raw <pre> tag in a paragraph, heading or table cell is an error. Past an
+    # opener that closes nothing the rest is read as it stands, so any <pre there is an error too.
+    (
+        "raw <pre> tag inside a paragraph",
+        append(SPEC, "\nReaders <pre>MUST\nNOT</pre> crash.\n"),
+        1,
+        f"{SPEC}: line {SPEC_END + 2}: a raw <pre> tag inside a paragraph",
+    ),
+    (
+        "raw <PRE> tag with an attribute on a paragraph's second line",
+        append(SPEC, '\nIntro line\nReaders <PRE class="x">MUST\nNOT</PRE> crash.\n'),
+        1,
+        f"{SPEC}: line {SPEC_END + 3}: a raw <pre> tag inside a paragraph",
+    ),
+    ("raw <pre> tag inside a heading", append(SPEC, "\nReaders <pre>MUST\nNOT</pre>\n---\n"), 1, "a raw <pre> tag"),
+    (
+        "raw <pre> tag inside a table cell",
+        append(SPEC, "\n| a | b |\n| - | - |\n| x | <pre>y</pre> |\n"),
+        1,
+        f"{SPEC}: line {SPEC_END + 4}: a raw <pre> tag",
+    ),
+    (
+        "raw <pre> tag inside a row's last cell, past its last pipe",
+        append(SPEC, "\n| a | b |\n| - | - |\n| x | y\n| x | <pre>y</pre>\n"),
+        1,
+        f"{SPEC}: line {SPEC_END + 5}: a raw <pre> tag",
+    ),
+    ("raw <pre tag with its attribute on the next line", append(SPEC, '\nReaders <pre\nclass="x">MUST NOT</pre> crash.\n'), 1, "a raw <pre> tag"),
+    ("raw <pre/> tag inside a paragraph", append(SPEC, "\nReaders <pre/>MUST\nNOT crash.\n"), 1, "a raw <pre> tag"),
+    (
+        "<pre past an opener that closes nothing",
+        append(SPEC, "\nA `` run, then\nthe <pre>MUST\nNOT</pre> crash.\n"),
+        1,
+        f"{SPEC}: line {SPEC_END + 3}: a raw <pre> tag",
+    ),
+    # A <pre> in a code span before an opener that closes nothing is still code: only what follows the opener is read
+    # as it stands.
+    ("<pre> in a code span before an opener that closes nothing", append(SPEC, "\nReaders `<pre>` MUST NOT, and a `` run.\n"), 1, "this MUST NOT has no id"),
+    # A <pre> in a code span, after an escape, in an attribute value, or a tag whose name only starts with pre is
+    # text, as GitHub shows it, so the words join.
+    ("<pre> in a code span", append(SPEC, "\nReaders `<pre>` MUST\nNOT crash.\n"), 1, "this MUST NOT has no id"),
+    ("escaped <pre>", append(SPEC, "\nReaders \\<pre> MUST\nNOT crash.\n"), 1, "this MUST NOT has no id"),
+    ("<pre> in an attribute value", append(SPEC, '\nReaders <span title="<pre>">MUST\nNOT</span> crash.\n'), 1, "this MUST NOT has no id"),
+    ("tag whose name starts with pre", append(SPEC, "\nReaders <prefix>MUST\nNOT crash.\n"), 1, "this MUST NOT has no id"),
+    ("<pre> on a line of its own", append(SPEC, "\n<pre>\nx\n</pre>\n"), 0, OK),
     # A line of non-breaking spaces is not blank, so the quote's paragraph runs on and GitHub shows one phrase,
     # across two line breaks and past the quote markers. A literal > on a line between the words shows.
     (
