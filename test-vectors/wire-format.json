@@ -385,7 +385,7 @@
     },
     {
       "name": "reject_envelope_slots_overclaim",
-      "description": "simple_string_bin with compressed_data's bin8 length raised from 18 to 38, all but the last byte after its header. Each header fits the input that follows it, but the declared slots, summed over the document, are 42, one past the input length minus one (41), so a budget of the whole input length passes it too. Readers MUST reject it at Retrieve Flow step 2's pre-scan, before anything is materialised. An SDK test asserts the pre-scan's own error (spec/interop-mode.md#decode-bounds). Every decoder also rejects it as truncated, so only that assertion catches a reader without the pre-scan, or with per-header checks only.",
+      "description": "simple_string_bin with compressed_data's bin8 length raised from 18 to 38, all but the last byte after its header. Each header fits the input that follows it, but the declared slots, summed over the document, are 42, one past the input length minus one (41), so a budget of the whole input length passes it too. Readers MUST reject it at Retrieve Flow step 2's pre-scan, before anything is materialised. An SDK test asserts the pre-scan's own error (spec/interop-mode.md#decode-bounds). Every decoder also rejects it: a generic one as truncated, a typed one as a wrong type at element 1, where byte 0x6b sits in place of the checksum array. So only that assertion catches a reader without the pre-scan, or with per-header checks only.",
       "reject_step": 2,
       "reject_check": "decode_bounds",
       "derived_from": "simple_string",
@@ -424,7 +424,7 @@
   "temporal_sentinel_vectors": [
     {
       "name": "temporal_sentinel_datetime",
-      "description": "the MessagePack map {\"__datetime__\": true, \"value\": \"2025-11-14T10:30:00+00:00\"}, as an auto-mode payload. An SDK's deserialization MUST revive it as its temporal type for a datetime, equal to 2025-11-14T10:30:00+00:00, not return the map. Interop mode's value profile keeps the map (interop-mode.json's datetime_sentinel_value).",
+      "description": "the MessagePack map {\"__datetime__\": true, \"value\": \"2025-11-14T10:30:00+00:00\"}, as an auto-mode payload. An SDK's deserialization MUST revive it as its temporal type for a datetime, equal to 2025-11-14T10:30:00+00:00, not return the map. interop-mode.json's datetime_sentinel_value pins the same map's bytes; revival in interop mode follows spec/interop-mode.md.",
       "payload_hex": "82ac5f5f6461746574696d655f5fc3a576616c7565b9323032352d31312d31345431303a33303a30302b30303a3030",
       "revives_to": {
         "type": "datetime",
@@ -433,7 +433,7 @@
     },
     {
       "name": "temporal_sentinel_date",
-      "description": "the MessagePack map {\"__date__\": true, \"value\": \"2025-11-14\"}, as an auto-mode payload. An SDK's deserialization MUST revive it as its temporal type for a date, equal to 2025-11-14, not return the map. Interop mode's value profile keeps the map (interop-mode.json's datetime_sentinel_value).",
+      "description": "the MessagePack map {\"__date__\": true, \"value\": \"2025-11-14\"}, as an auto-mode payload. An SDK's deserialization MUST revive it as its temporal type for a date, equal to 2025-11-14, not return the map. interop-mode.json's datetime_sentinel_value pins the same map's bytes; revival in interop mode follows spec/interop-mode.md.",
       "payload_hex": "82a85f5f646174655f5fc3a576616c7565aa323032352d31312d3134",
       "revives_to": {
         "type": "date",
@@ -442,7 +442,7 @@
     },
     {
       "name": "temporal_sentinel_time",
-      "description": "the MessagePack map {\"__time__\": true, \"value\": \"10:30:00\"}, as an auto-mode payload. An SDK's deserialization MUST revive it as its temporal type for a time, equal to 10:30:00, not return the map. Interop mode's value profile keeps the map (interop-mode.json's datetime_sentinel_value).",
+      "description": "the MessagePack map {\"__time__\": true, \"value\": \"10:30:00\"}, as an auto-mode payload. An SDK's deserialization MUST revive it as its temporal type for a time, equal to 10:30:00, not return the map. interop-mode.json's datetime_sentinel_value pins the same map's bytes; revival in interop mode follows spec/interop-mode.md.",
       "payload_hex": "82a85f5f74696d655f5fc3a576616c7565a831303a33303a3030",
       "revives_to": {
         "type": "time",

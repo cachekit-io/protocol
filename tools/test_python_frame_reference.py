@@ -275,13 +275,13 @@ for hdr, cause in (
     raw = next(v for v in doc["frame_vectors"] if v["name"] == "raw_payload_frame")
     _, payload = pfr.parse_frame(bytes.fromhex(raw["frame_hex"]))
     raw["frame_hex"] = (pfr.MAGIC + bytes([pfr.FRAME_VERSION]) + len(hdr).to_bytes(4, "big") + hdr + payload).hex()
-    doc["error_vectors"].append({"name": "bad_header", "frame_hex": raw["frame_hex"]})
+    doc["error_vectors"].append({"name": "bad_header", "frame_hex": raw["frame_hex"], "rejected_by": "header"})
     rc, out = run_verify(doc)
     check(
         f"header bytes {hdr.hex()}: verify exits 1 on a parse error only",
         rc == 1
         and [line for line in out.splitlines() if line.startswith("FAIL")] == [f"FAIL raw_payload_frame: parse error: {cause}"]
-        and "ok   bad_header (rejected)" in out.splitlines(),
+        and "ok   bad_header (rejected by the header check)" in out.splitlines(),
     )
 
 # --- a NaN header raises _reject_constant's own FrameError, not a re-wrap of it ---
@@ -330,13 +330,13 @@ for label, hdr, cause in (
     raw = next(v for v in doc["frame_vectors"] if v["name"] == "raw_payload_frame")
     _, payload = pfr.parse_frame(bytes.fromhex(raw["frame_hex"]))
     raw["frame_hex"] = (pfr.MAGIC + bytes([pfr.FRAME_VERSION]) + len(hdr).to_bytes(4, "big") + hdr + payload).hex()
-    doc["error_vectors"].append({"name": "bad_header", "frame_hex": raw["frame_hex"]})
+    doc["error_vectors"].append({"name": "bad_header", "frame_hex": raw["frame_hex"], "rejected_by": "header"})
     rc, out = run_verify(doc)
     check(
         f"header {label}: verify exits 1 on a parse error only",
         rc == 1
         and [line for line in out.splitlines() if line.startswith("FAIL")] == [f"FAIL raw_payload_frame: parse error: {cause}"]
-        and "ok   bad_header (rejected)" in out.splitlines(),
+        and "ok   bad_header (rejected by the header check)" in out.splitlines(),
     )
 
 # --- inner_msgpack_hex is checked against the decompressed bytes, not only twin against twin ---
@@ -609,6 +609,10 @@ next(v for v in doc["error_vectors"] if v["name"] == "bare_envelope_fed_to_frame
 rc, out = run_verify(doc)
 check("error vector rejected by another check than its rejected_by: FAIL by name",
       rc == 1 and fails_named(out, {"bare_envelope_fed_to_frame_reader"}))
+doc = copy.deepcopy(COMMITTED)
+del next(v for v in doc["error_vectors"] if v["name"] == "unsupported_frame_version_2")["rejected_by"]
+rc, out = run_verify(doc)
+check("error vector without rejected_by: FAIL by name", rc == 1 and fails_named(out, {"unsupported_frame_version_2"}))
 
 # --- encrypted-read group: verify pins the frames generate proved, and what each header claims ---
 def zero_ciphertext(doc: dict) -> None:
@@ -627,6 +631,8 @@ for label, mutate, names in (
      lambda d: d["encrypted_read_vectors"][2].update(outcome="miss"), {"ciphertext_key_not_in_keyring"}),
     ("a reader with no tenant", lambda d: d["encrypted_reader"].pop("tenant_id"), {"encrypted_reader"}),
     ("a reader that takes the header's tenant", lambda d: d["encrypted_reader"].update(tenant_source="header"),
+     {"encrypted_reader"}),
+    ("a reader with another tenant", lambda d: d["encrypted_reader"].update(tenant_id="00000000-0000-4000-8000-00000000000b"),
      {"encrypted_reader"}),
     ("the group dropped", lambda d: d.pop("encrypted_read_vectors"), {"encrypted_read_vectors"}),
     ("one vector dropped", lambda d: d["encrypted_read_vectors"].pop(3), {"encrypted_read_vectors"}),

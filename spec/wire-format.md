@@ -221,7 +221,7 @@ provenance and the downstream re-pin plan live in
 
 The `vectors` group pins both sides of the `bin8` → `bin16` boundary:
 `width_boundary_bin8_max` compresses to 255 bytes and `width_boundary_bin16_min`
-to 256, the first 253 and 254 bytes of `width_boundary_bin16`'s 300-byte input.
+to 256.
 It has no `bin32` pair. A pair with more than 65,535 compressed bytes would add
 roughly 590 KB of hex-encoded fixture data once the legacy array-of-integers
 twin is included, then be vendored into every SDK. The `bin16` → `bin32`
@@ -569,7 +569,7 @@ reproduce. What an SDK test asserts is the last column below:
 | `reject_checksum_nine_elements` | 2 | a ninth integer, 0, after the true 8-byte checksum | accepts it if it compares the first 8 checksum elements | the typed-decode error |
 | `reject_checksum_seven_elements` | 2 | the checksum array cut to its first 7 integers | accepts it if it compares only the checksum elements it was given | the typed-decode error |
 | `reject_legacy_element_above_255` | 2 | `simple_string`'s legacy element 2, `0x68`, written as uint16 360 (`cd 01 68`) | accepts it if it keeps an element's low 8 bits, as JavaScript's `Uint8Array.from` does | the typed-decode error |
-| `reject_envelope_slots_overclaim` | 2 | `simple_string_bin` with its `bin8` length raised to 38, all but the last byte after the header: each header fits what follows it, and the declared slots summed over the document (42) exceed the 42-byte input minus one by one | rejects it as truncated in the typed decode | the pre-scan's own error, before anything is materialised |
+| `reject_envelope_slots_overclaim` | 2 | `simple_string_bin` with its `bin8` length raised to 38, all but the last byte after the header: each header fits what follows it, and the declared slots summed over the document (42) exceed the 42-byte input minus one by one | rejects it in the typed decode: a generic decoder as truncated, a typed one as a wrong type at element 1 | the pre-scan's own error, before anything is materialised |
 | `reject_original_size_over_cap` | 4 | `original_size` 536,870,913 B, one byte over the cap, with 1,000 B of `compressed_data` that is not a valid LZ4 block | rejects it at step 5, by the ratio bound | the size-cap error, and the allocation bound below |
 | `reject_original_size_wraps_u32` | 4 | `original_size` 2³² + 16 B, encoded as `uint64`, with a block and checksum that match 16 B | rejects it at step 5; one that truncates `original_size` to 32 bits accepts it, and one that joins its 32-bit halves rejects it only on length | a rejection before decompression: the size-cap error, or a step-2 error from a range-checked decode into a narrower type; never a length or checksum error |
 | `reject_original_size_sign_bit` | 4 | `original_size` 2⁶³ + 16 B, encoded as `uint64`, with a block and checksum that match 16 B | rejects it at step 5; one that reinterprets the `uint64` as a signed `i64` reads it as negative, passes the size cap and the ratio bound, and fails later or crashes; one that truncates to 32 bits accepts it | a rejection before decompression: the size-cap error, or a step-2 error from a range-checked decode into a narrower type; never a length, allocation or checksum error |
@@ -905,12 +905,8 @@ release emitting `bin`) — an Arrow-envelope frame (structural checks), and
 must-reject error vectors — including a CK frame fed to a strict interop reader.
 
 Each CK error vector names, in `rejected_by`, the check that rejects it: `magic`, the
-7-byte `prefix_length`, `version` or `header_length`. Four sit one step from their
-check's boundary, on the default write's real header where the frame has one, so a
-reader whose check is off by one reaches a parsed header: a 6-byte frame, versions 2
-and 4, and a header length one past the bytes present. Two are other SDKs' containers, which cachekit-py refuses: a bare
-ByteStorage envelope (cachekit-ts's default) and plain MessagePack (cachekit-rs's, and
-cachekit-ts's with compression off).
+7-byte `prefix_length`, `version` or `header_length`, so a test can assert the frame
+parser's own error rather than a later miss.
 
 The `encrypted_read_vectors` group holds frames that a cache configured for encryption
 (`encrypted_reader`: a master key, a tenant, a cache key, and `tenant_source`

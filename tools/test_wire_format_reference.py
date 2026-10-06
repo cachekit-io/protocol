@@ -960,8 +960,8 @@ def check_payload_and_temporal_groups() -> list[str]:
     def drop_payload(fixture: dict) -> None:
         fixture["payload_reject_vectors"] = fixture["payload_reject_vectors"][1:]
 
-    def accept_payload(fixture: dict) -> None:
-        # Point a payload vector at a decode-bounds ACCEPT document: the builder no longer matches.
+    def renamed_source(fixture: dict) -> None:
+        # A field a builder derives, edited by hand: the builder no longer matches.
         fixture["payload_reject_vectors"][0]["derived_from"] = "decode-bounds.json:array16_256_backed_nils"
 
     def drop_temporal(fixture: dict) -> None:
@@ -973,9 +973,9 @@ def check_payload_and_temporal_groups() -> list[str]:
 
     cases = [
         ("dropped payload-reject vector is set drift", drop_payload, "payload-reject-vector set drifted"),
-        ("altered payload-reject vector fails by name", accept_payload, "FAIL payload_array32_max_claim_alone"),
+        ("a hand-edited payload-reject field fails by name", renamed_source, "FAIL payload_array32_max_claim_alone"),
         ("missing temporal group is set drift", drop_temporal, "temporal-sentinel-vector set drifted"),
-        ("a sentinel value of the wrong type fails by name", bad_iso, "FAIL temporal_sentinel_date"),
+        ("a hand-edited sentinel value fails by name", bad_iso, "FAIL temporal_sentinel_date"),
     ]
     with tempfile.TemporaryDirectory() as td:
         for label, mutate, marker in cases:

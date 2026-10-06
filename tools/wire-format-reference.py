@@ -59,8 +59,8 @@ What `verify` proves, for every vector pair in ../test-vectors/wire-format.json:
      what its builder derives from its decode-bounds.json document, the reader
      accepts its envelope and returns that document, and the pre-scan rejects the
      document for the reasons decode-bounds.json records.
- 10. The temporal-sentinel set is exactly TEMPORAL_SENTINELS, and each entry's
-     payload is the canonical sentinel map whose `value` parses as its type.
+ 10. The temporal-sentinel set is exactly TEMPORAL_SENTINELS, and each entry equals
+     what its builder derives: the canonical sentinel map and the value it revives to.
 
 Usage:
     python3 tools/wire-format-reference.py verify     # default
@@ -91,7 +91,6 @@ either; regression-tested by tools/test_wire_format_reference.py.
 
 from __future__ import annotations
 
-import datetime
 import importlib.util
 import json
 import sys
@@ -834,8 +833,9 @@ def build_reject_overclaim(bases: dict[str, dict]) -> dict:
         f"over the document, are {walked['declared_slots']}, one past the input length minus one ({len(env) - 1}), "
         "so a budget of the whole input length passes it too. Readers "
         "MUST reject it at Retrieve Flow step 2's pre-scan, before anything is materialised. An SDK test asserts "
-        "the pre-scan's own error (spec/interop-mode.md#decode-bounds). Every decoder also rejects it as "
-        "truncated, so only that assertion catches a reader without the pre-scan, or with per-header checks only.",
+        "the pre-scan's own error (spec/interop-mode.md#decode-bounds). Every decoder also rejects it: a generic "
+        "one as truncated, a typed one as a wrong type at element 1, where byte 0x6b sits in place of the checksum "
+        "array. So only that assertion catches a reader without the pre-scan, or with per-header checks only.",
         env=env, check="decode_bounds",
     )
 
@@ -906,24 +906,14 @@ DECODE_BOUNDS_PATH = _HERE.parent / "test-vectors" / "decode-bounds.json"
 PAYLOAD_REJECT_SOURCES = ("array32_max_claim_alone", "nested_array16_each_header_fits_sum_overclaims")
 
 
-def _literal_block(data: bytes) -> bytes:
-    """A literals-only LZ4 block: one sequence, no match."""
-    n = len(data)
-    if n < 15:
-        return bytes([n << 4]) + data
-    rest, ext = n - 15, bytearray()
-    while rest >= 255:
-        ext.append(255)
-        rest -= 255
-    return b"\xf0" + bytes(ext) + bytes([rest]) + data
-
-
 def _payload_reject_builder(source: str) -> Callable[[Callable[[bytes], bytes]], dict]:
     def build(checksum_of: Callable[[bytes], bytes]) -> dict:
         doc = json.loads(DECODE_BOUNDS_PATH.read_text(encoding="utf-8"))
         vec = next(v for v in doc["reject_vectors"] if v["name"] == source)
         payload = bytes.fromhex(vec["input_hex"])
-        block = _literal_block(payload)
+        out = bytearray()
+        iv2._emit_literal_run(out, payload)  # a literals-only block: one sequence, no match
+        block = bytes(out)
         checksum = checksum_of(payload)
         assert len(checksum) == 8, "checksum must be 8 bytes"
         env = encode_envelope(block, checksum, len(payload), "msgpack", encoding="bin")
@@ -976,7 +966,8 @@ def build_temporal_sentinel(kind: str) -> dict:
         "description": (
             f"the MessagePack map {{\"{key}\": true, \"value\": \"{value}\"}}, as an auto-mode payload. An "
             f"SDK's deserialization MUST revive it as its temporal type for a {kind}, equal to {value}, not return "
-            "the map. Interop mode's value profile keeps the map (interop-mode.json's datetime_sentinel_value)."
+            "the map. interop-mode.json's datetime_sentinel_value pins the same map's bytes; revival in interop mode "
+            "follows spec/interop-mode.md."
         ),
         "payload_hex": payload.hex(),
         "revives_to": {"type": kind, "iso": value},
@@ -1140,6 +1131,12 @@ def generate() -> int:
     return 0
 
 
+def _assert_matches_builder(vec: dict, expected: dict) -> None:
+    """Every field of a vector equals what its builder derives, naming the first that does not."""
+    for key in sorted(expected.keys() | vec.keys()):
+        assert vec.get(key) == expected.get(key), f"field {key!r} differs from what the builder derives"
+
+
 def _verify_constructed(vec: dict, xxh3_64, msgpack, lz4_block) -> str:
     """Validate one constructed vector: builder equality, then a full read.
 
@@ -1151,8 +1148,7 @@ def _verify_constructed(vec: dict, xxh3_64, msgpack, lz4_block) -> str:
     # leg it computes the checksum too, so equality proves the pinned one is the true
     # xxHash3-64 of the input; on the stdlib leg it takes the pinned value on trust.
     expected = builder(xxh3_64 if xxh3_64 is not None else lambda _original: pinned)
-    for key in sorted(expected.keys() | vec.keys()):
-        assert vec.get(key) == expected.get(key), f"field {key!r} differs from what the builder derives"
+    _assert_matches_builder(vec, expected)
     env = iv2.construct(vec["envelope_construction"])
     original = iv2.construct(vec["input_construction"])
     assert read_envelope(env, xxh3_64) == original, "reader does not return the constructed input"
@@ -1182,8 +1178,7 @@ def _verify_payload_reject(vec: dict, xxh3_64, msgpack) -> str:
     """
     pinned = bytes.fromhex(vec["checksum_hex"])
     expected = PAYLOAD_REJECT_BUILDERS[vec["name"]](xxh3_64 if xxh3_64 is not None else lambda _payload: pinned)
-    for key in sorted(expected.keys() | vec.keys()):
-        assert vec.get(key) == expected.get(key), f"field {key!r} differs from what the builder derives"
+    _assert_matches_builder(vec, expected)
     payload = bytes.fromhex(vec["input_hex"])
     assert read_envelope(bytes.fromhex(vec["envelope_hex"]), xxh3_64) == payload, "reader does not return the payload"
     reasons = set(vec["reject_reasons"]) & {"depth", "overclaim"}
@@ -1200,14 +1195,11 @@ def _verify_payload_reject(vec: dict, xxh3_64, msgpack) -> str:
 
 
 def _verify_temporal(vec: dict) -> str:
-    """Validate one temporal-sentinel vector: builder equality, and a value that parses as its type."""
+    """Validate one temporal-sentinel vector: builder equality pins its map and its revived value."""
     kind = vec["name"].removeprefix("temporal_sentinel_")
     assert kind in TEMPORAL_SENTINELS, f"no temporal sentinel named {kind!r}"
     expected = build_temporal_sentinel(kind)
-    for key in sorted(expected.keys() | vec.keys()):
-        assert vec.get(key) == expected.get(key), f"field {key!r} differs from what the builder derives"
-    parse = {"datetime": datetime.datetime, "date": datetime.date, "time": datetime.time}[kind].fromisoformat
-    parse(vec["revives_to"]["iso"])  # raises ValueError if the value is not that type's ISO form
+    _assert_matches_builder(vec, expected)
     return f"{TEMPORAL_SENTINELS[kind][0]} -> {kind} {vec['revives_to']['iso']}"
 
 
@@ -1217,8 +1209,7 @@ def _verify_reject(vec: dict, bases: dict[str, dict], xxh3_64, msgpack, lz4_bloc
     Returns a one-line summary, or raises like _verify_vector.
     """
     expected = REJECT_BUILDERS[vec["name"]](bases)
-    for key in sorted(expected.keys() | vec.keys()):
-        assert vec.get(key) == expected.get(key), f"field {key!r} differs from what the builder derives"
+    _assert_matches_builder(vec, expected)
     env = bytes.fromhex(vec["envelope_hex"])
     step = vec["reject_step"]
     check = vec.get("reject_check")

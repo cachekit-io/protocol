@@ -424,11 +424,12 @@ def verify() -> int:
         except FrameError as e:
             # A boundary vector is only worth its bytes if the check it sits on rejects it:
             # a later check rejecting it instead is the reader the vector exists to catch.
-            if want is not None and e.check != want:
-                print(f"FAIL {name}: rejected by the {e.check} check, not {want}: {e}")
+            # Required, so no vector can be rejected by whatever check happens to fire.
+            if e.check != want:
+                print(f"FAIL {name}: rejected by the {e.check} check, not {want!r} (rejected_by): {e}")
                 failures += 1
             else:
-                print(f"ok   {name} (rejected{f' by the {want} check' if want else ''})")
+                print(f"ok   {name} (rejected by the {want} check)")
         else:
             print(f"FAIL {name}: expected rejection, parsed successfully")
             failures += 1
