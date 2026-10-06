@@ -1092,6 +1092,97 @@ CASES: list[Case] = [
         0,
         OK,
     ),
+    # --- inline markup: whichever opens first takes its whole extent, as GitHub's renderer reads it ---
+    # A backtick inside a tag or an autolink opens no code span, so it cannot pair with a later one and hide the
+    # keyword between them. INLINE_LINES holds the edges of the grammar, read in process.
+    ("backtick in a double-quoted attribute", append(SPEC, '\na <span title="`">MUST</span> `x`\n'), 1, "this MUST has no id"),
+    ("backtick in a single-quoted attribute", append(SPEC, "\na <span title='`'>MUST</span> `x`\n"), 1, "this MUST has no id"),
+    # An unquoted attribute value cannot hold a backtick, so this is no tag and the backtick opens a code span.
+    ("backtick in an unquoted attribute value", append(SPEC, "\na <span title=`>MUST</span> `x`\n"), 0, OK),
+    ("backtick in a URI autolink", append(SPEC, "\na <http://x.y/`> MUST `x`\n"), 1, "this MUST has no id"),
+    ("backtick in an email autolink", append(SPEC, "\na <b`c@d.e> MUST `x`\n"), 1, "this MUST has no id"),
+    # A code span that opens first hides a tag inside it.
+    ("tag inside a code span", append(SPEC, "\nUse `<span title='x'>MUST</span>` as markup.\n"), 0, OK),
+    # A tag may span lines; the blockquote's > on the second line is not part of it.
+    (
+        "tag across lines in a blockquote",
+        append(SPEC, "\n> a <span\n> title='`'>MUST</span> `x`\n"),
+        1,
+        "this MUST has no id",
+    ),
+    ("tag in a table cell", append(SPEC, "\n| h |\n| - |\n| a <span title='`'>MUST</span> `x` |\n"), 1, "this MUST has no id"),
+    ("tag in a heading", append(SPEC, "\n## a <span title='`'>MUST</span> `x`\n"), 1, "this MUST has no id"),
+    # Past an opener that closes nothing, the check reads the rest of the paragraph as it stands. GitHub hides the
+    # first MUST here, because <!X `> is text after a comment that never closes and its backtick pairs with the
+    # next one, but the check reads it too, which fails closed.
+    (
+        "keyword after a comment that does not close",
+        append(SPEC, "\na <!-- x ---> <!X `> MUST\nb ` MUST ` z\n"),
+        1,
+        f"{SPEC}:{SPEC_END + 2}: this MUST has no id",
+    ),
+    # GitHub's HTML sanitizer ends a comment in an HTML block at its first --> or --!>, and <!--> is one whole: what
+    # follows is text a reader sees, even inside a comment block that runs on to a --> line or never closes.
+    (
+        "comment in an HTML block ending at --!>",
+        append(SPEC, "\n<div>\nx <!-- a --!> MUST -->\n</div>\n"),
+        1,
+        "this MUST has no id",
+    ),
+    ("comment block closed by <!-->", append(SPEC, "\n<!-->\nReaders MUST reject it -->\n"), 1, "this MUST has no id"),
+    (
+        "keyword after a comment block's --!>",
+        append(SPEC, "\n<!--\na --!> Readers MUST reject it.\n-->\n"),
+        1,
+        "this MUST has no id",
+    ),
+    (
+        "comment block closed only by --!>",
+        append(SPEC, "\nIntro.\n\n<!-- draft --!>\nReaders MUST reject it.\n"),
+        1,
+        "this MUST has no id",
+    ),
+    (
+        "comment block closed only by --!> in a list item",
+        append(SPEC, "\n- <!-- a --!>\n  Readers MUST reject it.\n"),
+        1,
+        "this MUST has no id",
+    ),
+    # A comment block ends on its --> line, so the paragraph after it is Markdown again and its inline code is hidden.
+    (
+        "inline code after a comment block",
+        append(SPEC, "\n<!--\nnote\n-->\n\nThe keyword `MUST` is written in capitals.\n"),
+        0,
+        OK,
+    ),
+    # Every comment that spans lines of an HTML block is a region a keyword cannot sit in, not just the one a comment
+    # block opens with: here the block runs on past --!> to its --> line, and a second comment opens inside it.
+    (
+        "second comment in a comment block",
+        append(SPEC, "\nIntro.\n\n<!-- a --!>\n<!-- x\nReaders MUST reject it.\n-->\n"),
+        1,
+        f"sits inside the HTML comment opened at line {SPEC_END + 5}",
+    ),
+    (
+        "comment spanning lines in an HTML block",
+        append(SPEC, "\n<div>\n<!-- x\nReaders MUST reject it.\n-->\n</div>\n"),
+        1,
+        f"sits inside the HTML comment opened at line {SPEC_END + 3}",
+    ),
+    # The region starts where its comment opens, so a keyword before the comment is the block's text, as GitHub shows it.
+    (
+        "keyword before a comment in an HTML block",
+        append(SPEC, "\n<div>\nReaders MUST reject it.\n<!-- x\ny -->\n</div>\n"),
+        1,
+        f"{SPEC}:{SPEC_END + 3}: this MUST has no id",
+    ),
+    # Only an HTML block's own comments are regions: a comment spanning lines of a paragraph between two is inline.
+    (
+        "inline comment spanning lines between HTML blocks",
+        append(SPEC, "\n<div>\n</div>\n\nA note <!-- that\nMUST stay --> hidden.\n\n<div>\n</div>\n"),
+        0,
+        OK,
+    ),
     # --- ids are never reused: next only grows ---
     (
         "new id at or above next",
@@ -1568,6 +1659,109 @@ def test_strip(tmp: Path) -> bool:
     return bool(good)
 
 
+B80, B81 = "`" * 80, "`" * 81
+# Documents of one paragraph each, and whether GitHub shows the MUST in it. The checker reads each MUST exactly where
+# GitHub shows it; each line was checked against GitHub's renderer.
+INLINE_LINES: list[tuple[str, bool]] = [
+    # code spans and escapes: a run opens a code span that the next run of its length closes, whatever lies between
+    ("Use `<span title='` MUST `'>` here.", True),
+    (f"a {B80} MUST {B80} b", False),
+    ("a \\<span title='`'>MUST</span> `x`", False),
+    ("a \\\\<span title='`'>MUST</span> `x`", True),
+    ("a \\\\` b ` MUST ` c", True),
+    ("a \\``x` MUST `", True),
+    # tags: space may hold a line break; names, attribute names and unquoted values have their own characters
+    ("a <span title\n= '`'>MUST</span> `y`", True),
+    ("a <span title =\n'`'>MUST</span> `y`", True),
+    ("a <br title='`'\n/> MUST `y`", True),
+    ("a <span title='\n`'>MUST</span> `x`", True),
+    ('a <span title="\n`">MUST</span> `x`', True),
+    ("a <1a title='`'> MUST `y`", False),
+    ("a <x-1 title='`'>MUST</x-1> `y`", True),
+    ("a <span 1a='`'> MUST `y`", False),
+    ("a <span _:a.b-c='`'>MUST</span> `y`", True),
+    ("a <span a b='`'> MUST `y`", True),
+    ("a <br title='`'/> MUST `y`", True),
+    ("a <span a=b=c d='`'> MUST `y`", False),
+    ("a <span a=b'c d='`'> MUST `y`", False),
+    ("a <span a=b<1 d='`'> MUST `y`", False),
+    ("a <span a=b>c d='`'> MUST `y`", False),
+    # autolinks: a scheme of 2 to 32 characters, then no space, < or >; email domain labels of 1 to 63 characters.
+    # An email autolink is tried before a comment.
+    ("a <a:`> MUST `y`", False),
+    ("a <1a:`> MUST `y`", False),
+    ("a <a+b.c-d:`> MUST `y`", True),
+    ("a <" + "a" * 32 + ":`> MUST `y`", True),
+    ("a <" + "a" * 33 + ":`> MUST `y`", False),
+    ("a <http://x `y> MUST `z`", False),
+    ("a <http://x>`>MUST `y`", False),
+    ("a <http://x<`> MUST `y`", False),
+    ("a <b`c@" + "d" * 63 + ".e> MUST `y`", True),
+    ("a <b`c@" + "d" * 64 + ".e> MUST `y`", False),
+    ("a <b`c@d." + "e" * 64 + "> MUST `y`", False),
+    ("a <`@a-.b> MUST `y`", False),
+    ("a <`@a.b-> MUST `y`", False),
+    ("a <`@-a.b> MUST `y`", False),
+    ("a <`@a_b.c> MUST `y`", False),
+    ("a <!--@x.y> MUST --> b", True),
+    ("a <!--`@x.y> ` MUST `", False),
+    # comments: to the renderer, <!--> and <!---> are whole and ---> closes none, which decides the backticks a comment
+    # holds; GitHub's sanitizer then shows what follows a comment's first --> or --!> past its <!--
+    ("a <!--> MUST -->", True),
+    ("a <!---> MUST -->", True),
+    ("a <!--> ` MUST ` -->", False),
+    ("a <!---> ` MUST ` -->", False),
+    ("a <!-- x --> ` MUST ` --> b", False),
+    ("a <!-- x --> MUST --> b", True),
+    ("a <!-- MUST ---> b --> c", False),
+    ("a <!-- MUST-x --> b", False),
+    ("a <!-- x ---> MUST --> b", True),
+    ("a <!-- x --!> MUST --> b", True),
+    ("a <!-- x ----> MUST --> b", True),
+    ("a <!-- MUST --!--> b", False),
+    ("a <!-- x ---> <b>MUST</b> --> b", True),
+    ("a <!--!> MUST --> b", False),
+    ("a <!----!> MUST --> b", True),
+    # an opener that closes nothing, after which the checker reads the rest as it stands, as GitHub shows it here
+    ("a `` <span title='`'>MUST</span> `x`", True),
+    (f"a {B81} MUST {B81} b", True),
+    ("a `` b `c` d `MUST` e", True),
+    ("a <!-- MUST ---> b", True),
+    ("a <?x `?> MUST `y`", True),
+    ("a <!X `> MUST `y`", True),
+    ("a <![cdata[ ` ]]> MUST `y`", True),
+    ("a `c` d `MUST` e ``", False),
+]
+# Documents of one paragraph each where GitHub hides the MUST and the checker reads it, which fails closed: an opener
+# that closes nothing comes first, and what GitHub's renderer does past one depends on state the checker does not keep.
+# Each was checked against GitHub's renderer.
+READ_AS_IS = [
+    "a <!x `> MUST `y`",
+    "a `` b `MUST` c",
+    "a <!-- x ---> ` MUST `",
+    "a <?x?> ` MUST ` ?> b",
+]
+
+
+def test_inline() -> bool:
+    """The checker reads the MUST in each of INLINE_LINES exactly where GitHub shows it, and in each of READ_AS_IS."""
+    sys.path.insert(0, str(HERE))
+    import conformance
+
+    def reads(text: str) -> bool | None:
+        try:
+            return bool(conformance.scan(text + "\n").keywords)
+        except conformance.Defect:
+            return None
+
+    wrong = [text for text, shown in INLINE_LINES if reads(text) is not shown]
+    wrong += [text for text in READ_AS_IS if reads(text) is not True]
+    lines = len(INLINE_LINES) + len(READ_AS_IS)
+    print(f"  {'ok  ' if not wrong else 'FAIL'} inline markup read as GitHub shows it in {lines} lines", end="")
+    print(f": {wrong}" if wrong else "")
+    return not wrong
+
+
 def test_code_spans() -> bool:
     """The report shows each vector name exactly: every branch of code(), read back the way a GFM table cell reads it."""
     sys.path.insert(0, str(HERE))
@@ -1629,6 +1823,7 @@ def main() -> int:
         results += [run_report_case(Path(tmp), n, case) for n, case in enumerate(REPORT_CASES)]
         results.append(test_optimized())
         results.append(test_strip(Path(tmp)))
+        results.append(test_inline())
         results.append(test_code_spans())
     failed = results.count(False)
     if failed:
