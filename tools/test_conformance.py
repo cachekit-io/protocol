@@ -661,6 +661,29 @@ CASES: list[Case] = [
         1,
         "MUST and NOT sit on two lines that GitHub may show apart",
     ),
+    # A backslash at the end of a line is a hard line break too, after emphasis and a space as well; past it, a
+    # space shows the backslash and the words join, and an escaped backslash is text.
+    (
+        "id after MUST, with NOT past a backslash hard line break",
+        append(SPEC, f"\nReaders MUST{marker('IOP-37')}\\\nNOT crash.\n"),
+        1,
+        f"{SPEC}:{SPEC_END + 2}: MUST: MUST and NOT sit on two lines that GitHub may show apart",
+    ),
+    (
+        "MUST and NOT across a backslash hard line break after emphasis",
+        append(SPEC, f"\nReaders **MUST** \\\nNOT{marker('IOP-37')} crash.\n"),
+        1,
+        f"{SPEC}:{SPEC_END + 2}: MUST: MUST and NOT sit on two lines that GitHub may show apart",
+    ),
+    (
+        "MUST and NOT across a backslash hard line break in a blockquote",
+        append(SPEC, "\n> Readers MUST\\\n> NOT crash.\n"),
+        1,
+        "MUST and NOT sit on two lines that GitHub may show apart",
+    ),
+    ("backslash and a space ending MUST's line", append(SPEC, "\nReaders MUST\\ \nNOT crash.\n"), 1, "this MUST has no id"),
+    ("escaped backslash ending MUST's line", append(SPEC, "\nReaders MUST\\\\\nNOT crash.\n"), 1, "this MUST has no id"),
+    ("backslash ending a table row", append(SPEC, "\n| a |\n| - |\n| Readers MUST\\\nNOT crash.\n"), 1, "this MUST has no id"),
     (
         "MUST and NOT across a hard line break in a setext heading",
         append(SPEC, "\nReaders MUST  \nNOT crash\n---\n"),

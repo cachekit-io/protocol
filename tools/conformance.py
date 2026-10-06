@@ -106,10 +106,13 @@ FIELDS = {"section", "binds", "sdks", "vectors", "tests", "gap"}
 FILE_FIELDS = {"prefix", "next", "requirements", "retired"}
 
 # A hard keyword is a whole word (an underscore around it is emphasis, not a letter). MUST NOT
-# may be split by a line break, a blockquote marker, or emphasis closed after MUST; scan() keeps
-# the two words together only where a renderer shows them as one phrase.
+# may be split by a line break (a backslash before it included), a blockquote marker, or emphasis
+# closed after MUST; scan() keeps the two words together only where a renderer shows them as one
+# phrase.
 CLOSER = re.compile(r"\*{1,3}|_{1,3}")
-GAP = rf"(?:{CLOSER.pattern})?[\s>]+"
+GAP = rf"(?:{CLOSER.pattern})?(?: *\\(?=\n))?[\s>]+"
+# A hard line break in a paragraph or heading: two spaces, or a backslash, at the end of a line.
+HARD_BREAK = re.compile(r"(?:  |\\)\n")
 KEYWORD = re.compile(rf"(?<![A-Za-z0-9])(?P<must>MUST)(?:{GAP}(?P<not>NOT))?(?![A-Za-z0-9])")
 NOT_AFTER = re.compile(rf"{GAP}(?P<not>NOT)(?![A-Za-z0-9])")
 MARKER = re.compile(r'<sup id="([a-z0-9-]+)">([A-Z][A-Z0-9]*-([1-9][0-9]*))</sup>')
@@ -644,14 +647,16 @@ def scan(text: str) -> Spec:
 
         In an HTML block a <pre> element keeps a line break and a <div> renders it as a space, and elements
         are not tracked, so any two of its lines may show apart. In a paragraph or heading, a hard line break
-        (two spaces at the end of a line) shows, too. Either way MUST NOT is not one phrase, and an id beside
+        (two spaces or a backslash at the end of a line) shows, too. Either way MUST NOT is not one phrase, and an id beside
         MUST would sit between the words wherever the break renders as a space: such a pair is an error.
         """
         first, last = line_of(gap_start), line_of(gap_end)
         leaf = masked.leaf_of_line[first][0]
         if first == last or masked.leaf_of_line[last][0] is not leaf:
             return False
-        return leaf.kind == "html" or (leaf.kind in ("paragraph", "heading") and "  \n" in text[gap_start:gap_end])
+        if leaf.kind == "html":
+            return True
+        return leaf.kind in ("paragraph", "heading") and HARD_BREAK.search(text, gap_start, gap_end) is not None
 
     def one_phrase(gap_start: int, gap_end: int) -> bool:
         """Whether the text between MUST and a NOT after it renders as space, so the two read as one MUST NOT.
