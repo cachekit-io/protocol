@@ -106,12 +106,13 @@ FIELDS = {"section", "binds", "sdks", "vectors", "tests", "gap"}
 FILE_FIELDS = {"prefix", "next", "requirements", "retired"}
 
 # A hard keyword is a whole word (an underscore around it is emphasis, not a letter). MUST NOT
-# may be split by a line break (a backslash before it included), a blockquote marker, or emphasis
-# closed after MUST; scan() keeps the two words together only where a renderer shows them as one
-# phrase.
+# may be split by a line break, a blockquote marker, or emphasis closed after MUST; scan() keeps
+# the two words together only where a renderer shows them as one phrase. A hard line break counts
+# with any escaped backslashes (\\) before it, so an id after MUST cannot hide a split behind them.
 CLOSER = re.compile(r"\*{1,3}|_{1,3}")
-GAP = rf"(?:{CLOSER.pattern})?(?: *\\(?=\n))?[\s>]+"
-# A hard line break in a paragraph or heading: two spaces, or a backslash, at the end of a line.
+GAP = rf"(?:{CLOSER.pattern})?(?: *(?:\\\\)*(?:\\| {{2,}})(?=\n))?[\s>]+"
+# A hard line break in a paragraph or heading: two spaces, or a backslash, at the end of a line. Only GAP's
+# matches are searched, and GAP admits a backslash before a line break only as the last of an odd run.
 HARD_BREAK = re.compile(r"(?:  |\\)\n")
 KEYWORD = re.compile(rf"(?<![A-Za-z0-9])(?P<must>MUST)(?:{GAP}(?P<not>NOT))?(?![A-Za-z0-9])")
 NOT_AFTER = re.compile(rf"{GAP}(?P<not>NOT)(?![A-Za-z0-9])")

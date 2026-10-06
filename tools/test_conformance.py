@@ -681,6 +681,27 @@ CASES: list[Case] = [
         1,
         "MUST and NOT sit on two lines that GitHub may show apart",
     ),
+    # A run of backslashes is read in pairs: an odd run ends in a hard line break, after the escaped ones, and so
+    # do two spaces after an escaped backslash; an escaped backslash and one space are text, so MUST stands alone.
+    (
+        "id after MUST, with NOT past three backslashes",
+        append(SPEC, f"\nReaders MUST{marker('IOP-37')}\\\\\\\nNOT crash.\n"),
+        1,
+        f"{SPEC}:{SPEC_END + 2}: MUST: MUST and NOT sit on two lines that GitHub may show apart",
+    ),
+    (
+        "MUST and NOT past five backslashes after emphasis",
+        append(SPEC, f"\nReaders **MUST** \\\\\\\\\\\nNOT{marker('IOP-37')} crash.\n"),
+        1,
+        f"{SPEC}:{SPEC_END + 2}: MUST: MUST and NOT sit on two lines that GitHub may show apart",
+    ),
+    (
+        "id after MUST, with NOT past an escaped backslash and two spaces",
+        append(SPEC, f"\nReaders MUST{marker('IOP-37')}\\\\  \nNOT crash.\n"),
+        1,
+        f"{SPEC}:{SPEC_END + 2}: MUST: MUST and NOT sit on two lines that GitHub may show apart",
+    ),
+    ("escaped backslash and a space ending MUST's line", append(SPEC, "\nReaders MUST\\\\ \nNOT crash.\n"), 1, "this MUST has no id"),
     ("backslash and a space ending MUST's line", append(SPEC, "\nReaders MUST\\ \nNOT crash.\n"), 1, "this MUST has no id"),
     ("escaped backslash ending MUST's line", append(SPEC, "\nReaders MUST\\\\\nNOT crash.\n"), 1, "this MUST has no id"),
     ("backslash ending a table row", append(SPEC, "\n| a |\n| - |\n| Readers MUST\\\nNOT crash.\n"), 1, "this MUST has no id"),
