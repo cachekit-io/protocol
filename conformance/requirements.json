@@ -2431,7 +2431,7 @@
             "python-frame.json:ciphertext_key_not_in_keyring",
             "python-frame.json:ciphertext_other_tenant"
           ],
-          "gap": "ciphertext_key_not_in_keyring fails every reader that does not return plaintext, so it pins the keyring path's outcome, not a check a wrong reader skips. ciphertext_other_tenant fails closed for a reader that resolves its own tenant (encrypted_reader's tenant_source). cachekit-py in single-tenant mode takes the tenant from the unauthenticated header, so it decrypts an entry sealed under the same master key for another deployment_uuid; whether the reader's own tenant belongs in the AAD there is open, since spec/encryption.md's Decryption Flow takes tenant_id as an input without saying where it comes from."
+          "gap": "ciphertext_key_not_in_keyring fails every reader that does not return plaintext, so it pins the keyring path's outcome, not a check a wrong reader skips. ciphertext_other_tenant fails closed for a reader that resolves its own tenant (encrypted_reader's tenant_source); one that takes the tenant from the frame header decrypts it. Whether a single-tenant reader may take the header's tenant is open: spec/encryption.md's Decryption Flow takes tenant_id as an input without saying where it comes from."
         }
       },
       "retired": {}
