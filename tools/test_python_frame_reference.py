@@ -6,7 +6,9 @@ suite mutates a copy of the COMMITTED fixture and proves verify() fails on
 exactly the mutated field, that the drop-`twin_of` exit stays green without
 loosening any byte comparison, that generate() warns and never raises
 (LAB-1203 deadlock pin), and that _upsert() carries the declaration across
-rebuilds. Stdlib only, no framework.
+rebuilds. It also proves each boundary error vector fails verify for a parser
+loosened at its check, and that verify pins the encrypted-read group's claims.
+Stdlib only, no framework.
 
 Run: python3 tools/test_python_frame_reference.py     (exit 1 on any failure)
 """
@@ -273,13 +275,13 @@ for hdr, cause in (
     raw = next(v for v in doc["frame_vectors"] if v["name"] == "raw_payload_frame")
     _, payload = pfr.parse_frame(bytes.fromhex(raw["frame_hex"]))
     raw["frame_hex"] = (pfr.MAGIC + bytes([pfr.FRAME_VERSION]) + len(hdr).to_bytes(4, "big") + hdr + payload).hex()
-    doc["error_vectors"].append({"name": "bad_header", "frame_hex": raw["frame_hex"]})
+    doc["error_vectors"].append({"name": "bad_header", "frame_hex": raw["frame_hex"], "rejected_by": "header"})
     rc, out = run_verify(doc)
     check(
         f"header bytes {hdr.hex()}: verify exits 1 on a parse error only",
         rc == 1
         and [line for line in out.splitlines() if line.startswith("FAIL")] == [f"FAIL raw_payload_frame: parse error: {cause}"]
-        and "ok   bad_header (rejected)" in out.splitlines(),
+        and "ok   bad_header (rejected by the header check)" in out.splitlines(),
     )
 
 # --- a NaN header raises _reject_constant's own FrameError, not a re-wrap of it ---
@@ -328,13 +330,13 @@ for label, hdr, cause in (
     raw = next(v for v in doc["frame_vectors"] if v["name"] == "raw_payload_frame")
     _, payload = pfr.parse_frame(bytes.fromhex(raw["frame_hex"]))
     raw["frame_hex"] = (pfr.MAGIC + bytes([pfr.FRAME_VERSION]) + len(hdr).to_bytes(4, "big") + hdr + payload).hex()
-    doc["error_vectors"].append({"name": "bad_header", "frame_hex": raw["frame_hex"]})
+    doc["error_vectors"].append({"name": "bad_header", "frame_hex": raw["frame_hex"], "rejected_by": "header"})
     rc, out = run_verify(doc)
     check(
         f"header {label}: verify exits 1 on a parse error only",
         rc == 1
         and [line for line in out.splitlines() if line.startswith("FAIL")] == [f"FAIL raw_payload_frame: parse error: {cause}"]
-        and "ok   bad_header (rejected)" in out.splitlines(),
+        and "ok   bad_header (rejected by the header check)" in out.splitlines(),
     )
 
 # --- inner_msgpack_hex is checked against the decompressed bytes, not only twin against twin ---
@@ -559,6 +561,91 @@ check("_upsert: rebuilt content -> rewritten", changed == [BIN_NAME] and committ
 check("_upsert: rewrite carries twin_of over", committed[0].get("twin_of") == LEGACY_NAME)
 changed = pfr._upsert(committed, [{**built[0], "name": "brand_new"}], "new wheel")
 check("_upsert: appended vector gains no twin_of", changed == ["brand_new"] and "twin_of" not in committed[1])
+
+
+# --- error vectors sit on their checks: a parser off by one at a check fails verify ---
+def lenient_parser(*, min_len: int = pfr.PREFIX_LEN, versions: range = range(pfr.FRAME_VERSION, pfr.FRAME_VERSION + 1),
+                   clamp: bool = False):
+    """parse_frame with one check loosened, the way the boundary vectors' readers loosen it."""
+
+    def parse(frame: bytes) -> tuple[dict, bytes]:
+        if frame[:2] != pfr.MAGIC:
+            raise pfr.FrameError("not a CK frame", "magic")
+        if len(frame) < min_len:
+            raise pfr.FrameError("truncated frame", "prefix_length")
+        if frame[2] not in versions:
+            raise pfr.FrameError("unsupported frame version", "version")
+        end = pfr.PREFIX_LEN + int.from_bytes(frame[3:7], "big")
+        if end > len(frame) and not clamp:
+            raise pfr.FrameError("header length exceeds frame", "header_length")
+        try:
+            return json.loads(frame[pfr.PREFIX_LEN:end].decode("utf-8")), frame[end:]
+        except ValueError as exc:
+            raise pfr.FrameError(f"header is not valid JSON: {exc}") from exc
+
+    return parse
+
+
+def fails_named(out: str, names: set[str]) -> bool:
+    return {line.split()[1].rstrip(":") for line in out.splitlines() if line.startswith("FAIL")} == names
+
+
+for label, parser, names in (
+    ("versions 1-3 accepted", lenient_parser(versions=range(1, 4)), {"unsupported_frame_version_2"}),
+    ("versions 3 and up accepted", lenient_parser(versions=range(3, 256)),
+     {"unsupported_frame_version", "unsupported_frame_version_4"}),
+    ("prefix of 6 bytes accepted", lenient_parser(min_len=6), {"truncated_frame_one_short"}),
+    ("header sliced to the bytes present", lenient_parser(clamp=True), {"header_overrun", "header_overrun_by_one"}),
+):
+    saved, pfr.parse_frame = pfr.parse_frame, parser
+    try:
+        rc, out = run_verify(COMMITTED)
+    finally:
+        pfr.parse_frame = saved
+    check(f"parser with {label}: verify fails exactly {sorted(names)}", rc == 1 and fails_named(out, names))
+
+doc = copy.deepcopy(COMMITTED)
+next(v for v in doc["error_vectors"] if v["name"] == "bare_envelope_fed_to_frame_reader")["rejected_by"] = "version"
+rc, out = run_verify(doc)
+check("error vector rejected by another check than its rejected_by: FAIL by name",
+      rc == 1 and fails_named(out, {"bare_envelope_fed_to_frame_reader"}))
+doc = copy.deepcopy(COMMITTED)
+del next(v for v in doc["error_vectors"] if v["name"] == "unsupported_frame_version_2")["rejected_by"]
+rc, out = run_verify(doc)
+check("error vector without rejected_by: FAIL by name", rc == 1 and fails_named(out, {"unsupported_frame_version_2"}))
+
+# --- encrypted-read group: verify pins the frames generate proved, and what each header claims ---
+def zero_ciphertext(doc: dict) -> None:
+    """Replace ciphertext_other_tenant's payload with zeros of the same length, frame and declaration alike."""
+    vec = next(v for v in doc["encrypted_read_vectors"] if v["name"] == "ciphertext_other_tenant")
+    zeros = "00" * (len(vec["expected_payload_hex"]) // 2)
+    vec["frame_hex"] = vec["frame_hex"][: len(vec["frame_hex"]) - len(zeros)] + zeros
+    vec["expected_payload_hex"] = zeros
+
+
+
+for label, mutate, names in (
+    ("a forged frame declared as ciphertext",
+     lambda d: d["encrypted_read_vectors"][0].update(header_claims="ciphertext"), {"forged_plaintext_encrypted_false"}),
+    ("an outcome other than fail_closed",
+     lambda d: d["encrypted_read_vectors"][2].update(outcome="miss"), {"ciphertext_key_not_in_keyring"}),
+    ("a reader with no tenant", lambda d: d["encrypted_reader"].pop("tenant_id"), {"encrypted_reader"}),
+    ("a reader that takes the header's tenant", lambda d: d["encrypted_reader"].update(tenant_source="header"),
+     {"encrypted_reader"}),
+    ("a reader with another tenant", lambda d: d["encrypted_reader"].update(tenant_id="00000000-0000-4000-8000-00000000000b"),
+     {"encrypted_reader"}),
+    ("the group dropped", lambda d: d.pop("encrypted_read_vectors"), {"encrypted_read_vectors"}),
+    ("a null group", lambda d: d.update(encrypted_read_vectors=None), {"encrypted_read_vectors"}),
+    ("a vector whose frame_hex is not hex", lambda d: d["encrypted_read_vectors"][0].update(frame_hex="zz"),
+     {"forged_plaintext_encrypted_false"}),
+    ("one vector dropped", lambda d: d["encrypted_read_vectors"].pop(3), {"encrypted_read_vectors"}),
+    ("a ciphertext swapped for zero bytes, its declared payload updated to match", lambda d: zero_ciphertext(d),
+     {"ciphertext_other_tenant"}),
+):
+    doc = copy.deepcopy(COMMITTED)
+    mutate(doc)
+    rc, out = run_verify(doc)
+    check(f"encrypted-read: {label} fails verify by name", rc == 1 and fails_named(out, names))
 
 if FAILURES:
     print(f"\n{FAILURES} failure(s)")

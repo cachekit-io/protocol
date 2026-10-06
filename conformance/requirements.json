@@ -47,12 +47,15 @@
           "vectors": [
             "python-frame.json:default_saas_write_msgpack_bytestorage",
             "python-frame.json:default_saas_write_msgpack_bytestorage_bin",
-            "python-frame.json:arrow_dataframe_write"
+            "python-frame.json:arrow_dataframe_write",
+            "python-frame.json:forged_plaintext_orjson",
+            "python-frame.json:ciphertext_key_not_in_keyring",
+            "python-frame.json:ciphertext_other_tenant"
           ],
           "tests": [
             "tools/python-frame-reference.py:verify"
           ],
-          "gap": "The frames record default and arrow on plaintext writes; no vector holds an entry written by AutoSerializer, OrjsonSerializer or a serializer instance, or an encrypted entry, so a writer that records the name only for the pinned two passes."
+          "gap": "The frames record default on plaintext and encrypted writes, arrow and orjson; no vector holds an entry written by AutoSerializer or a serializer instance, so a writer that records the name only for those passes."
         },
         "KEY-4": {
           "section": "Serializer Codes",
@@ -73,7 +76,10 @@
           "sdks": [
             "cachekit-py"
           ],
-          "gap": "No vector pins the miss: python-frame.json's frames are reads under the serializer that wrote them, so the reject path never runs, and no frame that otherwise parses records another writer's name, no name or an empty one; a reader that returns the decoded value on a mismatch, or treats a nameless frame as a match, passes every vector, and tools/python-frame-reference.py refuses a nameless frame only as a malformed vector."
+          "gap": "forged_plaintext_orjson records another writer's name, orjson, but a default-configured reader that skips the check still misses on it, because its payload does not decode under the default serializer; no frame records a name whose payload the reader could decode, or no name or an empty one, so a reader that returns the decoded value on a mismatch, or treats a nameless frame as a match, passes every vector, and tools/python-frame-reference.py refuses a nameless frame only as a malformed vector.",
+          "vectors": [
+            "python-frame.json:forged_plaintext_orjson"
+          ]
         },
         "KEY-6": {
           "section": "Serializer Codes",
@@ -248,27 +254,38 @@
           "vectors": [
             "file-backend.json:permanent_ascii",
             "file-backend.json:future_expiry",
-            "file-backend.json:expired_entry"
+            "file-backend.json:expired_entry",
+            "file-backend.json:empty_payload",
+            "file-backend.json:binary_payload"
           ],
-          "gap": "Every vector is a small plaintext payload, so a writer that sets the reserved byte or a flag only for some payloads (large, binary or encrypted ones) passes them."
+          "gap": "Every payload is 256 B or less, so a writer that sets the reserved byte or a flag only above some size passes them; a size threshold has no edge to pin, and a vector large enough to pass a plausible one would put its payload twice in hex (payload_hex, file_hex). binary_payload holds every byte value, so a writer that flags binary or ciphertext-like payloads fails it."
         },
         "FILE-2": {
           "section": "Version and flag negotiation",
           "binds": "sdk",
           "vectors": [
             "file-backend.json:unknown_flag_preserved",
-            "file-backend.json:reserved_nonzero_preserved"
-          ],
-          "gap": "Only flag bit 0 and a reserved value of 2 are pinned, so a reader that tests one bit, or one value, passes both."
+            "file-backend.json:reserved_nonzero_preserved",
+            "file-backend.json:unknown_flag_high_bit",
+            "file-backend.json:reserved_one_preserved",
+            "file-backend.json:reserved_ff_preserved",
+            "file-backend.json:unknown_flag_expired",
+            "file-backend.json:reserved_nonzero_expired"
+          ]
         },
         "FILE-3": {
           "section": "Version and flag negotiation",
           "binds": "sdk",
           "vectors": [
             "file-backend.json:unknown_flag_preserved",
-            "file-backend.json:reserved_nonzero_preserved"
+            "file-backend.json:reserved_nonzero_preserved",
+            "file-backend.json:unknown_flag_high_bit",
+            "file-backend.json:reserved_one_preserved",
+            "file-backend.json:reserved_ff_preserved",
+            "file-backend.json:unknown_flag_expired",
+            "file-backend.json:reserved_nonzero_expired"
           ],
-          "gap": "Only flag bit 0 and a reserved value of 2 are pinned; no vector gives such an entry an expiry that has passed, where a reader that checks expiry first may remove it, and none refreshes its TTL, which rewrites it."
+          "gap": "The expired vectors differ from a miss_expired read only in the file surviving, so only a test that checks the file afterwards catches a reader that checks expiry first and deletes. No vector refreshes the TTL of an entry with an unknown flag or reserved value. A refresh rewrites bytes 6 to 13, but the rule's object is the payload, which a refresh leaves alone, so whether FILE-3 forbids it is open; every SDK's refresh skips such an entry today."
         },
         "FILE-4": {
           "section": "Version and flag negotiation",
@@ -276,7 +293,9 @@
           "vectors": [
             "file-backend.json:permanent_ascii",
             "file-backend.json:future_expiry",
-            "file-backend.json:expired_entry"
+            "file-backend.json:expired_entry",
+            "file-backend.json:empty_payload",
+            "file-backend.json:binary_payload"
           ],
           "gap": "In version 1 every flag is unknown, so this is FILE-1's check and shares its gap."
         },
@@ -1962,12 +1981,16 @@
             "wire-format.json:large_compressible_bin",
             "wire-format.json:json_like_bin",
             "wire-format.json:single_byte_bin",
-            "wire-format.json:width_boundary_bin16_bin"
+            "wire-format.json:width_boundary_bin16_bin",
+            "wire-format.json:width_boundary_bin8_max_bin",
+            "wire-format.json:width_boundary_bin16_min_bin",
+            "wire-format.json:envelope_bin16_max",
+            "wire-format.json:envelope_bin32_min"
           ],
           "tests": [
             "tools/wire-format-reference.py:_verify_vector"
           ],
-          "gap": "The bin twins' compressed_data is 1, 2, 15, 18, 66, 76 and 303 bytes, so a writer whose bin8 limit is anywhere from 76 to 254 (127 if it treats the length as signed), or whose bin16 limit is anywhere from 303 to 65,534, passes them all, and none needs bin32."
+          "gap": "The bin8 edge is pinned on both sides, 255 and 256 B, by twins a write path reproduces. The bin16 edge is pinned only by envelope_bin16_max and envelope_bin32_min, whose block no compressor emits for their input, so only a test that hands their fields to an envelope encoder checks a writer there; cachekit-py and cachekit-ts expose none, since both write through cachekit-core's ByteStorage, which compresses its input. A pair a write path reproduces at that edge needs some 260 KB of incompressible hex, which the spec declines."
         },
         "WIRE-2": {
           "section": "Byte Layout (canonical encoding)",
@@ -1983,12 +2006,14 @@
             "wire-format.json:large_compressible",
             "wire-format.json:json_like",
             "wire-format.json:single_byte",
-            "wire-format.json:width_boundary_bin16"
+            "wire-format.json:width_boundary_bin16",
+            "wire-format.json:width_boundary_bin8_max",
+            "wire-format.json:width_boundary_bin16_min",
+            "wire-format.json:envelope_legacy_array32_min"
           ],
           "tests": [
             "tools/wire-format-reference.py:_verify_vector"
-          ],
-          "gap": "No legacy vector's compressed_data passes 65,535 bytes, so a reader that cannot read an array32 element [0] passes."
+          ]
         },
         "WIRE-3": {
           "section": "Encoding compatibility (dual-read)",
@@ -2011,7 +2036,14 @@
             "wire-format.json:large_compressible_bin",
             "wire-format.json:json_like_bin",
             "wire-format.json:single_byte_bin",
-            "wire-format.json:width_boundary_bin16_bin"
+            "wire-format.json:width_boundary_bin16_bin",
+            "wire-format.json:width_boundary_bin8_max",
+            "wire-format.json:width_boundary_bin16_min",
+            "wire-format.json:width_boundary_bin8_max_bin",
+            "wire-format.json:width_boundary_bin16_min_bin",
+            "wire-format.json:envelope_bin16_max",
+            "wire-format.json:envelope_bin32_min",
+            "wire-format.json:envelope_legacy_array32_min"
           ],
           "tests": [
             "tools/wire-format-reference.py:_verify_vector"
@@ -2039,7 +2071,14 @@
             "wire-format.json:json_like_bin",
             "wire-format.json:single_byte_bin",
             "wire-format.json:width_boundary_bin16_bin",
-            "wire-format.json:envelope_ratio_product_wraps_32_bits"
+            "wire-format.json:envelope_ratio_product_wraps_32_bits",
+            "wire-format.json:width_boundary_bin8_max",
+            "wire-format.json:width_boundary_bin16_min",
+            "wire-format.json:width_boundary_bin8_max_bin",
+            "wire-format.json:width_boundary_bin16_min_bin",
+            "wire-format.json:envelope_bin16_max",
+            "wire-format.json:envelope_bin32_min",
+            "wire-format.json:envelope_legacy_array32_min"
           ],
           "tests": [
             "tools/wire-format-reference.py:_verify_vector",
@@ -2059,13 +2098,21 @@
             "wire-format.json:reject_zero_length_compressed_data",
             "wire-format.json:reject_ratio_bomb",
             "wire-format.json:reject_decompressed_length_mismatch",
-            "decode-bounds.json"
+            "decode-bounds.json",
+            "wire-format.json:reject_envelope_arity_5",
+            "wire-format.json:reject_envelope_arity_3",
+            "wire-format.json:reject_checksum_nine_elements",
+            "wire-format.json:reject_checksum_seven_elements",
+            "wire-format.json:reject_legacy_element_above_255",
+            "wire-format.json:reject_envelope_slots_overclaim",
+            "wire-format.json:reject_original_size_sign_bit",
+            "wire-format.json:reject_ratio_float32_rounds"
           ],
           "tests": [
             "tools/test_wire_format_reference.py:check_reader_rejects",
             "tools/test_wire_format_reference.py:_check_allocation_probe"
           ],
-          "gap": "The accept vectors evidence none of the bounds. A verdict on the reject vectors misses a reader without the zero-length check whose LZ4 decoder refuses an empty block, as liblz4 does, and one without step 9 that zero-pads to original_size and fails the checksum instead; only a test that asserts the named error catches them (WIRE-16). No vector exercises step 2's typed decode (another arity, a checksum that is not 8 integers, a legacy element above 255), and none shows that the envelope's own bytes are pre-scanned (WIRE-8, WIRE-9). The order is WIRE-11's; steps 4 and 5 carry WIRE-7, WIRE-12, WIRE-13 and WIRE-14."
+          "gap": "The accept vectors evidence none of the bounds. A verdict on the reject vectors misses a reader without the zero-length check whose LZ4 decoder refuses an empty block, as liblz4 does, one without step 9 that zero-pads to original_size and fails the checksum instead, and one without the pre-scan, which rejects reject_envelope_slots_overclaim in its typed decode (as truncated, or as a wrong type at element 1); only a test that asserts the named error catches them (WIRE-16). The typed-decode vectors cover a fifth element, a missing fourth, a checksum of 9 and of 7 integers, and a legacy element above 255; none holds a legacy element written as a negative integer or a float, or an original_size written as a float, which a JavaScript reader that range-checks only above 255 accepts. Whether a checksum written as a bin8 of 8 bytes breaks step 2's typed decode is open: the spec gives the checksum as an array of 8 integers, and cachekit-core accepts the bin8 form, since rmp-serde reads [u8; 8] from either. The order is WIRE-11's; steps 4 and 5 carry WIRE-7, WIRE-12, WIRE-13 and WIRE-14."
         },
         "WIRE-6": {
           "section": "Compressed-byte reproducibility (per-vector scoping)",
@@ -2089,12 +2136,14 @@
           "vectors": [
             "wire-format.json:reject_original_size_over_cap",
             "wire-format.json:reject_original_size_wraps_u32",
-            "wire-format.json:reject_ratio_bomb"
+            "wire-format.json:reject_ratio_bomb",
+            "wire-format.json:reject_original_size_sign_bit",
+            "wire-format.json:reject_ratio_float32_rounds"
           ],
           "tests": [
             "tools/test_wire_format_reference.py:check_reader_rejects"
           ],
-          "gap": "A verdict shows none of the three: a reader without the size cap rejects both cap vectors by the ratio bound, and one without the ratio bound still rejects reject_ratio_bomb, whose block is not valid LZ4, so only a test that asserts the named error does (WIRE-16). No vector sits on the size cap, so a reader that also rejects an original_size of exactly 512 MiB passes them all. No vector reaches the compressed-size cap: compressed_data over 512 MiB needs an envelope over 512 MiB, which step 1 rejects first."
+          "gap": "A verdict shows none of the three: a reader without the size cap rejects all three cap vectors by the ratio bound, and one without the ratio bound still rejects both ratio vectors, whose blocks are not valid LZ4, so only a test that asserts the named error does (WIRE-16). No vector sits on the size cap, so a reader that also rejects an original_size of exactly 512 MiB passes them all: an accept vector there costs every reader a 512 MiB decode, and a reject vector there with an undecodable block still lets a conforming reader size its output from original_size, 512 MiB, which on wasm32 is a 512 MiB memory.grow. No vector reaches the compressed-size cap: compressed_data over 512 MiB needs an envelope over 512 MiB, which step 1 rejects first."
         },
         "WIRE-8": {
           "section": "Security Limits",
@@ -2118,9 +2167,12 @@
             "decode-bounds.json:bin32_overclaim",
             "decode-bounds.json:str32_overclaim",
             "decode-bounds.json:ext32_overclaim",
-            "decode-bounds.json:fixarray_short_by_one"
+            "decode-bounds.json:fixarray_short_by_one",
+            "wire-format.json:reject_envelope_slots_overclaim",
+            "wire-format.json:payload_array32_max_claim_alone",
+            "wire-format.json:payload_nested_array16_each_header_fits_sum_overclaims"
           ],
-          "gap": "A verdict cannot fail this: every overclaim vector is truncated, so any decoder rejects it at end of input whatever its guard does; only an SDK test that asserts the guard's own error (IOP-31) exercises it. The vectors are bare documents, none an envelope or wrapped in one, so a reader that guards the envelope's decode but not the payload's after unwrapping, or the reverse, passes them."
+          "gap": "A verdict cannot fail this: every overclaim vector is truncated, so any decoder rejects it whatever its guard does, at end of input or, for a typed envelope decoder, on a wrong type; only an SDK test that asserts the guard's own error (IOP-31) exercises it. reject_envelope_slots_overclaim overclaims in the envelope's bytes and the payload_reject_vectors in the payload after unwrapping, so such a test can assert each decode's guard. No released cachekit-core pre-scans the envelope (sdk-feature-matrix.md)."
         },
         "WIRE-9": {
           "section": "Security Limits",
@@ -2147,9 +2199,12 @@
             "decode-bounds.json:fixarray_short_by_one",
             "decode-bounds.json:nested_fixarray_depth_32",
             "decode-bounds.json:nested_fixmap_depth_32",
-            "decode-bounds.json:array16_256_backed_nils"
+            "decode-bounds.json:array16_256_backed_nils",
+            "wire-format.json:reject_envelope_slots_overclaim",
+            "wire-format.json:payload_array32_max_claim_alone",
+            "wire-format.json:payload_nested_array16_each_header_fits_sum_overclaims"
           ],
-          "gap": "A verdict cannot fail this: every overclaim vector is truncated, so any decoder rejects it at end of input whatever its guard does; only an SDK test that asserts the guard's own error (IOP-31) exercises it. The accept vectors do pin a budget set too tight. The vectors are bare documents, none an envelope or wrapped in one, so a reader that guards the envelope's decode but not the payload's after unwrapping, or the reverse, passes them."
+          "gap": "A verdict cannot fail this: every overclaim vector is truncated, so any decoder rejects it whatever its guard does, at end of input or, for a typed envelope decoder, on a wrong type; only an SDK test that asserts the guard's own error (IOP-31) exercises it. The accept vectors do pin a budget set too tight. reject_envelope_slots_overclaim, whose every header fits what follows it, and payload_nested_array16_each_header_fits_sum_overclaims carry the whole-document sum into the envelope's decode and the payload's, so such a test can assert each one; no released cachekit-core pre-scans the envelope (sdk-feature-matrix.md)."
         },
         "WIRE-10": {
           "section": "Decompression Bomb Detection",
@@ -2160,12 +2215,13 @@
           ],
           "vectors": [
             "wire-format.json:reject_original_size_over_cap",
-            "wire-format.json:reject_original_size_wraps_u32"
+            "wire-format.json:reject_original_size_wraps_u32",
+            "wire-format.json:reject_original_size_sign_bit"
           ],
           "tests": [
             "tools/test_wire_format_reference.py:check_reader_rejects"
           ],
-          "gap": "Only a test that asserts the size-cap error shows the order: a reader that runs the ratio product first rejects both vectors too, with the ratio error. No vector reaches the compressed-size cap (WIRE-7)."
+          "gap": "Only a test that asserts the size-cap error shows the order: a reader that runs the ratio product first rejects all three vectors too, with the ratio error. No vector reaches the compressed-size cap (WIRE-7)."
         },
         "WIRE-11": {
           "section": "Decompression Bomb Detection",
@@ -2192,12 +2248,13 @@
             "cachekit-ts"
           ],
           "vectors": [
-            "wire-format.json:reject_original_size_wraps_u32"
+            "wire-format.json:reject_original_size_wraps_u32",
+            "wire-format.json:reject_original_size_sign_bit"
           ],
           "tests": [
             "tools/test_wire_format_reference.py:check_reader_rejects"
           ],
-          "gap": "Sign reinterpretation needs an original_size of 2^63 or more, which no vector holds. A reader that joins the 32-bit halves rejects the vector too, on length, so only a test that asserts a rejection before decompression catches it (WIRE-16)."
+          "gap": "A reader that joins the 32-bit halves rejects reject_original_size_wraps_u32 too, on length, and one that reinterprets the uint64 as an i64 rejects reject_original_size_sign_bit later, or crashes, so only a test that asserts a rejection before decompression catches either (WIRE-16)."
         },
         "WIRE-13": {
           "section": "Decompression Bomb Detection",
@@ -2212,7 +2269,7 @@
           "tests": [
             "tools/test_wire_format_reference.py:check_32_bit_ratio_readers"
           ],
-          "gap": "A pointer-width product is exact on a 64-bit host, so the vector fails it only on a 32-bit target (WIRE-15); an explicit 32-bit multiply fails it on any host. Since it is also the file's only bin32 and multi-megabyte decode, a failure on it shows a 32-bit product only if the rejection reason is checked."
+          "gap": "A pointer-width product is exact on a 64-bit host, so the vector fails it only on a 32-bit target (WIRE-15); an explicit 32-bit multiply fails it on any host. Since it is also the file's only multi-megabyte decode, a failure on it shows a 32-bit product only if the rejection reason is checked."
         },
         "WIRE-14": {
           "section": "Decompression Bomb Detection",
@@ -2222,12 +2279,13 @@
             "cachekit-ts"
           ],
           "vectors": [
-            "wire-format.json:reject_ratio_bomb"
+            "wire-format.json:reject_ratio_bomb",
+            "wire-format.json:reject_ratio_float32_rounds"
           ],
           "tests": [
             "tools/test_wire_format_reference.py:check_reader_rejects"
           ],
-          "gap": "A binary64 ratio, and a division that rounds up, give the product's verdict at every legal size, so no vector can fail them. A truncating division reads reject_ratio_bomb's 1,000,001 / 1,000 as 1000 but still rejects the vector on its invalid LZ4 block, so only a test that asserts the ratio error catches it (WIRE-16). reject_ratio_bomb's ratio is 1000.001, which even a float32 ratio rejects; no vector puts a one-byte excess on a compressed size of 16,778 B or more, where a ratio of float32 operands rounds it away (from 32,768 B if only the quotient is rounded)."
+          "gap": "A binary64 ratio, and a division that rounds up, give the product's verdict at every legal size, so no vector can fail them. Both ratio vectors' blocks are not valid LZ4, so every other forbidden form fails a vector only by its error: a truncating division never raises the ratio error on either, and a float32 ratio, of float32 operands or rounded once, never on reject_ratio_float32_rounds. Only a test that asserts the ratio error catches them (WIRE-16)."
         },
         "WIRE-15": {
           "section": "Decompression Bomb Detection",
@@ -2253,7 +2311,15 @@
             "wire-format.json:reject_zero_length_compressed_data",
             "wire-format.json:reject_ratio_bomb",
             "wire-format.json:reject_decompressed_length_mismatch",
-            "wire-format.json:reject_checksum_mismatch"
+            "wire-format.json:reject_checksum_mismatch",
+            "wire-format.json:reject_envelope_arity_5",
+            "wire-format.json:reject_envelope_arity_3",
+            "wire-format.json:reject_checksum_nine_elements",
+            "wire-format.json:reject_checksum_seven_elements",
+            "wire-format.json:reject_legacy_element_above_255",
+            "wire-format.json:reject_envelope_slots_overclaim",
+            "wire-format.json:reject_original_size_sign_bit",
+            "wire-format.json:reject_ratio_float32_rounds"
           ],
           "gap": "Which path an SDK's test drives each vector through, and what it asserts, is SDK test code no vector can check; sdk-feature-matrix.md's \"Wire format (ByteStorage)\" row and its footnote 16 record it per SDK."
         },
@@ -2300,15 +2366,22 @@
         "WIRE-20": {
           "section": "Datetime Extension Format",
           "binds": "sdk",
-          "gap": "No vector pins the reconstruction: interop-mode.json's datetime_sentinel_value expects the sentinel map itself, since interop mode only allows reviving temporal types, and no vector holds __date__ or __time__."
+          "gap": "The vectors pin the three canonical maps, with a whole-second UTC datetime, so a reviver that drops a non-UTC offset or sub-second digits passes; whether a JavaScript Date's millisecond precision meets the rule is not specified. A map's shape beyond them (an extra key, a marker other than true) is not specified either, so nothing pins it. cachekit-ts and cachekit-rs do not revive them in auto mode (sdk-feature-matrix.md).",
+          "vectors": [
+            "wire-format.json:temporal_sentinel_datetime",
+            "wire-format.json:temporal_sentinel_date",
+            "wire-format.json:temporal_sentinel_time"
+          ]
         },
         "WIRE-21": {
           "section": "SDK Storage Containers (auto mode)",
           "binds": "sdk",
           "vectors": [
-            "python-frame.json:ck_frame_fed_to_interop_reader"
+            "python-frame.json:ck_frame_fed_to_interop_reader",
+            "python-frame.json:bare_envelope_fed_to_frame_reader",
+            "python-frame.json:plain_msgpack_fed_to_frame_reader"
           ],
-          "gap": "Only a CK frame is pinned for refusal: ck_frame_fed_to_interop_reader pins the trailing-bytes refusal a plain-MessagePack reader (cachekit-rs, or cachekit-ts with compression off) owes it. No vector pins cachekit-py's refusal of a bare envelope (cachekit-ts's default container, the shape of every wire-format.json accept vector) or of plain MessagePack, and none can tell cachekit-ts's uncompressed container from cachekit-rs's: both are plain MessagePack."
+          "gap": "cachekit-py's refusal of a bare envelope and of plain MessagePack is pinned, and so is a plain-MessagePack reader's refusal of a CK frame, by its trailing bytes. No vector names cachekit-ts's envelope reader as the one refusing a CK frame or plain MessagePack, though the vectors carry both, and none can tell cachekit-ts's uncompressed container from cachekit-rs's: both are plain MessagePack."
         },
         "WIRE-22": {
           "section": "Python: CK v3 frame",
@@ -2319,12 +2392,16 @@
           "vectors": [
             "python-frame.json:truncated_frame",
             "python-frame.json:unsupported_frame_version",
-            "python-frame.json:header_overrun"
+            "python-frame.json:header_overrun",
+            "python-frame.json:truncated_frame_one_short",
+            "python-frame.json:unsupported_frame_version_2",
+            "python-frame.json:unsupported_frame_version_4",
+            "python-frame.json:header_overrun_by_one"
           ],
           "tests": [
             "tools/python-frame-reference.py:verify"
           ],
-          "gap": "Each check has one vector, away from its boundary: the short frame is 3 bytes, not 6, and the header-length check rejects it too; the version is 4, so a reader that rejects only versions above 3 passes; and the header overruns by 253 bytes, not 1. The version and overrun vectors carry the header {} with no serializer name and an empty payload, so a reader that skips the version check, or slices an overrunning header to the 2 bytes present, still returns a miss through the serializer-name rule; only a test that asserts the frame parser's own error catches either."
+          "gap": "unsupported_frame_version_2 and unsupported_frame_version_4 fail a reader that rejects only versions above or below 3, since their header and payload are intact. The other boundary vectors do not isolate their checks: a reader that accepts a 6-byte frame rejects truncated_frame_one_short at the header-length check, and one that slices an overrunning header to the bytes present gets header_overrun_by_one's real header and an empty payload, which its envelope decode rejects. Only a test that asserts the frame parser's own error, the check rejected_by names, catches either."
         },
         "WIRE-23": {
           "section": "Python: CK v3 frame",
@@ -2334,9 +2411,11 @@
           ],
           "vectors": [
             "python-frame.json:default_saas_write_msgpack_bytestorage",
-            "python-frame.json:default_saas_write_msgpack_bytestorage_bin"
+            "python-frame.json:default_saas_write_msgpack_bytestorage_bin",
+            "python-frame.json:forged_plaintext_encrypted_false",
+            "python-frame.json:forged_plaintext_orjson"
           ],
-          "gap": "The frames are pinned as plaintext reads, so a test plants one under an encrypted cache's key and asserts that the read fails closed, which no vector pins; none carries an explicit \"encrypted\": false, or an s or m naming another serializer."
+          "gap": "The forged frames claim plaintext two ways, an explicit \"encrypted\": false and another serializer's plaintext write, so a reader that trusts either claim returns the value; forged_plaintext_orjson also trips a default-configured reader's serializer-name check first, so on its own it does not show the downgrade check. No vector alters an m value the AAD binds (format, compressed, original_type) on a real ciphertext, which authentication then rejects."
         },
         "WIRE-24": {
           "section": "Python: CK v3 frame",
@@ -2346,9 +2425,13 @@
           ],
           "vectors": [
             "python-frame.json:default_saas_write_msgpack_bytestorage",
-            "python-frame.json:default_saas_write_msgpack_bytestorage_bin"
+            "python-frame.json:default_saas_write_msgpack_bytestorage_bin",
+            "python-frame.json:forged_plaintext_encrypted_false",
+            "python-frame.json:forged_plaintext_orjson",
+            "python-frame.json:ciphertext_key_not_in_keyring",
+            "python-frame.json:ciphertext_other_tenant"
           ],
-          "gap": "The frames are pinned as plaintext reads, so a test supplies the encrypted configuration and asserts that the read fails closed; no vector frames ciphertext that fails under the cache's own key or AAD, such as another tenant's key or one the keyring lacks."
+          "gap": "ciphertext_key_not_in_keyring fails every reader that does not return plaintext, so it pins the keyring path's outcome, not a check a wrong reader skips. ciphertext_other_tenant fails closed for a reader that resolves its own tenant (encrypted_reader's tenant_source); one that takes the tenant from the frame header decrypts it. Whether a single-tenant reader may take the header's tenant is open: spec/encryption.md's Decryption Flow takes tenant_id as an input without saying where it comes from."
         }
       },
       "retired": {}

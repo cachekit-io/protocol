@@ -42,24 +42,34 @@ Every class below is proven reachable by execution rather than argued from readi
      + 1 B (rejected) and exactly 1000:1 (inside the bound, so the reader must get past
      it), and a truncated envelope. Each reject must fail at its own step with its own
      message. Exactly the size cap must reach the ratio bound, and the exact-1000:1 case
-     must fail with anything but the ratio message. So deleting or loosening one branch
+     must fail with anything but the ratio message. An envelope nested one level past the
+     pre-scan's depth bound fails in the pre-scan, and one at the bound gets past it. So deleting or loosening one branch
      fails this suite even where a later check would also reject. Step 3's
      compressed_data cap is not covered: compressed_data is a strict slice of the
      envelope step 1 already bounded, so no input reaches it.
 
   6. The fixture's `reject_vectors`. The conforming reader rejects each at its named
-     step. Then each check (size cap, zero length, ratio, checksum, output length) is
-     dropped from the reader in turn, and across every vector in the file only that
-     check's vectors may change outcome, to accepted or to a later step. verify must
+     step, and a step-2 vector by its named check. Then each check (the step-2 pre-scan,
+     size cap, zero length, ratio, checksum, output length) is dropped from the reader in
+     turn, and across every vector in the file only that check's vectors may change
+     outcome, to accepted or to a later check. The same holds for each lenient cast a
+     typed decode forbids (a fifth element ignored, a missing fourth defaulted, a
+     checksum's first 8 of 9 taken, a 7-element checksum accepted, a legacy element's low
+     byte kept) and each forbidden ratio arithmetic (float32
+     operands, a float32 quotient, a truncating division). verify must
      fail an altered reject vector by name and a dropped or added one as set drift, and
      generate must refill a missing group byte-identically without dropping a committed
-     entry. A truncating original_size decode must accept only the u32-wrap vector,
-     and a half-joining one must reject it only on length after decompression. A
+     entry. A truncating original_size decode must accept only the u32-wrap and sign-bit
+     vectors, a sign-reinterpreting one must change only the sign-bit vector, and a
+     half-joining one must reject the u32-wrap vector only on length after decompression. A
      reader that decompresses first must miss the size-cap and ratio vectors' named
      steps. An allocation probe must catch a reader that allocates and frees
      original_size before its checks, which no error assertion can. A liblz4 call
      that raises anything but the refusal a vector pins must fail that vector by name,
      not escape verify as a traceback.
+
+  7. The `payload_reject_vectors` and `temporal_sentinel_vectors` groups: verify must
+     fail a dropped vector as set drift and an altered one by name.
 
 A guard with no mutation test is one refactor away from being deleted by someone
 who cannot see what it holds up.
@@ -81,6 +91,7 @@ import io
 import json
 import re
 import shutil
+import struct
 import subprocess
 import sys
 import tempfile
@@ -94,11 +105,14 @@ from unittest.mock import patch
 HERE = Path(__file__).resolve().parent
 TOOL = HERE / "wire-format-reference.py"
 FIXTURE = HERE.parent / "test-vectors" / "wire-format.json"
-# The tool loads its LZ4 decoder from interop-v2-reference.py, which loads interop-reference.py.
-IMPORTED_TOOLS = (HERE / "interop-v2-reference.py", HERE / "interop-reference.py")
+# The tool loads its LZ4 decoder from interop-v2-reference.py, which loads interop-reference.py, and
+# its pre-scan walk from decode-bounds-reference.py.
+IMPORTED_TOOLS = (HERE / "interop-v2-reference.py", HERE / "interop-reference.py", HERE / "decode-bounds-reference.py")
+# Read by the payload-reject builders.
+IMPORTED_FIXTURES = (HERE.parent / "test-vectors" / "decode-bounds.json",)
 
 # A vector whose legacy base is dropped by a bad merge, leaving an orphan twin.
-# LAB-868's width-boundary vector: the only bin16 coverage in the fleet.
+# LAB-868's width-boundary vector, the first bin16 coverage in the fleet.
 ORPHANED_BASE = "width_boundary_bin16"
 
 
@@ -126,6 +140,8 @@ def _scratch(tmp: Path, mutate: Callable[[dict], None] | None = None) -> Path:
     (tmp / "test-vectors").mkdir(parents=True, exist_ok=True)
     for tool in (TOOL, *IMPORTED_TOOLS):
         shutil.copy(tool, tmp / "tools" / tool.name)
+    for other in IMPORTED_FIXTURES:
+        shutil.copy(other, tmp / "test-vectors" / other.name)
     fixture = json.loads(FIXTURE.read_text())
     if mutate:
         mutate(fixture)
@@ -271,6 +287,14 @@ def check_whole_file_properties() -> list[str]:
     def limits_missing(fixture: dict) -> None:
         del fixture["limits"]["max_compression_ratio"]
 
+    def off_the_edge(fixture: dict) -> None:
+        """Re-pin the bin8-maximum pair to width_boundary_bin16's bytes: every other check passes."""
+        by = {v["name"]: v for v in fixture["vectors"]}
+        for suffix in ("", "_bin"):
+            by[f"width_boundary_bin8_max{suffix}"].update(
+                {k: by[f"width_boundary_bin16{suffix}"][k] for k in ("envelope_hex", "envelope_size", "input_hex", "input_size")}
+            )
+
     def unclassifiable(fixture: dict) -> None:
         vec = next((v for v in fixture["vectors"] if v["name"] == "simple_string_bin"), None)
         if vec is None:
@@ -291,6 +315,7 @@ def check_whole_file_properties() -> list[str]:
         ("fixture limits may not contradict the spec table", limits_drift, "limits' drifted"),
         ("a missing declared limit is drift, not a skip", limits_missing, "limits' drifted"),
         ("divergent vector keeps its pinned bytes", repin_divergent, "no longer carries its pinned"),
+        ("a width-boundary pair keeps its compressed_data length", off_the_edge, "off its 255 B width boundary"),
         ("unusable fixture fails by name, not by traceback", unclassifiable, "simple_string_bin"),
     ]
     with tempfile.TemporaryDirectory() as td:
@@ -420,30 +445,86 @@ def check_32_bit_ratio_readers() -> list[str]:
 
 # Each bound of read_envelope that reject vectors isolate: the source fragment of its
 # guard (for _load_tool) and the vectors whose outcome dropping it must change. The step-9
-# length bound lives in the LZ4 decoder, and the full-wire-value rule in the msgpack
-# decode, so those two mutants swap the decoder instead.
+# length bound lives in the LZ4 decoder, step 2's typed decode and the full-wire-value rule
+# in the msgpack decode, and the ratio arithmetic in within_ratio, so those mutants swap a
+# function instead.
 READER_BOUNDS = {
+    "step 2 decode-bounds pre-scan": ("prescan(env)", ("reject_envelope_slots_overclaim",)),
     "step 4 size cap": (
         "original_size > MAX_UNCOMPRESSED_SIZE",
-        ("reject_original_size_over_cap", "reject_original_size_wraps_u32"),
+        ("reject_original_size_over_cap", "reject_original_size_wraps_u32", "reject_original_size_sign_bit"),
     ),
     "step 5 zero length": ("len(data) == 0", ("reject_zero_length_compressed_data",)),
-    "step 5 ratio bound": ("within_ratio(", ("reject_ratio_bomb",)),
+    "step 5 ratio bound": ("within_ratio(", ("reject_ratio_bomb", "reject_ratio_float32_rounds")),
     "step 8 checksum": ("xxh3_64(out) != checksum", ("reject_checksum_mismatch",)),
 }
 LENGTH_BOUND = ("step 6/9 output length", ("reject_decompressed_length_mismatch",))
-# The full-wire-value rule for original_size, broken the three ways Security Limits names.
-WIRE_VALUE_VECTORS = ("reject_original_size_wraps_u32",)
-WIRE_VALUE_DECODES: dict[str, Callable[[int], int]] = {
-    "truncated to its low 32 bits": lambda v: v & 0xFFFFFFFF,
-    "its 32-bit halves joined by +": lambda v: ((v >> 32) + (v & 0xFFFFFFFF)) & 0xFFFFFFFF,
-    "its 32-bit halves joined by |": lambda v: ((v >> 32) | (v & 0xFFFFFFFF)) & 0xFFFFFFFF,
+# The full-wire-value rule for original_size, broken the four ways Security Limits names,
+# each with the vectors it must change. A half-join reads 2^31 + 16 from the sign-bit
+# vector, still over the cap.
+U32_WRAP = "reject_original_size_wraps_u32"
+SIGN_BIT = "reject_original_size_sign_bit"
+WIRE_VALUE_DECODES: dict[str, tuple[Callable[[int], int], tuple[str, ...]]] = {
+    "truncated to its low 32 bits": (lambda v: v & 0xFFFFFFFF, (U32_WRAP, SIGN_BIT)),
+    "its 32-bit halves joined by +": (lambda v: ((v >> 32) + (v & 0xFFFFFFFF)) & 0xFFFFFFFF, (U32_WRAP,)),
+    "its 32-bit halves joined by |": (lambda v: ((v >> 32) | (v & 0xFFFFFFFF)) & 0xFFFFFFFF, (U32_WRAP,)),
+    "sign-reinterpreted as an i64": (lambda v: v - (1 << 64) if v >= 1 << 63 else v, (SIGN_BIT,)),
+}
+# Ratio arithmetic the spec forbids, swapped in for within_ratio, and the vectors each must
+# change. A binary64 ratio is absent: it gives the product's verdict at every legal size.
+FLOAT32_REJECT = "reject_ratio_float32_rounds"
+RATIO_ARITHMETIC: dict[str, tuple[Callable[[int, int], bool], tuple[str, ...]]] = {
+    "a ratio of float32 operands": (lambda o, n: _f32(_f32(o) / _f32(n)) <= 1000, (FLOAT32_REJECT,)),
+    "a ratio rounded to float32": (lambda o, n: _f32(o / n) <= 1000, (FLOAT32_REJECT,)),
+    "a truncating integer division": (lambda o, n: o // n <= 1000, ("reject_ratio_bomb", FLOAT32_REJECT)),
 }
 _SHORT_OUTPUT = re.compile(r"LZ4 output length (\d+) != original_size")
 
 
+def _f32(x: float) -> float:
+    return struct.unpack("f", struct.pack("f", x))[0]
+
+
+def _lenient_decode(mod: ModuleType, *, extra_elements: bool = False, default_format: bool = False,
+                    checksum_prefix: bool = False, checksum_short: bool = False,
+                    low_byte: bool = False) -> Callable[[bytes], tuple]:
+    """decode_envelope with one of step 2's typed checks replaced by the cast a lenient reader makes."""
+
+    def decode(env: bytes) -> tuple:
+        r = mod._Reader(env)
+        n = mod._decode_array_header(r)
+        if n != 4 and not (extra_elements and n > 4) and not (default_format and n == 3):
+            raise ValueError("StorageEnvelope must be a 4-element array")
+        if low_byte and r.peek() not in (0xC4, 0xC5, 0xC6):
+            data = bytes(mod._decode_uint(r) & 0xFF for _ in range(mod._decode_array_header(r)))
+        else:
+            data, _encoding = mod._decode_bytes_field(r)
+        k = mod._decode_array_header(r)
+        if k != 8 and not (checksum_prefix and k > 8) and not (checksum_short and k < 8):
+            raise ValueError("checksum must be an 8-element array")
+        checksum = bytes([mod._decode_uint(r) for _ in range(k)][:8])
+        original_size = mod._decode_uint(r)
+        fmt = mod._decode_str(r) if n > 3 else "msgpack"
+        if r.pos != len(env) and not extra_elements:
+            raise ValueError("trailing bytes after envelope")  # a reader that ignores extras ignores them all
+        return data, checksum, original_size, fmt, "bin"
+
+    return decode
+
+
+TYPED_DECODES = {
+    "envelope arity (elements past the fourth ignored)": ({"extra_elements": True}, ("reject_envelope_arity_5",)),
+    "envelope arity (a missing format read as msgpack)": ({"default_format": True}, ("reject_envelope_arity_3",)),
+    "checksum arity (its first 8 elements taken)": ({"checksum_prefix": True}, ("reject_checksum_nine_elements",)),
+    # A reader that compares only the elements it was given; this one still compares all 8 digest bytes, so on
+    # the xxhash leg it rejects at step 8 instead of accepting, which is still a later check.
+    "checksum arity (a shorter checksum accepted)": ({"checksum_short": True}, ("reject_checksum_seven_elements",)),
+    "legacy element range (low 8 bits kept)": ({"low_byte": True}, ("reject_legacy_element_above_255",)),
+}
+
+
 def _outcomes(mod: ModuleType, vectors: list[tuple[str, bytes, bytes | None]], xxh3_64) -> dict[str, str]:
-    """name -> "accepted", "accepted wrong output", "step N" or "raised ..." for every vector."""
+    """name -> "accepted", "accepted wrong output", "step N[ check]" or "raised ..." for every vector."""
     out = {}
     for name, env, want in vectors:
         try:
@@ -451,10 +532,25 @@ def _outcomes(mod: ModuleType, vectors: list[tuple[str, bytes, bytes | None]], x
             # A reject vector (want None) has no right output: any acceptance is the finding.
             out[name] = "accepted" if want is None or got == want else "accepted wrong output"
         except mod.EnvelopeReject as e:
-            out[name] = f"step {e.step}"
+            out[name] = f"step {e.step}" + (f" {e.check}" if e.check else "")
         except Exception as e:  # noqa: BLE001 - any other escape is itself the finding
             out[name] = f"raised {e!r}"
     return out
+
+
+def _later(got: str, vec: dict) -> bool:
+    """Whether a mutant's outcome on a reject vector is acceptance or a check after the one that should fire.
+
+    Within step 2 the typed decode runs after the pre-scan.
+    """
+    if got == "accepted":
+        return True
+    if not got.startswith("step "):
+        return False
+    step = int(got.split()[1])
+    if step != vec["reject_step"]:
+        return step > vec["reject_step"]
+    return vec.get("reject_check") == "decode_bounds" and got.endswith("typed_decode")
 
 
 def check_reader_rejects() -> list[str]:
@@ -544,10 +640,17 @@ def check_reader_rejects() -> list[str]:
         "compression ratio exceeds",
     )
     expect("truncated envelope rejected at decode", env[:-1], 2, "malformed envelope")
+    # The pre-scan's depth bound: element[0] nested one level past it. The typed decode
+    # would reject this too, so only the message shows the pre-scan ran.
+    deep = b"\x94" + b"\x91" * mod.DEPTH_BOUND + b"\xc0" + env[1 + 2 + len(data):]
+    expect("envelope nested past the depth bound rejected by the pre-scan", deep, 2, "decode bound exceeded (depth)")
+    at_bound = b"\x94" + b"\x91" * (mod.DEPTH_BOUND - 1) + b"\xc0" + env[1 + 2 + len(data):]
+    expect("envelope at the depth bound passes the pre-scan", at_bound, 2, "decode bound exceeded", absent=True)
 
     # --- the fixture's reject_vectors, and one mutant per bound ---
     rejects = {v["name"]: v for v in fixture.get("reject_vectors", [])}
     wanted = {v for _fragment, vs in READER_BOUNDS.values() for v in vs} | set(LENGTH_BOUND[1])
+    wanted |= {v for _kw, vs in TYPED_DECODES.values() for v in vs}
     if set(rejects) != wanted:
         return [*failures, f"fixture reject_vectors {sorted(rejects)} != the bounds' vectors {sorted(wanted)}"]
     vectors: list[tuple[str, bytes, bytes | None]] = [
@@ -557,14 +660,19 @@ def check_reader_rejects() -> list[str]:
         (v["name"], mod.iv2.construct(v["envelope_construction"]), mod.iv2.construct(v["input_construction"]))
         for v in fixture.get("constructed_vectors", [])
     ]
+    vectors += [
+        (v["name"], bytes.fromhex(v["envelope_hex"]), bytes.fromhex(v["input_hex"]))
+        for v in fixture.get("payload_reject_vectors", [])
+    ]
     vectors += [(n, bytes.fromhex(v["envelope_hex"]), None) for n, v in rejects.items()]
     conforming = _outcomes(mod, vectors, xxh3_64)
     for name, got in conforming.items():
         if name in rejects:
-            step = rejects[name]["reject_step"]
+            step, check = rejects[name]["reject_step"], rejects[name].get("reject_check")
             if step == 8 and xxh3_64 is None:
                 continue  # the stdlib reader cannot run step 8
-            report(got == f"step {step}", f"conforming reader: {name} rejected at step {step} ({got})")
+            want = f"step {step}" + (f" {check}" if check else "")
+            report(got == want, f"conforming reader: {name} rejected at {want} ({got})")
         elif got != "accepted":
             report(False, f"conforming reader: {name} accepted ({got})")
 
@@ -598,7 +706,7 @@ def check_reader_rejects() -> list[str]:
     # Truncation accepts the u32-wrap vector; a half-join reads 17 and fails only on length,
     # which is why its SDK test asserts a rejection before decompression.
     wire_mutants = {}
-    for label, narrow in WIRE_VALUE_DECODES.items():
+    for label, (narrow, bound_vectors) in WIRE_VALUE_DECODES.items():
         mutant = _load_tool()
 
         def narrowing_decode(envelope: bytes, strict=mutant.decode_envelope, narrow=narrow):
@@ -607,17 +715,21 @@ def check_reader_rejects() -> list[str]:
 
         mutant.decode_envelope = narrowing_decode
         wire_mutants[label] = mutant
-        mutants.append((f"full-wire-value original_size ({label})", WIRE_VALUE_VECTORS, mutant))
+        mutants.append((f"full-wire-value original_size ({label})", bound_vectors, mutant))
+    for label, (kwargs, bound_vectors) in TYPED_DECODES.items():
+        mutant = _load_tool()
+        mutant.decode_envelope = _lenient_decode(mutant, **kwargs)
+        mutants.append((f"step 2's check of {label}", bound_vectors, mutant))
+    for label, (ratio, bound_vectors) in RATIO_ARITHMETIC.items():
+        mutant = _load_tool()
+        mutant.within_ratio = ratio
+        mutants.append((f"the ratio product (the bound taken by {label} instead)", bound_vectors, mutant))
 
     for label, bound_vectors, mutant in mutants:
         got = _outcomes(mutant, vectors, xxh3_64)
         changed = sorted(n for n in got if got[n] != conforming[n])
-        moved = all(
-            got[v] == "accepted"
-            or (got[v].startswith("step ") and int(got[v].split()[1]) > rejects[v]["reject_step"])
-            for v in bound_vectors
-        )
-        detail = ", ".join(f"{v}: step {rejects[v]['reject_step']} -> {got[v]}" for v in bound_vectors)
+        moved = all(_later(got[v], rejects[v]) for v in bound_vectors)
+        detail = ", ".join(f"{v}: {conforming[v]} -> {got[v]}" for v in bound_vectors)
         report(
             changed == sorted(bound_vectors) and moved,
             f"mutant without {label}: only its vectors change ({detail}); changed {changed}",
@@ -642,16 +754,15 @@ def check_reader_rejects() -> list[str]:
     # The spec says a half-join rejects the u32-wrap vector only on length: check the error, not just the step.
     for label in ("its 32-bit halves joined by +", "its 32-bit halves joined by |"):
         mutant = wire_mutants[label]
-        for v in WIRE_VALUE_VECTORS:
-            try:
-                mutant.read_envelope(bytes.fromhex(rejects[v]["envelope_hex"]), xxh3_64)
-                reason, at = "accepted", None
-            except mutant.EnvelopeReject as e:
-                reason, at = str(e), e.step
-            report(
-                at == 6 and _SHORT_OUTPUT.search(reason) is not None,
-                f"original_size {label}: {v} rejected only on length after decompression ({reason})",
-            )
+        try:
+            mutant.read_envelope(bytes.fromhex(rejects[U32_WRAP]["envelope_hex"]), xxh3_64)
+            reason, at = "accepted", None
+        except mutant.EnvelopeReject as e:
+            reason, at = str(e), e.step
+        report(
+            at == 6 and _SHORT_OUTPUT.search(reason) is not None,
+            f"original_size {label}: {U32_WRAP} rejected only on length after decompression ({reason})",
+        )
     failures += _check_allocation_probe(mod, rejects)
     return failures
 
@@ -842,6 +953,37 @@ def check_constructed_group() -> list[str]:
     return failures
 
 
+def check_payload_and_temporal_groups() -> list[str]:
+    """verify fails a dropped or altered payload-reject or temporal-sentinel vector, by name."""
+    failures = []
+
+    def drop_payload(fixture: dict) -> None:
+        fixture["payload_reject_vectors"] = fixture["payload_reject_vectors"][1:]
+
+    def renamed_source(fixture: dict) -> None:
+        # A field a builder derives, edited by hand: the builder no longer matches.
+        fixture["payload_reject_vectors"][0]["derived_from"] = "decode-bounds.json:array16_256_backed_nils"
+
+    def drop_temporal(fixture: dict) -> None:
+        del fixture["temporal_sentinel_vectors"]
+
+    def bad_iso(fixture: dict) -> None:
+        vec = next(v for v in fixture["temporal_sentinel_vectors"] if v["name"] == "temporal_sentinel_date")
+        vec["revives_to"]["iso"] = "2025-11-14T10:30:00"
+
+    cases = [
+        ("dropped payload-reject vector is set drift", drop_payload, "payload-reject-vector set drifted"),
+        ("a hand-edited payload-reject field fails by name", renamed_source, "FAIL payload_array32_max_claim_alone"),
+        ("missing temporal group is set drift", drop_temporal, "temporal-sentinel-vector set drifted"),
+        ("a hand-edited sentinel value fails by name", bad_iso, "FAIL temporal_sentinel_date"),
+    ]
+    with tempfile.TemporaryDirectory() as td:
+        for label, mutate, marker in cases:
+            tool = _scratch(Path(tempfile.mkdtemp(dir=td)), mutate=mutate)
+            _expect(failures, label, _run([], ["verify"], tool=tool), 1, marker)
+    return failures
+
+
 def check_flag_rejections() -> list[str]:
     """A flag accepted-and-ignored on the fixture-writing path is a fail-open."""
     failures = []
@@ -876,6 +1018,7 @@ def main() -> int:
         ("32-bit ratio readers", check_32_bit_ratio_readers),
         ("reader reject branches", check_reader_rejects),
         ("constructed group", check_constructed_group),
+        ("payload-reject and temporal-sentinel groups", check_payload_and_temporal_groups),
         ("reject group", check_reject_group),
         ("reject liblz4 errors", check_reject_liblz4_raises),
     ):

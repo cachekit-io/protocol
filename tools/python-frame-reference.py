@@ -19,7 +19,9 @@ Modes:
               either; and it must record the serializer
               name as a non-empty string in `s`) and the ByteStorage envelope down
               to the LZ4-decompressed inner msgpack (inner_msgpack_hex);
-              checks every error vector is rejected. Runs in CI. It does not
+              checks every error vector is rejected, by the check its
+              `rejected_by` names, and that each encrypted_read_vectors frame
+              parses, claims what it declares and matches its pinned sha256. Runs in CI. It does not
               decode the inner msgpack, so value_json is checked against the
               decoded value only by tools/frame-crosscheck.mjs (Node).
     generate  Upserts the vector file by vector name (LAB-1203): every vector
@@ -38,6 +40,10 @@ Modes:
               deserialization path before being written, and every vector
               declaring `twin_of` is checked against its base (stderr warning
               only — see "Twin declarations" below; `verify` is the gate).
+              Every error vector is proven rejected by cachekit-py's read path at
+              its named check, and every encrypted_read_vectors frame proven to
+              fail closed under the encrypted reader. That group is
+              build-missing-only: its ciphertext carries a random nonce.
 
 Twin declarations (LAB-3967):
     A frame vector may carry `"twin_of": "<vector name>"` — the operator's
@@ -68,10 +74,12 @@ decoder here would silently weaken the inner_msgpack_hex check.
 
 from __future__ import annotations
 
+import hashlib
 import importlib.util
 import json
 import sys
 from pathlib import Path
+from collections.abc import Callable
 from types import ModuleType
 from typing import NoReturn
 
@@ -109,7 +117,11 @@ _lz4_block_decompress = _load_tool("interop-v2-reference.py", "interop_v2_refere
 
 
 class FrameError(ValueError):
-    pass
+    """A frame the parser rejects, tagged with the check that rejected it (error vectors' `rejected_by`)."""
+
+    def __init__(self, reason: str, check: str = "header"):
+        super().__init__(reason)
+        self.check = check
 
 
 def _require(condition: bool, what: str) -> None:
@@ -137,16 +149,16 @@ def _load_fixture() -> dict:
 def parse_frame(frame: bytes) -> tuple[dict, bytes]:
     """Independent CK v3 frame parser (deliberately not importing cachekit)."""
     if frame[:2] != MAGIC:
-        raise FrameError("not a CK frame (missing 0x43 0x4B magic)")
+        raise FrameError("not a CK frame (missing 0x43 0x4B magic)", "magic")
     if len(frame) < PREFIX_LEN:
-        raise FrameError(f"truncated frame: {len(frame)} bytes < {PREFIX_LEN}-byte fixed prefix")
+        raise FrameError(f"truncated frame: {len(frame)} bytes < {PREFIX_LEN}-byte fixed prefix", "prefix_length")
     version = frame[2]
     if version != FRAME_VERSION:
-        raise FrameError(f"unsupported frame version {version} (expected {FRAME_VERSION})")
+        raise FrameError(f"unsupported frame version {version} (expected {FRAME_VERSION})", "version")
     hdr_len = int.from_bytes(frame[3:7], "big")
     header_end = PREFIX_LEN + hdr_len
     if header_end > len(frame):
-        raise FrameError(f"declared header length {hdr_len} exceeds frame ({len(frame)} bytes)")
+        raise FrameError(f"declared header length {hdr_len} exceeds frame ({len(frame)} bytes)", "header_length")
     try:
         header = json.loads(frame[PREFIX_LEN:header_end].decode("utf-8"), parse_constant=_reject_constant)
     except UnicodeDecodeError as exc:
@@ -406,13 +418,23 @@ def verify() -> int:
             else:
                 print(f"ok   {name} (CK-prefixed, multi-byte: not a single msgpack document)")
             continue
+        want = vec.get("rejected_by")
         try:
             parse_frame(frame)
-        except FrameError:
-            print(f"ok   {name} (rejected)")
+        except FrameError as e:
+            # A boundary vector is only worth its bytes if the check it sits on rejects it:
+            # a later check rejecting it instead is the reader the vector exists to catch.
+            # Required, so no vector can be rejected by whatever check happens to fire.
+            if e.check != want:
+                print(f"FAIL {name}: rejected by the {e.check} check, not {want!r} (rejected_by): {e}")
+                failures += 1
+            else:
+                print(f"ok   {name} (rejected by the {want} check)")
         else:
             print(f"FAIL {name}: expected rejection, parsed successfully")
             failures += 1
+
+    failures += _verify_encrypted_reads(doc)
 
     # Coverage floor. Protocol 1.1 is "writers emit bin, readers accept legacy
     # FOREVER"; that dual-read guarantee is only proven while the fixture carries
@@ -428,6 +450,96 @@ def verify() -> int:
         return 1
     print("\nall python-frame vectors verified")
     return 0
+
+
+# A cache configured for encryption reads every encrypted_read_vectors frame and MUST fail
+# closed (spec/wire-format.md, the CK frame CAUTION). The reader resolves its own tenant.
+ENCRYPTED_READER_FIELDS = ("master_key_hex", "tenant_id", "tenant_source", "cache_key")
+
+
+# sha256 of each encrypted-read frame, pinned in code. `generate` proves each frame fails
+# closed against cachekit-py, but CI runs only `verify`, which cannot run the SDK's read
+# path or AES-GCM. Without the pin, a frame swapped for bytes that authenticate nowhere,
+# with its declared payload updated to match, or a dropped group, still verified green.
+# The group is build-missing-only, so a pin changes only with a deliberate rebuild.
+ENCRYPTED_READ_PINS = {
+    "forged_plaintext_encrypted_false": "7e155990f82212403ad3e194077ca2e9b6d22dcd2c2a4c8be844d009c55ed786",
+    "forged_plaintext_orjson": "887544092fc08040d0a1652b8ec7a50095d610a7d513cf58c5479790507cb647",
+    "ciphertext_key_not_in_keyring": "323b270b4b67860213afd2c6bc0ecddb52f01958f6d6702ff6a3b1715a026c25",
+    "ciphertext_other_tenant": "2ee0a5c536698672380fbc8b2300b87fda1f14e4d1fdc5f56a813423936caeb6",
+}
+
+
+def _verify_encrypted_reads(doc: dict) -> int:
+    """Checks on the encrypted-read group; the fail-closed outcome is proven by `generate`.
+
+    stdlib cannot run the SDK's read path, so verify pins the bytes `generate` proved: the
+    set of vectors and each frame's sha256 (ENCRYPTED_READ_PINS), and the reader, which must
+    equal ENCRYPTED_READER. It also checks what the bytes claim: each frame parses, records a
+    serializer name, matches its declared header and payload, and its header claims what the
+    vector's `header_claims` says (plaintext or ciphertext).
+    """
+    vectors = doc.get("encrypted_read_vectors", [])
+    failures = 0
+    if not isinstance(vectors, list):
+        print(f"FAIL encrypted_read_vectors: must be a list, got {type(vectors).__name__}")
+        vectors, failures = [], 1
+    shaped = [v for v in vectors if isinstance(v, dict) and type(v.get("name")) is str and type(v.get("frame_hex")) is str]
+    if len(shaped) != len(vectors):
+        print("FAIL encrypted_read_vectors: every vector needs a string name and frame_hex")
+        failures += 1
+    vectors = shaped
+    names = sorted(v["name"] for v in vectors)
+    if names != sorted(ENCRYPTED_READ_PINS):
+        print(f"FAIL encrypted_read_vectors: set drifted — fixture {names} != pinned {sorted(ENCRYPTED_READ_PINS)}")
+        failures += 1
+    if doc.get("encrypted_reader") != ENCRYPTED_READER:
+        print("FAIL encrypted_reader: differs from ENCRYPTED_READER, the reader generate proved the frames against")
+        failures += 1
+    reader = doc.get("encrypted_reader")
+    bad = [f for f in ENCRYPTED_READER_FIELDS if not isinstance(reader, dict) or type(reader.get(f)) is not str]
+    try:
+        key_ok = not bad and len(bytes.fromhex(reader["master_key_hex"])) == 32 and reader["tenant_source"] == "reader"
+    except ValueError:
+        key_ok = False
+    if not key_ok:
+        print(
+            f"FAIL encrypted_reader: needs {', '.join(ENCRYPTED_READER_FIELDS)} as strings, a 32-byte master key "
+            "and tenant_source reader"
+        )
+        failures += 1
+    for vec in vectors:
+        name = vec["name"]
+        try:
+            frame = bytes.fromhex(vec["frame_hex"])
+            header, payload = parse_frame(frame)
+        except ValueError as e:  # bad hex, or a FrameError
+            print(f"FAIL {name}: parse error: {e}")
+            failures += 1
+            continue
+        why = []
+        digest = hashlib.sha256(frame).hexdigest()
+        if name in ENCRYPTED_READ_PINS and digest != ENCRYPTED_READ_PINS[name]:
+            why.append(f"frame sha256 {digest} differs from its pin; rebuild with generate and re-pin deliberately")
+        if json.dumps(header, sort_keys=True) != json.dumps(vec.get("expected_header"), sort_keys=True):
+            why.append("header mismatch")
+        if payload.hex() != vec.get("expected_payload_hex"):
+            why.append("payload mismatch")
+        ser = header.get("s") if isinstance(header, dict) else None
+        if type(ser) is not str or not ser:
+            why.append("no serializer name in 's'")
+        meta = header.get("m") if isinstance(header, dict) else None
+        claims = "ciphertext" if isinstance(meta, dict) and meta.get("encrypted") is True else "plaintext"
+        if vec.get("header_claims") != claims:
+            why.append(f"header claims {claims}, vector declares {vec.get('header_claims')!r}")
+        if vec.get("outcome") != "fail_closed":
+            why.append(f"outcome must be fail_closed, got {vec.get('outcome')!r}")
+        for w in why:
+            print(f"FAIL {name}: {w}")
+        failures += len(why)
+        if not why:
+            print(f"ok   {name} (header claims {claims}; an encrypted reader fails closed)")
+    return failures
 
 
 def _build_default_path_vector() -> dict:
@@ -560,40 +672,118 @@ def _warn_twin_divergence(frame_vectors: list[dict]) -> None:
             )
 
 
-def _build_error_vectors(raw_frame: bytes) -> list[dict]:
+# cachekit-py's own message for each frame check (cachekit/serializers/wrapper.py), so
+# generate proves the real reader rejects each error vector at the check it pins. A
+# non-CK value falls through to cachekit-py's legacy JSON path, which refuses it.
+_PY_REJECTION = {
+    "prefix_length": "Truncated cache envelope frame",
+    "version": "Unsupported cache envelope frame version",
+    "header_length": "Invalid cache envelope header length",
+    "magic": "Corrupt cache envelope",
+}
+
+
+def _build_error_vectors(raw_frame: bytes, default_vec: dict) -> list[dict]:
     """Build the error vectors, each checked against the REAL implementation.
 
     Separate from generate() so the frame-vector flow and the error-vector flow
     read independently. Every vector here is proven to be rejected by
-    cachekit-py before it can be written, and the interop vector is proven to
-    be rejected by a strict msgpack reader.
+    cachekit-py's read path, at the check its `rejected_by` names, before it can
+    be written, and the interop vector is proven to be rejected by a strict
+    msgpack reader. The boundary vectors carry the real default-write header, so
+    a reader that skips their check reaches the value instead of tripping over an
+    empty header.
     """
     import msgpack  # third-party; generation only
 
-    from cachekit.serializers.wrapper import SerializationWrapper
+    from cachekit.cache_handler import CacheSerializationHandler
 
+    frame = bytes.fromhex(default_vec["frame_hex"])
+    header_end = PREFIX_LEN + int.from_bytes(frame[3:PREFIX_LEN], "big")
     built_errors = [
         {
             "name": "truncated_frame",
             "frame_hex": "434b03",
             "error": "shorter than the 7-byte fixed prefix (magic + version + header length)",
+            "rejected_by": "prefix_length",
         },
         {
             "name": "unsupported_frame_version",
             "frame_hex": "434b04000000027b7d",
             "error": "frame version 4 (only version 3 is defined)",
+            "rejected_by": "version",
         },
         {
             "name": "header_overrun",
             "frame_hex": "434b03000000ff7b7d",
             "error": "declared header length (255) exceeds the bytes present in the frame",
+            "rejected_by": "header_length",
+        },
+        {
+            "name": "truncated_frame_one_short",
+            "frame_hex": frame[: PREFIX_LEN - 1].hex(),
+            "error": (
+                "6 bytes, one short of the 7-byte fixed prefix: the default write's magic, version and the first "
+                "three bytes of its header length"
+            ),
+            "rejected_by": "prefix_length",
+        },
+        {
+            "name": "unsupported_frame_version_2",
+            "frame_hex": (frame[:2] + b"\x02" + frame[3:]).hex(),
+            "error": (
+                f"{default_vec['name']} with frame version 2, one below the only defined version. A reader that "
+                "rejects only versions above 3 returns the value, because header and payload are intact"
+            ),
+            "rejected_by": "version",
+        },
+        {
+            "name": "unsupported_frame_version_4",
+            "frame_hex": (frame[:2] + b"\x04" + frame[3:]).hex(),
+            "error": (
+                f"{default_vec['name']} with frame version 4, one above the only defined version. A reader that "
+                "rejects only versions below 3 returns the value, because header and payload are intact"
+            ),
+            "rejected_by": "version",
+        },
+        {
+            "name": "header_overrun_by_one",
+            "frame_hex": (frame[:3] + (header_end - PREFIX_LEN + 1).to_bytes(4, "big") + frame[PREFIX_LEN:header_end]).hex(),
+            "error": (
+                f"{default_vec['name']}'s prefix and header with no payload, the declared header length one past the "
+                "bytes present. A reader that slices the header to the bytes present gets the real header and an "
+                "empty payload"
+            ),
+            "rejected_by": "header_length",
+        },
+        {
+            "name": "bare_envelope_fed_to_frame_reader",
+            "frame_hex": default_vec["expected_payload_hex"],
+            "error": (
+                f"{default_vec['name']}'s payload alone: a bare ByteStorage envelope, cachekit-ts's default "
+                "auto-mode container. cachekit-py MUST NOT decode another SDK's container; it has no CK magic"
+            ),
+            "rejected_by": "magic",
+        },
+        {
+            "name": "plain_msgpack_fed_to_frame_reader",
+            "frame_hex": default_vec["payload_envelope"]["inner_msgpack_hex"],
+            "error": (
+                f"{default_vec['name']}'s value as plain MessagePack, the container of cachekit-rs and of "
+                "cachekit-ts with compression off. cachekit-py MUST NOT decode another SDK's container; it has "
+                "no CK magic"
+            ),
+            "rejected_by": "magic",
         },
     ]
+    from cachekit.serializers.base import SerializationError  # every read-path refusal derives from it
+
+    handler = CacheSerializationHandler(serializer_name="default")
     for vec in built_errors:
         try:
-            SerializationWrapper.unwrap(bytes.fromhex(vec["frame_hex"]))
-        except ValueError:
-            pass
+            handler.deserialize_data(bytes.fromhex(vec["frame_hex"]), cache_key="python-frame-vector")
+        except SerializationError as e:  # the message names the check; a wrong one fails below
+            _require(_PY_REJECTION[vec["rejected_by"]] in str(e), f"cachekit-py rejects {vec['name']} elsewhere: {e}")
         else:  # pragma: no cover - generation-time invariant
             raise AssertionError(f"cachekit-py accepted error vector {vec['name']}")
     try:
@@ -602,7 +792,8 @@ def _build_error_vectors(raw_frame: bytes) -> list[dict]:
         pass  # exactly the trailing-bytes rejection the spec requires
     else:  # pragma: no cover - generation-time invariant
         raise AssertionError("strict msgpack reader accepted a CK frame as one document")
-    built_errors.append(
+    built_errors.insert(
+        3,
         {
             "name": "ck_frame_fed_to_interop_reader",
             "frame_hex": raw_frame.hex(),
@@ -612,9 +803,121 @@ def _build_error_vectors(raw_frame: bytes) -> list[dict]:
                 "and reject trailing bytes; on failure, a 0x43 0x4B prefix SHOULD be reported as "
                 "'Python-SDK-internal auto-mode entry — not an interop value'"
             ),
-        }
+        },
     )
     return built_errors
+
+
+# The encrypted-read group's reader, and the key and tenant its ciphertext vectors were
+# sealed under instead. Test-only keys.
+# tenant_source "reader": the reader resolves tenant_id for itself, never from the frame
+# header, which nothing authenticates.
+ENCRYPTED_READER = {
+    "master_key_hex": "11" * 32,
+    "tenant_id": "00000000-0000-4000-8000-00000000000a",
+    "tenant_source": "reader",
+    "cache_key": "python-frame-vector",
+}
+OTHER_MASTER_KEY_HEX = "22" * 32
+OTHER_TENANT = "00000000-0000-4000-8000-00000000000b"
+
+
+def _encrypted_handler(master_key_hex: str, tenant: str, *, fail_closed: bool = False, serializer: str = "default"):
+    """A cachekit-py handler encrypting as `tenant`, which it resolves itself (multi-tenant mode)."""
+    from cachekit.cache_handler import CacheSerializationHandler
+    from cachekit.decorators.tenant_context import CallableExtractor
+
+    return CacheSerializationHandler(
+        serializer, encryption=True, master_key=master_key_hex, encryption_fail_closed=fail_closed,
+        tenant_extractor=CallableExtractor(lambda *_a, **_k: tenant),
+    )
+
+
+def _build_encrypted_read_vectors(default_vec: dict, committed: list[dict]) -> list[dict]:
+    """Frames an encrypted cache MUST fail closed on, proven against cachekit-py.
+
+    Build-missing-only: a ciphertext vector carries a random nonce, so rebuilding it
+    would rewrite the fixture on every run. Every vector, committed or new, is read by
+    the ENCRYPTED_READER under both tamper policies and must never return a value.
+    """
+    from cachekit.cache_handler import CacheSerializationHandler
+    from cachekit.serializers.wrapper import SerializationWrapper
+
+    key = ENCRYPTED_READER["cache_key"]
+    value = default_vec["value_json"]
+    payload, meta, ser = SerializationWrapper.unwrap(bytes.fromhex(default_vec["frame_hex"]))
+
+    def plaintext_false() -> bytes:
+        return SerializationWrapper.wrap(bytes(payload), {**meta, "encrypted": False}, ser)
+
+    def orjson_plaintext() -> bytes:
+        return CacheSerializationHandler("orjson", encryption=False).serialize_data(value, cache_key=key)
+
+    def sealed(master_key_hex: str, tenant: str) -> Callable[[], bytes]:
+        return lambda: _encrypted_handler(master_key_hex, tenant).serialize_data(value, cache_key=key)
+
+    builders = {
+        "forged_plaintext_encrypted_false": (
+            plaintext_false,
+            f"{default_vec['name']}'s plaintext payload under a header that adds \"encrypted\": false. An attacker "
+            "with backend write access can write this frame. An encrypted cache MUST NOT let the header downgrade "
+            "it to the plaintext read path, and MUST fail closed.",
+        ),
+        "forged_plaintext_orjson": (
+            orjson_plaintext,
+            "the same value written by cachekit-py's orjson serializer with encryption off: the header names "
+            "another serializer (s: orjson) and claims no encryption. An encrypted cache MUST fail closed, whether "
+            "it refuses the serializer name or the plaintext claim first.",
+        ),
+        "ciphertext_key_not_in_keyring": (
+            sealed(OTHER_MASTER_KEY_HEX, ENCRYPTED_READER["tenant_id"]),
+            "the value sealed by cachekit-py for the reader's tenant under another master key, one the reader's "
+            "keyring lacks (its key_fingerprint names that key). The ciphertext does not authenticate under the "
+            "reader's key, so the read MUST fail closed, whatever its tamper policy.",
+        ),
+        "ciphertext_other_tenant": (
+            sealed(ENCRYPTED_READER["master_key_hex"], OTHER_TENANT),
+            f"the value sealed by cachekit-py under the reader's master key for tenant {OTHER_TENANT}. A reader that "
+            f"resolves its own tenant ({ENCRYPTED_READER['tenant_id']}) derives another key and builds another AAD, "
+            "so the ciphertext does not authenticate and the read MUST fail closed. A reader that takes the "
+            "tenant from the unauthenticated header decrypts it.",
+        ),
+    }
+    vectors = list(committed)
+    present = {v["name"] for v in vectors}
+    for name, (build, description) in builders.items():
+        if name in present:
+            continue
+        frame = build()
+        header, body = parse_frame(frame)
+        vectors.append(
+            {
+                "name": name,
+                "description": description,
+                "frame_hex": frame.hex(),
+                "expected_header": header,
+                "expected_payload_hex": body.hex(),
+                "header_claims": "ciphertext" if header["m"].get("encrypted") is True else "plaintext",
+                "outcome": "fail_closed",
+            }
+        )
+    from cachekit.serializers.base import SerializationError  # every read-path refusal derives from it
+
+    reader_key, tenant = ENCRYPTED_READER["master_key_hex"], ENCRYPTED_READER["tenant_id"]
+    readers = {fc: _encrypted_handler(reader_key, tenant, fail_closed=fc) for fc in (False, True)}
+    for vec in vectors:
+        for fail_closed, reader in readers.items():
+            try:
+                got = reader.deserialize_data(bytes.fromhex(vec["frame_hex"]), cache_key=key)
+            except SerializationError:  # a refusal is the fail-closed outcome; anything else is a broken harness
+                continue
+            raise AssertionError(f"cachekit-py returned {got!r} for {vec['name']} (fail_closed={fail_closed})")
+    # Positive control, per policy: each reader reads its own entry, so the refusals above are not a broken reader.
+    own = _encrypted_handler(reader_key, tenant).serialize_data(value, cache_key=key)
+    for fail_closed, reader in readers.items():
+        _require(reader.deserialize_data(own, cache_key=key) == value,
+                 f"the encrypted reader (fail_closed={fail_closed}) cannot read its own entry")
+    return vectors
 
 
 def generate() -> int:
@@ -648,7 +951,8 @@ def generate() -> int:
     # -> CK frame. Named by the envelope encoding the wheel emits, so a
     # protocol 1.1 wheel rebuilds the _bin twin and a legacy wheel rebuilds the
     # legacy original — either way the other vector stays as committed.
-    built.append(_build_default_path_vector())
+    default_vec = _build_default_path_vector()
+    built.append(default_vec)
 
     # 3. Arrow path: frame wrapping [8-byte xxHash3-64][Arrow IPC file].
     # Optional: without pandas + pyarrow the committed vector is left untouched.
@@ -690,7 +994,8 @@ def generate() -> int:
             }
         )
 
-    built_errors = _build_error_vectors(raw_frame)
+    built_errors = _build_error_vectors(raw_frame, default_vec)
+    encrypted = _build_encrypted_read_vectors(default_vec, doc.get("encrypted_read_vectors", []))
 
     # Upsert by name. The top-level 'generator' (the legacy-vector provenance)
     # is never rewritten; every vector this run rewrites or adds carries its
@@ -702,6 +1007,18 @@ def generate() -> int:
     unstamped = {v["name"] for v in doc["frame_vectors"] + doc["error_vectors"] if "generator" not in v}
     changed = _upsert(doc["frame_vectors"], built, generator_stamp)
     changed += _upsert(doc["error_vectors"], built_errors, generator_stamp)
+    added = [v["name"] for v in encrypted if v["name"] not in {c["name"] for c in doc.get("encrypted_read_vectors", [])}]
+    if doc.get("encrypted_reader") != ENCRYPTED_READER:
+        doc["encrypted_reader"] = ENCRYPTED_READER
+        changed.append("encrypted_reader")
+    for name in added:
+        frame = bytes.fromhex(next(v for v in encrypted if v["name"] == name)["frame_hex"])
+        print(f"note: pin {name} in ENCRYPTED_READ_PINS: {hashlib.sha256(frame).hexdigest()}", file=sys.stderr)
+    if added:
+        doc["encrypted_read_vectors"] = [
+            v if v["name"] not in added else {**v, "generator": generator_stamp} for v in encrypted
+        ]
+        changed += added
     _warn_twin_divergence(doc["frame_vectors"])
 
     if not changed:
@@ -720,7 +1037,8 @@ def generate() -> int:
     VECTOR_PATH.write_text(json.dumps(doc, indent=2, sort_keys=False) + "\n")
     print(
         f"wrote {VECTOR_PATH} — rewrote/added: {', '.join(changed)} "
-        f"({len(doc['frame_vectors'])} frame, {len(doc['error_vectors'])} error vectors total)"
+        f"({len(doc['frame_vectors'])} frame, {len(doc['error_vectors'])} error, "
+        f"{len(doc.get('encrypted_read_vectors', []))} encrypted-read vectors total)"
     )
     return 0
 
