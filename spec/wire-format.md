@@ -918,9 +918,10 @@ The `encrypted_read_vectors` group holds frames that a cache configured for encr
 header's) fails closed on: a plaintext payload under a header that adds
 `"encrypted": false`, a plaintext `orjson` write, and two ciphertexts that do not
 authenticate under the reader's key and AAD, one sealed under another master key and
-one for another tenant. `header_claims` records what each header claims. The stdlib
-verifier checks the frames' structure; `generate` proves against the real cachekit-py
-that each read fails closed under both tamper policies.
+one for another tenant. `header_claims` records what each header claims. `generate` proves against the real
+cachekit-py that each read fails closed under both tamper policies. The stdlib verifier
+cannot run that read, so it pins the vector set and each frame's sha256 to what
+`generate` proved, and checks the frames' structure.
 
 The `bin` twin carries `"twin_of": "default_saas_write_msgpack_bytestorage"`: an
 operator-owned declaration that it differs from the legacy vector **only** in

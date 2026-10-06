@@ -610,7 +610,16 @@ rc, out = run_verify(doc)
 check("error vector rejected by another check than its rejected_by: FAIL by name",
       rc == 1 and fails_named(out, {"bare_envelope_fed_to_frame_reader"}))
 
-# --- encrypted-read group: verify pins what each frame's header claims ---
+# --- encrypted-read group: verify pins the frames generate proved, and what each header claims ---
+def zero_ciphertext(doc: dict) -> None:
+    """Replace ciphertext_other_tenant's payload with zeros of the same length, frame and declaration alike."""
+    vec = next(v for v in doc["encrypted_read_vectors"] if v["name"] == "ciphertext_other_tenant")
+    zeros = "00" * (len(vec["expected_payload_hex"]) // 2)
+    vec["frame_hex"] = vec["frame_hex"][: len(vec["frame_hex"]) - len(zeros)] + zeros
+    vec["expected_payload_hex"] = zeros
+
+
+
 for label, mutate, names in (
     ("a forged frame declared as ciphertext",
      lambda d: d["encrypted_read_vectors"][0].update(header_claims="ciphertext"), {"forged_plaintext_encrypted_false"}),
@@ -619,6 +628,10 @@ for label, mutate, names in (
     ("a reader with no tenant", lambda d: d["encrypted_reader"].pop("tenant_id"), {"encrypted_reader"}),
     ("a reader that takes the header's tenant", lambda d: d["encrypted_reader"].update(tenant_source="header"),
      {"encrypted_reader"}),
+    ("the group dropped", lambda d: d.pop("encrypted_read_vectors"), {"encrypted_read_vectors"}),
+    ("one vector dropped", lambda d: d["encrypted_read_vectors"].pop(3), {"encrypted_read_vectors"}),
+    ("a ciphertext swapped for zero bytes, its declared payload updated to match", lambda d: zero_ciphertext(d),
+     {"ciphertext_other_tenant"}),
 ):
     doc = copy.deepcopy(COMMITTED)
     mutate(doc)

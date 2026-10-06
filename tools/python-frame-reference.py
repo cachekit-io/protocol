@@ -21,7 +21,7 @@ Modes:
               to the LZ4-decompressed inner msgpack (inner_msgpack_hex);
               checks every error vector is rejected, by the check its
               `rejected_by` names, and that each encrypted_read_vectors frame
-              parses and claims what it declares. Runs in CI. It does not
+              parses, claims what it declares and matches its pinned sha256. Runs in CI. It does not
               decode the inner msgpack, so value_json is checked against the
               decoded value only by tools/frame-crosscheck.mjs (Node).
     generate  Upserts the vector file by vector name (LAB-1203): every vector
@@ -74,6 +74,7 @@ decoder here would silently weaken the inner_msgpack_hex check.
 
 from __future__ import annotations
 
+import hashlib
 import importlib.util
 import json
 import sys
@@ -455,17 +456,37 @@ def verify() -> int:
 ENCRYPTED_READER_FIELDS = ("master_key_hex", "tenant_id", "tenant_source", "cache_key")
 
 
-def _verify_encrypted_reads(doc: dict) -> int:
-    """Structural checks on the encrypted-read group; the fail-closed outcome is proven by `generate`.
+# sha256 of each encrypted-read frame, pinned in code. `generate` proves each frame fails
+# closed against cachekit-py, but CI runs only `verify`, which cannot run the SDK's read
+# path or AES-GCM. Without the pin, a frame swapped for bytes that authenticate nowhere,
+# with its declared payload updated to match, or a dropped group, still verified green.
+# The group is build-missing-only, so a pin changes only with a deliberate rebuild.
+ENCRYPTED_READ_PINS = {
+    "forged_plaintext_encrypted_false": "7e155990f82212403ad3e194077ca2e9b6d22dcd2c2a4c8be844d009c55ed786",
+    "forged_plaintext_orjson": "887544092fc08040d0a1652b8ec7a50095d610a7d513cf58c5479790507cb647",
+    "ciphertext_key_not_in_keyring": "323b270b4b67860213afd2c6bc0ecddb52f01958f6d6702ff6a3b1715a026c25",
+    "ciphertext_other_tenant": "2ee0a5c536698672380fbc8b2300b87fda1f14e4d1fdc5f56a813423936caeb6",
+}
 
-    stdlib cannot run the SDK's read path, so verify pins what the bytes claim: each frame
-    parses, records a serializer name, matches its declared header and payload, and its
-    header claims what the vector's `header_claims` says (plaintext or ciphertext).
+
+def _verify_encrypted_reads(doc: dict) -> int:
+    """Checks on the encrypted-read group; the fail-closed outcome is proven by `generate`.
+
+    stdlib cannot run the SDK's read path, so verify pins the bytes `generate` proved: the
+    set of vectors and each frame's sha256 (ENCRYPTED_READ_PINS), and the reader, which must
+    equal ENCRYPTED_READER. It also checks what the bytes claim: each frame parses, records a
+    serializer name, matches its declared header and payload, and its header claims what the
+    vector's `header_claims` says (plaintext or ciphertext).
     """
     vectors = doc.get("encrypted_read_vectors", [])
-    if not vectors:
-        return 0
     failures = 0
+    names = sorted(v.get("name") for v in vectors if isinstance(v, dict))
+    if names != sorted(ENCRYPTED_READ_PINS):
+        print(f"FAIL encrypted_read_vectors: set drifted — fixture {names} != pinned {sorted(ENCRYPTED_READ_PINS)}")
+        failures += 1
+    if doc.get("encrypted_reader") != ENCRYPTED_READER:
+        print("FAIL encrypted_reader: differs from ENCRYPTED_READER, the reader generate proved the frames against")
+        failures += 1
     reader = doc.get("encrypted_reader")
     bad = [f for f in ENCRYPTED_READER_FIELDS if not isinstance(reader, dict) or type(reader.get(f)) is not str]
     try:
@@ -487,6 +508,9 @@ def _verify_encrypted_reads(doc: dict) -> int:
             failures += 1
             continue
         why = []
+        digest = hashlib.sha256(bytes.fromhex(vec["frame_hex"])).hexdigest()
+        if name in ENCRYPTED_READ_PINS and digest != ENCRYPTED_READ_PINS[name]:
+            why.append(f"frame sha256 {digest} differs from its pin; rebuild with generate and re-pin deliberately")
         if json.dumps(header, sort_keys=True) != json.dumps(vec.get("expected_header"), sort_keys=True):
             why.append("header mismatch")
         if payload.hex() != vec.get("expected_payload_hex"):
@@ -973,6 +997,9 @@ def generate() -> int:
     if doc.get("encrypted_reader") != ENCRYPTED_READER:
         doc["encrypted_reader"] = ENCRYPTED_READER
         changed.append("encrypted_reader")
+    for name in added:
+        frame = bytes.fromhex(next(v for v in encrypted if v["name"] == name)["frame_hex"])
+        print(f"note: pin {name} in ENCRYPTED_READ_PINS: {hashlib.sha256(frame).hexdigest()}", file=sys.stderr)
     if added:
         doc["encrypted_read_vectors"] = [
             v if v["name"] not in added else {**v, "generator": generator_stamp} for v in encrypted
