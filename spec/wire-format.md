@@ -42,12 +42,15 @@ This document specifies two layers:
    canonical `*_bin` vectors only — legacy array-of-integers vectors are
    decode-only, retained as legacy-read proof. That re-encode assertion covers
    only the vectors the pinned file contains. cachekit-core's vendored test reads
-   only `vectors`. The `constructed_vectors` and `reject_vectors` groups are
+   only `vectors`. The `constructed_vectors`, `reject_vectors`,
+   `payload_reject_vectors` and `temporal_sentinel_vectors` groups are
    verified in this repo's `verify.yml`: the reference tool rebuilds each constructed
    entry from its segment lists and reads it, and only its optional-dependency
    (`xxhash`) leg checks the entry's checksum; the stdlib leg takes it on trust. Each
    reject entry is rebuilt from its legacy base and must be rejected
-   ([Reject vectors](#reject-vectors)). An implementation that supports a 32-bit
+   ([Reject vectors](#reject-vectors)). Each payload-reject entry must be accepted, and
+   its payload rejected by the decode bounds
+   ([Payload decode bounds](#payload-decode-bounds)). An implementation that supports a 32-bit
    target also runs `envelope_ratio_product_wraps_32_bits` in its own CI, per
    [Decompression Bomb Detection](#decompression-bomb-detection). Byte-canonicity scopes to the
    envelope's MessagePack encoding and to the **canonical writer's** output:
@@ -216,13 +219,20 @@ is append-only and verified in this repo's CI by
 provenance and the downstream re-pin plan live in
 [decisions/envelope-bin-encoding.md](../decisions/envelope-bin-encoding.md).
 
-The fixture deliberately includes the `bin8` → `bin16` boundary but not a
-`bin32` fixture pair. A pair with more than 65,535 compressed bytes would add
+The `vectors` group pins both sides of the `bin8` → `bin16` boundary:
+`width_boundary_bin8_max` compresses to 255 bytes and `width_boundary_bin16_min`
+to 256, the first 253 and 254 bytes of `width_boundary_bin16`'s 300-byte input.
+It has no `bin32` pair. A pair with more than 65,535 compressed bytes would add
 roughly 590 KB of hex-encoded fixture data once the legacy array-of-integers
-twin is included, then be vendored into every SDK. The `bin16` pair verifies
-the generic shortest-width selection property at fixture level, while
-`cachekit-core/tests/dual_decode.rs::width_boundary_bin16_bin32` exercises
-`bin32` at runtime without that distribution cost.
+twin is included, then be vendored into every SDK. The `bin16` → `bin32`
+boundary is in `constructed_vectors` instead, described as repeated byte
+segments: `envelope_bin16_max` (65,535 compressed bytes), `envelope_bin32_min`
+(65,536) and `envelope_legacy_array32_min`, the latter's fields in the legacy
+encoding, an `array32` (`0xdd`). Their block is the expanding block of zeros
+the ratio vector below uses, which no compressor emits for their input. So a
+writer is checked against them by encoding the vector's fields, never by
+compressing its input. `cachekit-core/tests/dual_decode.rs::width_boundary_bin16_bin32`
+also exercises `bin32` at runtime.
 
 > [!WARNING]
 > **History.** Earlier revisions of this document described the envelope as a
@@ -277,11 +287,11 @@ bytes are therefore
   every vector in the `vectors` group is well-formed and declares a truthful
   `original_size`, so those vectors evidence **none** of the bounds, and a reader
   that omits all four decompresses all of them successfully. The vectors prove decode
-  interoperability. The one constructed vector,
-  `envelope_ratio_product_wraps_32_bits`, tests a single property of step 5: the
-  width of its product. A reader that multiplies in 32 bits rejects it (see
-  [Decompression Bomb Detection](#decompression-bomb-detection)). It is an accept
-  vector too, so it does not show that a reader rejects anything. Enforcing the
+  interoperability. The constructed vectors are accept vectors too, so they do not
+  show that a reader rejects anything. Three of them sit on the `bin16` → `bin32`
+  boundary. The fourth, `envelope_ratio_product_wraps_32_bits`, tests a single
+  property of step 5: the width of its product. A reader that multiplies in 32 bits
+  rejects it (see [Decompression Bomb Detection](#decompression-bomb-detection)). Enforcing the
   bounds in [Security Limits](#security-limits) is a separate, non-negotiable
   obligation, tested by the `reject_vectors` group. For most of those vectors a
   failed read alone does not show the bound, so [Reject vectors](#reject-vectors)
@@ -515,11 +525,11 @@ is also larger than `compressed_data`, so a reader that skips the product when
 reader that multiplies in 32 bits rejects it, and so does one that rejects on 32-bit
 overflow. A conforming reader returns the constructed input, and the envelope's
 `checksum` is that input's true xxHash3-64. Every other envelope in the file is
-1,029 B or smaller.
+66,084 B or smaller.
 
-The vector is built to show the product's width. It is also the file's only bin32
-`compressed_data` and its only multi-megabyte decode, so a failure on it alone does
-not prove a 32-bit product: check the rejection reason. It is an accept vector,
+The vector is built to show the product's width. It is also the file's only
+multi-megabyte decode, and one of its two bin32 `compressed_data`, so a failure on it
+alone does not prove a 32-bit product: check the rejection reason. It is an accept vector,
 because a 32-bit product only ever tightens the bound, so no reject vector can catch
 one. A pointer-width product is exact on a 64-bit host, so a pass there does not show
 the rule holds on a 32-bit target. interop/v2 has its own vector for
@@ -540,20 +550,32 @@ code comes from.
 
 ### Reject vectors
 
-`test-vectors/wire-format.json` has a `reject_vectors` group: six canonical `bin`
-envelopes, each hex-pinned and derived from a legacy base vector with one
-[Retrieve Flow](#retrieve-flow) check broken. A conforming reader rejects all six.
+`test-vectors/wire-format.json` has a `reject_vectors` group: fourteen envelopes, each
+hex-pinned and derived from a legacy base vector with one
+[Retrieve Flow](#retrieve-flow) check broken. Each is a `bin` envelope, canonical
+except where the break is in the encoding itself (the step-2 vectors), and
+`reject_legacy_element_above_255` uses the legacy encoding. A conforming reader rejects
+all fourteen.
 `reject_step` is the Retrieve Flow step at which the reference reader,
 [`tools/wire-format-reference.py`](../tools/wire-format-reference.py), rejects the
-vector. It is metadata, not a value an SDK must reproduce. What an SDK test asserts
-is the last column below:
+vector, and for step 2 `reject_check` names which of its two checks does: the
+decode-bounds pre-scan or the typed decode. Both are metadata, not values an SDK must
+reproduce. What an SDK test asserts is the last column below:
 
 | Vector | `reject_step` | What it breaks | A reader missing only that check | An SDK test asserts |
 | :--- | :---: | :--- | :--- | :--- |
+| `reject_envelope_arity_5` | 2 | `simple_string_bin`'s four fields, then a fifth element, nil | accepts it if it takes the first four elements, since every field is intact | the typed-decode error |
+| `reject_envelope_arity_3` | 2 | `simple_string_bin` without its fourth element, `format` | accepts it if it defaults a missing `format` to `"msgpack"` | the typed-decode error |
+| `reject_checksum_nine_elements` | 2 | a ninth integer, 0, after the true 8-byte checksum | accepts it if it compares the first 8 checksum elements | the typed-decode error |
+| `reject_checksum_seven_elements` | 2 | the checksum array cut to its first 7 integers | accepts it if it compares only the checksum elements it was given | the typed-decode error |
+| `reject_legacy_element_above_255` | 2 | `simple_string`'s legacy element 2, `0x68`, written as uint16 360 (`cd 01 68`) | accepts it if it keeps an element's low 8 bits, as JavaScript's `Uint8Array.from` does | the typed-decode error |
+| `reject_envelope_slots_overclaim` | 2 | `simple_string_bin` with its `bin8` length raised to 38, all but the last byte after the header: each header fits what follows it, and the declared slots summed over the document (42) exceed the 42-byte input minus one by one | rejects it as truncated in the typed decode | the pre-scan's own error, before anything is materialised |
 | `reject_original_size_over_cap` | 4 | `original_size` 536,870,913 B, one byte over the cap, with 1,000 B of `compressed_data` that is not a valid LZ4 block | rejects it at step 5, by the ratio bound | the size-cap error, and the allocation bound below |
 | `reject_original_size_wraps_u32` | 4 | `original_size` 2³² + 16 B, encoded as `uint64`, with a block and checksum that match 16 B | rejects it at step 5; one that truncates `original_size` to 32 bits accepts it, and one that joins its 32-bit halves rejects it only on length | a rejection before decompression: the size-cap error, or a step-2 error from a range-checked decode into a narrower type; never a length or checksum error |
+| `reject_original_size_sign_bit` | 4 | `original_size` 2⁶³ + 16 B, encoded as `uint64`, with a block and checksum that match 16 B | rejects it at step 5; one that reinterprets the `uint64` as a signed `i64` reads it as negative, passes the size cap and the ratio bound, and fails later or crashes; one that truncates to 32 bits accepts it | a rejection before decompression: the size-cap error, or a step-2 error from a range-checked decode into a narrower type; never a length, allocation or checksum error |
 | `reject_zero_length_compressed_data` | 5 | empty `compressed_data`, `original_size` 0 | rejects it at step 6 if its LZ4 decoder refuses an empty block, as liblz4 does; accepts it if the decoder returns empty output | the zero-length error |
 | `reject_ratio_bomb` | 5 | `original_size` 1,000,001 B from 1,000 B of `compressed_data`, one byte past 1000:1, with a block that is not valid LZ4 | never raises the ratio error | the ratio error, and the allocation bound below |
+| `reject_ratio_float32_rounds` | 5 | `original_size` 32,768,001 B from 32,768 B of `compressed_data`, one byte past 1000:1, with a block that is not valid LZ4 | never raises the ratio error; nor does a ratio taken in float32, which reads exactly 1000 here, or a truncating division | the ratio error |
 | `reject_decompressed_length_mismatch` | 6 | `original_size` 17 B; the block decodes to 16 B and the checksum matches those 16 B | accepts it | a length error, at step 6 or step 9, and not a checksum error |
 | `reject_checksum_mismatch` | 8 | the first and last `checksum` bytes flipped | accepts it | a rejection |
 
@@ -583,8 +605,18 @@ could not tell a reader missing the zero-length check from a conforming one.
 
 The u32-wrap vector tests the full-wire-value rule in
 [Decompression Bomb Detection](#decompression-bomb-detection) for truncation, which
-reads 16, and for the 32-bit half-joins, which both read 17. It does not exercise sign
-reinterpretation, which needs a value of 2⁶³ or more.
+reads 16, and for the 32-bit half-joins, which both read 17. The sign-bit vector tests
+it for sign reinterpretation, which needs a value of 2⁶³ or more: as an `i64`,
+2⁶³ + 16 reads as −9,223,372,036,854,775,792.
+
+The float32 vector tests the ratio rule against arithmetic it forbids. A ratio of
+float32 operands loses a one-byte excess once `compressed_size` reaches 16,778 B, and a
+float32 quotient of exact operands once it reaches 32,768 B, so at 32,768 B both read
+exactly 1000. `reject_ratio_bomb` (1,000 B) catches neither, though it does catch a
+truncating division. A binary64 ratio, or a division that rounds up, reaches the
+product's verdict at every legal size, so no vector can catch it. The exact 1000:1
+edge cannot be pinned by an accept vector either: a valid LZ4 block expands at most
+about 255:1.
 
 The reference reader's decoder rejects any output length other than
 `original_size`, which enforces step 9 inside step 6. A decoder that returns a
@@ -649,6 +681,21 @@ passed, because `compressed_data` is a strict slice of an envelope that step 1 h
 already bounded to 512 MiB. An implementation MUST<sup id="wire-19">WIRE-19</sup> still enforce both. Test step 1
 with a lowered cap, as `check_reader_rejects` in
 `tools/test_wire_format_reference.py` does.
+
+### Payload decode bounds
+
+The payload an envelope returns is untrusted MessagePack too, decoded under the same
+bounds as the envelope's bytes ([Security Limits](#security-limits)).
+`test-vectors/wire-format.json`'s `payload_reject_vectors` group pins that decode. Each
+entry is a canonical `bin` envelope that every Retrieve Flow check accepts, and its
+payload is a [`decode-bounds.json`](../test-vectors/decode-bounds.json) reject
+document, named in `derived_from` with its `reject_reasons`. A reader that pre-scans the
+envelope's bytes but decodes the payload unguarded passes every reject vector and fails
+these. As with `decode-bounds.json`, a verdict cannot show when the decode rejected, so
+an SDK test drives each envelope through its read path and asserts its pre-scan's own
+error ([interop-mode.md → Decode bounds](interop-mode.md#decode-bounds)).
+`compressed_data` is a literals-only block, which any LZ4 decoder reads; a compressor
+may emit other bytes for the same payload.
 
 ---
 
@@ -738,6 +785,11 @@ Datetime values are encoded as MessagePack maps with sentinel keys:
 
 > [!IMPORTANT]
 > All SDKs MUST<sup id="wire-20">WIRE-20</sup> check for these sentinel keys during deserialization and reconstruct the appropriate temporal type. Failing to handle them means datetime values will be returned as raw maps instead of native date objects.
+
+`test-vectors/wire-format.json`'s `temporal_sentinel_vectors` group pins the three maps
+above as payloads, each with the type and value an SDK revives it as (`revives_to`).
+Which SDKs revive which map is recorded in
+[sdk-feature-matrix.md](../sdk-feature-matrix.md).
 
 ### MessagePack Options
 
@@ -851,6 +903,24 @@ round-trip) in both envelope encodings — the legacy array-of-ints original
 (cachekit 0.11.1) and its protocol 1.1 `bin` twin (cachekit 0.17.0, the first
 release emitting `bin`) — an Arrow-envelope frame (structural checks), and
 must-reject error vectors — including a CK frame fed to a strict interop reader.
+
+Each CK error vector names, in `rejected_by`, the check that rejects it: `magic`, the
+7-byte `prefix_length`, `version` or `header_length`. Four sit one step from their
+check's boundary, on the default write's real header where the frame has one, so a
+reader whose check is off by one reaches a parsed header: a 6-byte frame, versions 2
+and 4, and a header length one past the bytes present. Two are other SDKs' containers, which cachekit-py refuses: a bare
+ByteStorage envelope (cachekit-ts's default) and plain MessagePack (cachekit-rs's, and
+cachekit-ts's with compression off).
+
+The `encrypted_read_vectors` group holds frames that a cache configured for encryption
+(`encrypted_reader`: a master key, a tenant, a cache key, and `tenant_source`
+`reader`, meaning the reader resolves its tenant itself and never takes the frame
+header's) fails closed on: a plaintext payload under a header that adds
+`"encrypted": false`, a plaintext `orjson` write, and two ciphertexts that do not
+authenticate under the reader's key and AAD, one sealed under another master key and
+one for another tenant. `header_claims` records what each header claims. The stdlib
+verifier checks the frames' structure; `generate` proves against the real cachekit-py
+that each read fails closed under both tamper policies.
 
 The `bin` twin carries `"twin_of": "default_saas_write_msgpack_bytestorage"`: an
 operator-owned declaration that it differs from the legacy vector **only** in
