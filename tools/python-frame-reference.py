@@ -481,7 +481,15 @@ def _verify_encrypted_reads(doc: dict) -> int:
     """
     vectors = doc.get("encrypted_read_vectors", [])
     failures = 0
-    names = sorted(v.get("name") for v in vectors if isinstance(v, dict))
+    if not isinstance(vectors, list):
+        print(f"FAIL encrypted_read_vectors: must be a list, got {type(vectors).__name__}")
+        vectors, failures = [], 1
+    shaped = [v for v in vectors if isinstance(v, dict) and type(v.get("name")) is str and type(v.get("frame_hex")) is str]
+    if len(shaped) != len(vectors):
+        print("FAIL encrypted_read_vectors: every vector needs a string name and frame_hex")
+        failures += 1
+    vectors = shaped
+    names = sorted(v["name"] for v in vectors)
     if names != sorted(ENCRYPTED_READ_PINS):
         print(f"FAIL encrypted_read_vectors: set drifted — fixture {names} != pinned {sorted(ENCRYPTED_READ_PINS)}")
         failures += 1
@@ -503,13 +511,14 @@ def _verify_encrypted_reads(doc: dict) -> int:
     for vec in vectors:
         name = vec["name"]
         try:
-            header, payload = parse_frame(bytes.fromhex(vec["frame_hex"]))
-        except FrameError as e:
+            frame = bytes.fromhex(vec["frame_hex"])
+            header, payload = parse_frame(frame)
+        except ValueError as e:  # bad hex, or a FrameError
             print(f"FAIL {name}: parse error: {e}")
             failures += 1
             continue
         why = []
-        digest = hashlib.sha256(bytes.fromhex(vec["frame_hex"])).hexdigest()
+        digest = hashlib.sha256(frame).hexdigest()
         if name in ENCRYPTED_READ_PINS and digest != ENCRYPTED_READ_PINS[name]:
             why.append(f"frame sha256 {digest} differs from its pin; rebuild with generate and re-pin deliberately")
         if json.dumps(header, sort_keys=True) != json.dumps(vec.get("expected_header"), sort_keys=True):
@@ -767,11 +776,13 @@ def _build_error_vectors(raw_frame: bytes, default_vec: dict) -> list[dict]:
             "rejected_by": "magic",
         },
     ]
+    from cachekit.serializers.base import SerializationError  # every read-path refusal derives from it
+
     handler = CacheSerializationHandler(serializer_name="default")
     for vec in built_errors:
         try:
             handler.deserialize_data(bytes.fromhex(vec["frame_hex"]), cache_key="python-frame-vector")
-        except Exception as e:  # noqa: BLE001 - the message names the check; a wrong one fails below
+        except SerializationError as e:  # the message names the check; a wrong one fails below
             _require(_PY_REJECTION[vec["rejected_by"]] in str(e), f"cachekit-py rejects {vec['name']} elsewhere: {e}")
         else:  # pragma: no cover - generation-time invariant
             raise AssertionError(f"cachekit-py accepted error vector {vec['name']}")
@@ -890,20 +901,22 @@ def _build_encrypted_read_vectors(default_vec: dict, committed: list[dict]) -> l
                 "outcome": "fail_closed",
             }
         )
+    from cachekit.serializers.base import SerializationError  # every read-path refusal derives from it
+
     reader_key, tenant = ENCRYPTED_READER["master_key_hex"], ENCRYPTED_READER["tenant_id"]
+    readers = {fc: _encrypted_handler(reader_key, tenant, fail_closed=fc) for fc in (False, True)}
     for vec in vectors:
-        for fail_closed in (False, True):
+        for fail_closed, reader in readers.items():
             try:
-                got = _encrypted_handler(reader_key, tenant, fail_closed=fail_closed).deserialize_data(
-                    bytes.fromhex(vec["frame_hex"]), cache_key=key
-                )
-            except Exception:  # noqa: BLE001 - any refusal is the fail-closed outcome
+                got = reader.deserialize_data(bytes.fromhex(vec["frame_hex"]), cache_key=key)
+            except SerializationError:  # a refusal is the fail-closed outcome; anything else is a broken harness
                 continue
             raise AssertionError(f"cachekit-py returned {got!r} for {vec['name']} (fail_closed={fail_closed})")
-    # Positive control: the reader does read its own entry, so the refusals above are not a broken reader.
+    # Positive control, per policy: each reader reads its own entry, so the refusals above are not a broken reader.
     own = _encrypted_handler(reader_key, tenant).serialize_data(value, cache_key=key)
-    _require(_encrypted_handler(reader_key, tenant).deserialize_data(own, cache_key=key) == value,
-             "the encrypted reader cannot read its own entry")
+    for fail_closed, reader in readers.items():
+        _require(reader.deserialize_data(own, cache_key=key) == value,
+                 f"the encrypted reader (fail_closed={fail_closed}) cannot read its own entry")
     return vectors
 
 

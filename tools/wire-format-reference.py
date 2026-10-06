@@ -908,7 +908,10 @@ PAYLOAD_REJECT_SOURCES = ("array32_max_claim_alone", "nested_array16_each_header
 
 def _payload_reject_builder(source: str) -> Callable[[Callable[[bytes], bytes]], dict]:
     def build(checksum_of: Callable[[bytes], bytes]) -> dict:
-        doc = json.loads(DECODE_BOUNDS_PATH.read_text(encoding="utf-8"))
+        try:
+            doc = json.loads(DECODE_BOUNDS_PATH.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as e:  # JSONDecodeError is a ValueError; OSError is not
+            raise ValueError(f"cannot load {DECODE_BOUNDS_PATH.name} for {source}: {e}") from e
         vec = next(v for v in doc["reject_vectors"] if v["name"] == source)
         payload = bytes.fromhex(vec["input_hex"])
         out = bytearray()
@@ -1497,9 +1500,10 @@ def verify(require_extras: bool = False) -> int:
             failures += 1
             print(f"  FAIL {vec['name']}: {e!r}", file=sys.stderr)
 
-    for vec, check in [(v, lambda v: _verify_payload_reject(v, xxh3_64, msgpack)) for v in payload_rejects] + [
-        (v, _verify_temporal) for v in temporal
-    ]:
+    def check_payload(payload_vec: dict) -> str:
+        return _verify_payload_reject(payload_vec, xxh3_64, msgpack)
+
+    for vec, check in [(v, check_payload) for v in payload_rejects] + [(v, _verify_temporal) for v in temporal]:
         try:
             print(f"  ok {vec['name']}: {check(vec)}")
         except (AssertionError, ValueError, IndexError, KeyError, StopIteration) as e:
