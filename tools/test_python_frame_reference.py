@@ -6,7 +6,9 @@ suite mutates a copy of the COMMITTED fixture and proves verify() fails on
 exactly the mutated field, that the drop-`twin_of` exit stays green without
 loosening any byte comparison, that generate() warns and never raises
 (LAB-1203 deadlock pin), and that _upsert() carries the declaration across
-rebuilds. Stdlib only, no framework.
+rebuilds. It also proves each boundary error vector fails verify for a parser
+loosened at its check, and that verify pins the encrypted-read group's claims.
+Stdlib only, no framework.
 
 Run: python3 tools/test_python_frame_reference.py     (exit 1 on any failure)
 """
@@ -559,6 +561,65 @@ check("_upsert: rebuilt content -> rewritten", changed == [BIN_NAME] and committ
 check("_upsert: rewrite carries twin_of over", committed[0].get("twin_of") == LEGACY_NAME)
 changed = pfr._upsert(committed, [{**built[0], "name": "brand_new"}], "new wheel")
 check("_upsert: appended vector gains no twin_of", changed == ["brand_new"] and "twin_of" not in committed[1])
+
+
+# --- error vectors sit on their checks: a parser off by one at a check fails verify ---
+def lenient_parser(*, min_len: int = pfr.PREFIX_LEN, versions: range = range(pfr.FRAME_VERSION, pfr.FRAME_VERSION + 1),
+                   clamp: bool = False):
+    """parse_frame with one check loosened, the way the boundary vectors' readers loosen it."""
+
+    def parse(frame: bytes) -> tuple[dict, bytes]:
+        if frame[:2] != pfr.MAGIC:
+            raise pfr.FrameError("not a CK frame", "magic")
+        if len(frame) < min_len:
+            raise pfr.FrameError("truncated frame", "prefix_length")
+        if frame[2] not in versions:
+            raise pfr.FrameError("unsupported frame version", "version")
+        end = pfr.PREFIX_LEN + int.from_bytes(frame[3:7], "big")
+        if end > len(frame) and not clamp:
+            raise pfr.FrameError("header length exceeds frame", "header_length")
+        try:
+            return json.loads(frame[pfr.PREFIX_LEN:end].decode("utf-8")), frame[end:]
+        except ValueError as exc:
+            raise pfr.FrameError(f"header is not valid JSON: {exc}") from exc
+
+    return parse
+
+
+def fails_named(out: str, names: set[str]) -> bool:
+    return {line.split()[1].rstrip(":") for line in out.splitlines() if line.startswith("FAIL")} == names
+
+
+for label, parser, names in (
+    ("versions 1-3 accepted", lenient_parser(versions=range(1, 4)), {"unsupported_frame_version_2"}),
+    ("prefix of 6 bytes accepted", lenient_parser(min_len=6), {"truncated_frame_one_short"}),
+    ("header sliced to the bytes present", lenient_parser(clamp=True), {"header_overrun", "header_overrun_by_one"}),
+):
+    saved, pfr.parse_frame = pfr.parse_frame, parser
+    try:
+        rc, out = run_verify(COMMITTED)
+    finally:
+        pfr.parse_frame = saved
+    check(f"parser with {label}: verify fails exactly {sorted(names)}", rc == 1 and fails_named(out, names))
+
+doc = copy.deepcopy(COMMITTED)
+next(v for v in doc["error_vectors"] if v["name"] == "bare_envelope_fed_to_frame_reader")["rejected_by"] = "version"
+rc, out = run_verify(doc)
+check("error vector rejected by another check than its rejected_by: FAIL by name",
+      rc == 1 and fails_named(out, {"bare_envelope_fed_to_frame_reader"}))
+
+# --- encrypted-read group: verify pins what each frame's header claims ---
+for label, mutate, names in (
+    ("a forged frame declared as ciphertext",
+     lambda d: d["encrypted_read_vectors"][0].update(header_claims="ciphertext"), {"forged_plaintext_encrypted_false"}),
+    ("an outcome other than fail_closed",
+     lambda d: d["encrypted_read_vectors"][2].update(outcome="miss"), {"ciphertext_key_not_in_keyring"}),
+    ("a reader with no tenant", lambda d: d["encrypted_reader"].pop("tenant_id"), {"encrypted_reader"}),
+):
+    doc = copy.deepcopy(COMMITTED)
+    mutate(doc)
+    rc, out = run_verify(doc)
+    check(f"encrypted-read: {label} fails verify by name", rc == 1 and fails_named(out, names))
 
 if FAILURES:
     print(f"\n{FAILURES} failure(s)")
