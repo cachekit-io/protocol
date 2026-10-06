@@ -592,6 +592,8 @@ def fails_named(out: str, names: set[str]) -> bool:
 
 for label, parser, names in (
     ("versions 1-3 accepted", lenient_parser(versions=range(1, 4)), {"unsupported_frame_version_2"}),
+    ("versions 3 and up accepted", lenient_parser(versions=range(3, 256)),
+     {"unsupported_frame_version", "unsupported_frame_version_4"}),
     ("prefix of 6 bytes accepted", lenient_parser(min_len=6), {"truncated_frame_one_short"}),
     ("header sliced to the bytes present", lenient_parser(clamp=True), {"header_overrun", "header_overrun_by_one"}),
 ):
@@ -615,6 +617,8 @@ for label, mutate, names in (
     ("an outcome other than fail_closed",
      lambda d: d["encrypted_read_vectors"][2].update(outcome="miss"), {"ciphertext_key_not_in_keyring"}),
     ("a reader with no tenant", lambda d: d["encrypted_reader"].pop("tenant_id"), {"encrypted_reader"}),
+    ("a reader that takes the header's tenant", lambda d: d["encrypted_reader"].update(tenant_source="header"),
+     {"encrypted_reader"}),
 ):
     doc = copy.deepcopy(COMMITTED)
     mutate(doc)

@@ -452,7 +452,7 @@ def verify() -> int:
 
 # A cache configured for encryption reads every encrypted_read_vectors frame and MUST fail
 # closed (spec/wire-format.md, the CK frame CAUTION). The reader resolves its own tenant.
-ENCRYPTED_READER_FIELDS = ("master_key_hex", "tenant_id", "cache_key")
+ENCRYPTED_READER_FIELDS = ("master_key_hex", "tenant_id", "tenant_source", "cache_key")
 
 
 def _verify_encrypted_reads(doc: dict) -> int:
@@ -469,11 +469,14 @@ def _verify_encrypted_reads(doc: dict) -> int:
     reader = doc.get("encrypted_reader")
     bad = [f for f in ENCRYPTED_READER_FIELDS if not isinstance(reader, dict) or type(reader.get(f)) is not str]
     try:
-        key_ok = not bad and len(bytes.fromhex(reader["master_key_hex"])) == 32
+        key_ok = not bad and len(bytes.fromhex(reader["master_key_hex"])) == 32 and reader["tenant_source"] == "reader"
     except ValueError:
         key_ok = False
     if not key_ok:
-        print(f"FAIL encrypted_reader: needs {', '.join(ENCRYPTED_READER_FIELDS)} as strings, a 32-byte master key")
+        print(
+            f"FAIL encrypted_reader: needs {', '.join(ENCRYPTED_READER_FIELDS)} as strings, a 32-byte master key "
+            "and tenant_source reader"
+        )
         failures += 1
     for vec in vectors:
         name = vec["name"]
@@ -701,6 +704,15 @@ def _build_error_vectors(raw_frame: bytes, default_vec: dict) -> list[dict]:
             "rejected_by": "version",
         },
         {
+            "name": "unsupported_frame_version_4",
+            "frame_hex": (frame[:2] + b"\x04" + frame[3:]).hex(),
+            "error": (
+                f"{default_vec['name']} with frame version 4, one above the only defined version. A reader that "
+                "rejects only versions below 3 returns the value, because header and payload are intact"
+            ),
+            "rejected_by": "version",
+        },
+        {
             "name": "header_overrun_by_one",
             "frame_hex": (frame[:3] + (header_end - PREFIX_LEN + 1).to_bytes(4, "big") + frame[PREFIX_LEN:header_end]).hex(),
             "error": (
@@ -762,7 +774,14 @@ def _build_error_vectors(raw_frame: bytes, default_vec: dict) -> list[dict]:
 
 # The encrypted-read group's reader, and the key and tenant its ciphertext vectors were
 # sealed under instead. Test-only keys.
-ENCRYPTED_READER = {"master_key_hex": "11" * 32, "tenant_id": "00000000-0000-4000-8000-00000000000a", "cache_key": "python-frame-vector"}
+# tenant_source "reader": the reader resolves tenant_id for itself, never from the frame
+# header, which nothing authenticates.
+ENCRYPTED_READER = {
+    "master_key_hex": "11" * 32,
+    "tenant_id": "00000000-0000-4000-8000-00000000000a",
+    "tenant_source": "reader",
+    "cache_key": "python-frame-vector",
+}
 OTHER_MASTER_KEY_HEX = "22" * 32
 OTHER_TENANT = "00000000-0000-4000-8000-00000000000b"
 
@@ -951,8 +970,10 @@ def generate() -> int:
     changed = _upsert(doc["frame_vectors"], built, generator_stamp)
     changed += _upsert(doc["error_vectors"], built_errors, generator_stamp)
     added = [v["name"] for v in encrypted if v["name"] not in {c["name"] for c in doc.get("encrypted_read_vectors", [])}]
-    if added:
+    if doc.get("encrypted_reader") != ENCRYPTED_READER:
         doc["encrypted_reader"] = ENCRYPTED_READER
+        changed.append("encrypted_reader")
+    if added:
         doc["encrypted_read_vectors"] = [
             v if v["name"] not in added else {**v, "generator": generator_stamp} for v in encrypted
         ]

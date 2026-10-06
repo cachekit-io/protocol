@@ -53,8 +53,9 @@ Every class below is proven reachable by execution rather than argued from readi
      size cap, zero length, ratio, checksum, output length) is dropped from the reader in
      turn, and across every vector in the file only that check's vectors may change
      outcome, to accepted or to a later check. The same holds for each lenient cast a
-     typed decode forbids (a fifth element ignored, a checksum's first 8 of 9 taken, a
-     legacy element's low byte kept) and each forbidden ratio arithmetic (float32
+     typed decode forbids (a fifth element ignored, a missing fourth defaulted, a
+     checksum's first 8 of 9 taken, a 7-element checksum accepted, a legacy element's low
+     byte kept) and each forbidden ratio arithmetic (float32
      operands, a float32 quotient, a truncating division). verify must
      fail an altered reject vector by name and a dropped or added one as set drift, and
      generate must refill a missing group byte-identically without dropping a committed
@@ -484,25 +485,26 @@ def _f32(x: float) -> float:
     return struct.unpack("f", struct.pack("f", x))[0]
 
 
-def _lenient_decode(mod: ModuleType, *, extra_elements: bool = False, checksum_prefix: bool = False,
+def _lenient_decode(mod: ModuleType, *, extra_elements: bool = False, default_format: bool = False,
+                    checksum_prefix: bool = False, checksum_short: bool = False,
                     low_byte: bool = False) -> Callable[[bytes], tuple]:
     """decode_envelope with one of step 2's typed checks replaced by the cast a lenient reader makes."""
 
     def decode(env: bytes) -> tuple:
         r = mod._Reader(env)
         n = mod._decode_array_header(r)
-        if n != 4 and not (extra_elements and n > 4):
+        if n != 4 and not (extra_elements and n > 4) and not (default_format and n == 3):
             raise ValueError("StorageEnvelope must be a 4-element array")
         if low_byte and r.peek() not in (0xC4, 0xC5, 0xC6):
             data = bytes(mod._decode_uint(r) & 0xFF for _ in range(mod._decode_array_header(r)))
         else:
             data, _encoding = mod._decode_bytes_field(r)
         k = mod._decode_array_header(r)
-        if k != 8 and not (checksum_prefix and k > 8):
+        if k != 8 and not (checksum_prefix and k > 8) and not (checksum_short and k < 8):
             raise ValueError("checksum must be an 8-element array")
         checksum = bytes([mod._decode_uint(r) for _ in range(k)][:8])
         original_size = mod._decode_uint(r)
-        fmt = mod._decode_str(r)
+        fmt = mod._decode_str(r) if n > 3 else "msgpack"
         if r.pos != len(env) and not extra_elements:
             raise ValueError("trailing bytes after envelope")  # a reader that ignores extras ignores them all
         return data, checksum, original_size, fmt, "bin"
@@ -512,7 +514,11 @@ def _lenient_decode(mod: ModuleType, *, extra_elements: bool = False, checksum_p
 
 TYPED_DECODES = {
     "envelope arity (elements past the fourth ignored)": ({"extra_elements": True}, ("reject_envelope_arity_5",)),
+    "envelope arity (a missing format read as msgpack)": ({"default_format": True}, ("reject_envelope_arity_3",)),
     "checksum arity (its first 8 elements taken)": ({"checksum_prefix": True}, ("reject_checksum_nine_elements",)),
+    # A reader that compares only the elements it was given; this one still compares all 8 digest bytes, so on
+    # the xxhash leg it rejects at step 8 instead of accepting, which is still a later check.
+    "checksum arity (a shorter checksum accepted)": ({"checksum_short": True}, ("reject_checksum_seven_elements",)),
     "legacy element range (low 8 bits kept)": ({"low_byte": True}, ("reject_legacy_element_above_255",)),
 }
 

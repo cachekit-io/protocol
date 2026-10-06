@@ -595,7 +595,7 @@ def build_array32_min(checksum_of: Callable[[bytes], bytes]) -> dict:
         "description": (
             f"the fields of {BIN32_MIN} in the legacy encoding: compressed_data is an array32 (0xdd) of 65536 "
             "integers, each byte its shortest msgpack uint. Readers MUST accept it and return the constructed "
-            "input; no legacy vector in the vectors group passes array16."
+            "input; no legacy vector in the vectors group exceeds 65,535 elements."
         ),
         **_expanding_envelope(0x10000, "int-array", checksum_of),
     }
@@ -757,6 +757,33 @@ def build_reject_arity(bases: dict[str, dict]) -> dict:
     )
 
 
+def build_reject_arity_3(bases: dict[str, dict]) -> dict:
+    base, data, checksum, inp = _base_fields(bases, "simple_string")
+    env = b"\x93" + encode_envelope(data, checksum, len(inp), base["format"], encoding="bin")[1:-len(_encode_str(base["format"]))]
+    return _reject_vector(
+        "reject_envelope_arity_3", 2, base, data, checksum, len(inp),
+        "simple_string_bin without its fourth element, format, in a fixarray(3). Readers MUST reject it at Retrieve "
+        "Flow step 2's typed decode. An SDK test asserts that typed-decode error. A reader that defaults a missing "
+        "format to \"msgpack\" accepts it and returns simple_string's input.",
+        env=env, check="typed_decode",
+    )
+
+
+def build_reject_checksum_short(bases: dict[str, dict]) -> dict:
+    base, data, checksum, inp = _base_fields(bases, "simple_string")
+    env = (
+        b"\x94" + _encode_bin(data) + _encode_int_array(checksum[:7])
+        + _encode_uint(len(inp)) + _encode_str(base["format"])
+    )
+    return _reject_vector(
+        "reject_checksum_seven_elements", 2, base, data, checksum, len(inp),
+        "simple_string_bin with the checksum array cut to its first 7 integers. Readers MUST reject it at Retrieve "
+        "Flow step 2's typed decode: checksum is exactly 8 integers. An SDK test asserts that typed-decode error. A "
+        "reader that compares each checksum element it was given with the digest accepts it, because those 7 match.",
+        env=env, check="typed_decode",
+    )
+
+
 def build_reject_checksum_arity(bases: dict[str, dict]) -> dict:
     base, data, checksum, inp = _base_fields(bases, "simple_string")
     env = (
@@ -796,15 +823,16 @@ def build_reject_element_range(bases: dict[str, dict]) -> dict:
 def build_reject_overclaim(bases: dict[str, dict]) -> dict:
     base, data, checksum, inp = _base_fields(bases, "simple_string")
     env = bytearray(encode_envelope(data, checksum, len(inp), base["format"], encoding="bin"))
-    env[2] = len(env) - 3  # bin8 claims every byte after its header
+    env[2] = len(env) - 4  # bin8 claims all but the last byte after its header: one slot over the budget
     env = bytes(env)
     walked = db.walk(env)
-    assert walked["per_header_fits"] and walked["declared_slots"] > len(env) - 1, "not a whole-document overclaim"
+    assert walked["per_header_fits"] and walked["declared_slots"] == len(env), "not a whole-document overclaim by one"
     return _reject_vector(
-        "reject_envelope_slots_overclaim", 2, base, env[3:], checksum, len(inp),
-        f"simple_string_bin with compressed_data's bin8 length raised from {len(data)} to {len(env) - 3}, every "
-        f"byte after its header. Each header fits the input that follows it, but the declared slots, summed over "
-        f"the document, are {walked['declared_slots']}, past the input length minus one ({len(env) - 1}). Readers "
+        "reject_envelope_slots_overclaim", 2, base, env[3:-1], checksum, len(inp),
+        f"simple_string_bin with compressed_data's bin8 length raised from {len(data)} to {len(env) - 4}, all but "
+        f"the last byte after its header. Each header fits the input that follows it, but the declared slots, summed "
+        f"over the document, are {walked['declared_slots']}, one past the input length minus one ({len(env) - 1}), "
+        "so a budget of the whole input length passes it too. Readers "
         "MUST reject it at Retrieve Flow step 2's pre-scan, before anything is materialised. An SDK test asserts "
         "the pre-scan's own error (spec/interop-mode.md#decode-bounds). Every decoder also rejects it as "
         "truncated, so only that assertion catches a reader without the pre-scan, or with per-header checks only.",
@@ -841,7 +869,9 @@ def build_reject_ratio_float32(bases: dict[str, dict]) -> dict:
     )
 
 
-FLOAT32_RATIO_SIZE = 1 << 15  # the smallest size where a float32 quotient also drops a one-byte excess
+# The smallest size where a float32 quotient also drops a one-byte excess (a tie there,
+# which IEEE round-half-even breaks downwards).
+FLOAT32_RATIO_SIZE = 1 << 15
 FLOAT32_REJECT = "reject_ratio_float32_rounds"
 
 # name -> builder, in fixture order. The expected reject-vector set lives in code for
@@ -854,7 +884,9 @@ REJECT_BUILDERS: dict[str, Callable[[dict[str, dict]], dict]] = {
     "reject_decompressed_length_mismatch": build_reject_length_mismatch,
     "reject_checksum_mismatch": build_reject_checksum,
     "reject_envelope_arity_5": build_reject_arity,
+    "reject_envelope_arity_3": build_reject_arity_3,
     "reject_checksum_nine_elements": build_reject_checksum_arity,
+    "reject_checksum_seven_elements": build_reject_checksum_short,
     "reject_legacy_element_above_255": build_reject_element_range,
     "reject_envelope_slots_overclaim": build_reject_overclaim,
     "reject_original_size_sign_bit": build_reject_size_sign_bit,
@@ -942,9 +974,9 @@ def build_temporal_sentinel(kind: str) -> dict:
     return {
         "name": f"temporal_sentinel_{kind}",
         "description": (
-            f"the MessagePack map {{\"{key}\": true, \"value\": \"{value}\"}}, as a payload. An SDK's "
-            f"deserialization MUST revive it as its temporal type for a {kind}, equal to {value}, not "
-            "return the map."
+            f"the MessagePack map {{\"{key}\": true, \"value\": \"{value}\"}}, as an auto-mode payload. An "
+            f"SDK's deserialization MUST revive it as its temporal type for a {kind}, equal to {value}, not return "
+            "the map. Interop mode's value profile keeps the map (interop-mode.json's datetime_sentinel_value)."
         ),
         "payload_hex": payload.hex(),
         "revives_to": {"type": kind, "iso": value},
