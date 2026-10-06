@@ -1,13 +1,13 @@
 {
   "cachekit-py": {
     "repository": "https://github.com/cachekit-io/cachekit-py",
-    "commit": "ce427a2450bdb83a07e30d5b32449c556be1ff00",
+    "commit": "819460b4ac6003a92964ca84be9ad8b912d82053",
     "fixtures": {
       "cache-keys.json": "e4c4174217757686069224a6f4553a1af7816191f689a865498f1cb4969856bb",
-      "decode-bounds.json": "907b025d2b270a0f60abd9296a8a1c864e69057c553ac7a70206b44256558916",
+      "decode-bounds.json": "c52c27f724fe138e63440dc0306936b48fe389e2bd823c058b86b30d854e2e2e",
       "file-backend.json": "8d9d8c4709baf9ef3a8f2d71d21fb5a56207bc7a05c9bc7a967ac567f2604615",
       "freshness-headers.json": "74beb975b6855f52d9dd453279873faf8048a9c3c79a8167cfda099beec5fcd3",
-      "interop-mode.json": "702613766d1b92bc3a337627a96b9aedc89abfeb4d9208c2bb00c9539a0a1f40",
+      "interop-mode.json": "e1ca6c2361509f347d17f3352e0d7ab4d4b61488737bdf0056bb5769d9794e72",
       "path-encoding.json": "807af0d39ccf3f5afda65577787ac5adcd01ff6617468060161c84267fa7e0cb",
       "wire-format.json": "5d72ca1ff27202ab46aa501f54abf77e535f275d2ea4443966ad464f3c020cd7"
     }

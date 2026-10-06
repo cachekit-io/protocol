@@ -1483,11 +1483,11 @@ REPORT_CASES: list[tuple[str, Mutate, dict[str, list[str]], list[str]]] = [
         lambda _: None,
         {
             "IOP-5": ["partial (gap)"] * 3,
-            "IOP-9": ["partial (4/8)", "covered", "covered"],
-            "IOP-17": ["partial (4/6)", "partial (gap)", "partial (gap)"],
-            "IOP-2": ["partial (3/19)", "partial (gap)", "partial (gap)"],
+            "IOP-9": ["covered"] * 3,
+            "IOP-17": ["partial (gap)"] * 3,
+            "IOP-2": ["partial (gap)"] * 3,
             "IOP-10": ["uncovered"] * 3,
-            "IOP-13": ["uncovered (0/1)", "partial (gap)", "partial (gap)"],
+            "IOP-13": ["partial (gap)"] * 3,
             "ENC-4": ["gap"] * 3,  # no sdk-bound IOP requirement is gap only any more
             "IOP-6": ["n/a"] * 3,
             "IOP-14": ["n/a", "covered", "n/a"],
