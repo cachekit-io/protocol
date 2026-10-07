@@ -150,8 +150,8 @@ Marked not-a-requirement in `spec/intent-presets.md`:
 - line 53: The key words **MUST**, MUST NOT, SHOULD, SHOULD NOT and MAY are used as in RFC 2119.
 - line 53: The key words MUST, **MUST NOT**, SHOULD, SHOULD NOT and MAY are used as in RFC 2119.
 - line 143: … storage container, which is SDK-internal (protocol#11). This specification therefore fixes no **MUST** on integrity:
-- line 498: No **MUST** on integrity. The checksum lives in the storage container, which protocol#11 makes SDK-internal; a MUST here would …
-- line 499: … on integrity. The checksum lives in the storage container, which protocol#11 makes SDK-internal; a **MUST** here would legislate the container by the back door.
+- line 499: No **MUST** on integrity. The checksum lives in the storage container, which protocol#11 makes SDK-internal; a MUST here would …
+- line 500: … on integrity. The checksum lives in the storage container, which protocol#11 makes SDK-internal; a **MUST** here would legislate the container by the back door.
 
 ## spec/interop-mode.md
 
