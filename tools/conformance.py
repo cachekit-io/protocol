@@ -30,11 +30,13 @@ first takes its whole extent, so a backtick inside an HTML tag, an autolink, a c
 escape opens no code span. Inline code and inline comments are skipped, so a code span may
 cross a line break but never a block or cell boundary. After a run of backticks that closes
 nothing or is too long to open a code span, or a <! or <? that is not a closed comment, the
-rest of the block is read as it stands: GitHub may hide part of it, which fails closed. Links,
-footnote references and GFM's extended autolinks (a bare www. or http:// address) are read as
-plain text. MUST NOT is one keyword only where a reader sees one phrase: both words on one
-line, or across a line break inside one paragraph or heading, with nothing a reader sees
-between them. So an id after a NOT in another block, or past a literal >, never marks the
+rest of the block is read as it stands: GitHub may hide part of it, which fails closed. Three
+constructs are refused rather than modelled, because GitHub takes them whole: a backtick or <
+in a link's destination or title, any footnote reference ([^, or a [ before an escaped ^ or an
+entity), and a backtick or backslash in GFM's extended autolinks (a bare www. or http://
+address). Link text is read like any other text. MUST NOT is one keyword only where a reader
+sees one phrase: both words on one line, or across a line break inside one paragraph or
+heading, with nothing a reader sees between them. So an id after a NOT in another block, or past a literal >, never marks the
 MUST before it. MUST and NOT on two lines of an HTML block, or across a hard line break, are
 an error wherever the id sits: GitHub may show the two lines apart (a <pre> keeps the break,
 a <div> does not, and elements are not tracked). An HTML block is raw HTML, so only its
@@ -55,8 +57,8 @@ each one through every entry point a requirement names or assert the error it re
 and `next` going down; it cannot tell an existing id moved onto a different rule.
 
 Fails closed: an unreadable or malformed file, a duplicate JSON key, a duplicate vector name,
-a tab, vertical tab, form feed or lone carriage return in a spec file (only spaces and line
-feeds are modelled), a footnote definition, or a paragraph that opens like a link reference
+a tab, vertical tab, form feed, lone carriage return or NUL in a spec file (only spaces and line
+feeds are modelled), a footnote definition or reference, or a paragraph that opens like a link reference
 definition (GitHub moves or hides their text, which is not modelled either), a raw <pre> tag
 inside a paragraph, heading or table cell (GitHub keeps the line breaks inside it), a code
 fence open at the end of the file, an HTML block that leaves a comment open, an index that
@@ -197,9 +199,35 @@ INLINE = re.compile(
             r"(?P<stop>`+|<[!?])",
             OPEN_TAG,
             CLOSING_TAG,
+            # Three constructs GitHub reads that the checker refuses rather than mirrors (see inline()). An inline
+            # link's destination and title open at ]( and take what link_tail() finds. A footnote reference opens
+            # at a [ whose text starts with ^, escaped or as an entity. A GFM extended autolink opens at www. or
+            # at http://, https:// or ftp:// and runs to the next space or <.
+            r"(?P<link>\]\()",
+            r"(?P<note>\[(?:\\?\^|&))",
+            r"(?P<url>(?i:https?|ftp)://|www\.)",
         )
     ),
     re.DOTALL,
+)
+# The rest of an extended autolink, past its www. or scheme: GitHub's renderer runs it to the next space or <.
+URL_REST = re.compile(r"[^ \n<]*")
+# A link destination may hold any ASCII punctuation after a backslash.
+PUNCT = frozenset("!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~")
+# Why inline() refuses each construct it does not mirror. A backtick or < inside one, or a backslash that ends a bare
+# address before a <, could pair with or open markup past it, so the checker would hide text GitHub shows; checking
+# what each holds needs only where it ends.
+LINK = (
+    "a backtick or < in a link's destination or title; percent-encode it (GitHub's renderer takes the destination and "
+    "title whole, which this check does not model)"
+)
+NOTE = (
+    "a footnote reference, or a [ that GitHub may read as one ([^, [\\^ or [&); write the note in the text, or "
+    "escape the bracket as \\[ (GitHub shows a reference without a definition as its raw text, inline code included)"
+)
+URL = (
+    "a backtick or backslash in a bare www. or http:// address; put the address in <…> or a link (GitHub links it up "
+    "to the next space or <, so a backtick in it opens no code span and a backslash at its end escapes nothing)"
 )
 # A comment as GitHub's HTML sanitizer reads it, in an HTML block or again inside the renderer's own longer inline
 # comment: <!--> and <!---> are whole, and any other ends at the first --> or --!> past its <!--. It hides that.
@@ -346,6 +374,11 @@ def layout(lines: list[str]) -> list[Leaf]:
             raise Defect(
                 f"line {i + 1}: a carriage return that does not end a CRLF line; GitHub ends a line there, "
                 "and this check reads only LF and CRLF line endings"
+            )
+        if "\x00" in line:
+            raise Defect(
+                f"line {i + 1}: a NUL byte; remove it (CommonMark reads it as U+FFFD and GitHub may not render "
+                "the file at all, which this check does not model)"
             )
         if "\v" in line or "\f" in line:
             raise Defect(
@@ -509,6 +542,65 @@ def blank(match: re.Match[str]) -> str:
     return spaces(match.group(0))
 
 
+def link_tail(text: str, start: int) -> int:
+    """Where an inline link's destination and title, opening at the ( at `start`, end (just past the closing )), or
+    -1 where there is none, as cmark-gfm's handle_close_bracket() reads them. Space here is only a space or a line
+    break: layout() rejects the other white space.
+    """
+
+    def space(i: int) -> int:
+        while i < len(text) and text[i] in " \n":
+            i += 1
+        return i
+
+    i = space(start + 1)
+    if text.startswith("<", i):
+        # <…>: no line break and no other <; a backslash takes the character after it, whatever it is.
+        i += 1
+        while i < len(text) and text[i] != ">":
+            if text[i] in "\n<":
+                return -1
+            i += 2 if text[i] == "\\" else 1
+        i += 1
+    else:
+        # Up to a space or an unmatched ), with at most 32 ( open; an escaped parenthesis does not count.
+        first, depth = i, 0
+        while i < len(text):
+            if text[i] == "\\" and i + 1 < len(text) and text[i + 1] in PUNCT:
+                i += 2
+            elif text[i] == "(":
+                depth += 1
+                i += 1
+                if depth > 32:
+                    return -1
+            elif text[i] == ")" and depth:
+                depth -= 1
+                i += 1
+            elif text[i] == ")" or text[i] in " \n":
+                if i == first and text[i] != ")":
+                    return -1
+                break
+            else:
+                i += 1
+    if i >= len(text):
+        return -1
+    end = space(i)
+    if end > i and text[end : end + 1] in ("\"", "'", "("):
+        # A title takes the longest match: it may close at any closer with a backslash before it, but runs past no
+        # other closer, and a parenthesized title past no ( without a backslash before it.
+        closer = ")" if text[end] == "(" else text[end]
+        stops = closer + "(" if closer == ")" else closer
+        title = end
+        for j in range(end + 1, len(text)):
+            if text[j] in stops:
+                if text[j] == closer:
+                    title = j + 1
+                if text[j - 1] != "\\":
+                    break
+        end = space(title)
+    return end + 1 if text[end : end + 1] == ")" else -1
+
+
 def inline(text: str, line: int) -> str:
     """One paragraph, heading or table cell, starting on line `line`, with its code spans and comments blanked,
     read as GitHub reads it.
@@ -517,7 +609,9 @@ def inline(text: str, line: int) -> str:
     own comment, sometimes longer, still holds every backtick in it. At the first opener that closes nothing
     (INLINE's stop), the rest of `text` is read as it stands: GitHub may hide part of it, but its reading
     there depends on renderer state this check does not keep, and reading more can only fail closed.
-    Nothing else is blanked: a keyword inside a tag, which GitHub does not show, is still read. A raw <pre>
+    Nothing else is blanked: a keyword inside a tag, which GitHub does not show, is still read. A footnote
+    reference, a link destination or title that holds a backtick or <, and a bare address that holds a backtick
+    or backslash are errors: GitHub takes each whole, so a backtick inside opens no code span. A raw <pre>
     tag is an error, and so is any <pre past a stop: GitHub closes the paragraph before the element and
     keeps the line breaks inside it, so MUST and NOT on two of its lines would read as one phrase here and
     show on two lines there.
@@ -531,6 +625,9 @@ def inline(text: str, line: int) -> str:
                 "check models only in an HTML block)"
             )
 
+    def refuse(at: int, what: str) -> None:
+        raise Defect(f"line {line + text.count(chr(10), 0, at)}: {what}")
+
     out: list[str] = []
     pos = 0
     for m in INLINE.finditer(text):
@@ -538,6 +635,12 @@ def inline(text: str, line: int) -> str:
             no_pre(m.start())
             break
         start, end = m.span()
+        if m.lastgroup == "note":
+            refuse(start, NOTE)
+        if m.lastgroup == "link" and (tail := link_tail(text, end - 1)) > 0 and re.search("[`<]", text[end:tail]):
+            refuse(start, LINK)
+        if m.lastgroup == "url" and re.search(r"[`\\]", URL_REST.match(text, end).group(0)):
+            refuse(start, URL)
         if PRE_TAG.match(m.group(0)):
             no_pre(start)
         if m.lastgroup == "code":

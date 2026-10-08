@@ -1182,6 +1182,8 @@ CASES: list[Case] = [
         "a vertical tab or form feed",
     ),
     ("vertical tab in a spec file", append(SPEC, "\nReaders\vMUST reject it.\n"), 1, "a vertical tab or form feed"),
+    # CommonMark reads a NUL as U+FFFD, and GitHub may not render a file that holds one.
+    ("NUL byte in a spec file", append(SPEC, "\na <http://a\x00`> MUST `y`\n"), 1, "a NUL byte"),
     ("spec checked out with CRLF line endings", crlf(SPEC), 0, OK),
     # The exemption is the marker alone on its line, trailing spaces aside: a non-breaking space is text.
     (
@@ -1249,6 +1251,17 @@ CASES: list[Case] = [
     ("backtick in an unquoted attribute value", append(SPEC, "\na <span title=`>MUST</span> `x`\n"), 0, OK),
     ("backtick in a URI autolink", append(SPEC, "\na <http://x.y/`> MUST `x`\n"), 1, "this MUST has no id"),
     ("backtick in an email autolink", append(SPEC, "\na <b`c@d.e> MUST `x`\n"), 1, "this MUST has no id"),
+    # GitHub takes a link's destination and title whole, shows a footnote reference without a definition as its raw
+    # text, and links a bare address up to the next space or <. The checker refuses each rather than mirror it.
+    ("backtick in a link title", append(SPEC, '\na [b](/u "`") MUST `x`\n'), 1, "in a link's destination or title"),
+    ("backtick in a link destination", append(SPEC, "\na [b](/u`) MUST `x`\n"), 1, "in a link's destination or title"),
+    ("footnote reference", append(SPEC, "\nSee [^a `MUST` b] here.\n"), 1, "a footnote reference"),
+    # Spelled as an entity, a footnote reference makes GitHub drop the rest of the page.
+    ("footnote reference spelled as an entity", append(SPEC, "\nSee [&#94;a] here.\n"), 1, "a footnote reference"),
+    ("backtick in a bare https:// address", append(SPEC, "\na https://x.y/`z MUST `x`\n"), 1, "in a bare www. or http://"),
+    ("backtick in a bare www. address", append(SPEC, "\na www.x.y/`z MUST `x`\n"), 1, "in a bare www. or http://"),
+    # Backticks in link text are read as anywhere else, as the spec files use them.
+    ("inline code in link text and a plain destination", append(SPEC, "\nSee [`MUST`](https://x.y/) here.\n"), 0, OK),
     # A code span that opens first hides a tag inside it.
     ("tag inside a code span", append(SPEC, "\nUse `<span title='x'>MUST</span>` as markup.\n"), 0, OK),
     # A tag may span lines; the blockquote's > on the second line is not part of it.
@@ -1879,6 +1892,37 @@ INLINE_LINES: list[tuple[str, bool]] = [
     ("a <!X `> MUST `y`", True),
     ("a <![cdata[ ` ]]> MUST `y`", True),
     ("a `c` d `MUST` e ``", False),
+    # where GitHub reads no link, footnote reference or bare address, a backtick opens a code span as anywhere else:
+    # a title must be the last thing before the ), and it ends at its first closer with no backslash before it
+    ('a [b](/u "`" y) MUST `x`', False),
+    ('a [b] (/u "`") MUST `x`', False),
+    ('a [b](u "x" "`") MUST `y`', False),
+    ('a [b](u "x"`") MUST `y`', False),
+    ("a https://x.y/ `MUST`", False),
+    ("a https://x.y/<`MUST`", False),
+    ("a \\[^b `MUST` c]", False),
+    ("a [ ^b `MUST` c]", False),
+]
+# Documents of one paragraph each where GitHub shows the MUST and the checker refuses the construct before it, which
+# it does not mirror: a link's destination or title, a footnote reference, or a bare address. Each was checked against
+# GitHub's renderer.
+REFUSED = [
+    'a [b](/u "`") MUST `x`',
+    "a [b](/u`) MUST `x`",
+    'a [b](/u\n"`") MUST `x`',
+    "a [b](<u `>) MUST `x`",
+    'a [b](u "x\\"`") MUST `y`',
+    "a [b](u (x\\)`)) MUST `y`",
+    "a [b](u(`)) MUST `y`",
+    'a [b](u "<!--") MUST -->',
+    "a [b](<!-- x>) MUST -->",
+    "See [^a `MUST` b] here.",
+    "a ![^b `MUST`]",
+    "a [\\^b `MUST` c]",
+    "a https://x.y/`z MUST `x`",
+    "a www.x.y/`z MUST `x`",
+    # the address takes the backslash, so the < after it opens an instruction that holds the backtick
+    "a http://a.b\\<?x`?> MUST `y`",
 ]
 # Documents of one paragraph each where GitHub hides the MUST and the checker reads it, which fails closed: an opener
 # that closes nothing comes first, and what GitHub's renderer does past one depends on state the checker does not keep.
@@ -1892,7 +1936,8 @@ READ_AS_IS = [
 
 
 def test_inline() -> bool:
-    """The checker reads the MUST in each of INLINE_LINES exactly where GitHub shows it, and in each of READ_AS_IS."""
+    """The checker reads the MUST in each of INLINE_LINES exactly where GitHub shows it, and in each of READ_AS_IS, and
+    refuses each of REFUSED."""
     sys.path.insert(0, str(HERE))
     import conformance
 
@@ -1904,7 +1949,8 @@ def test_inline() -> bool:
 
     wrong = [text for text, shown in INLINE_LINES if reads(text) is not shown]
     wrong += [text for text in READ_AS_IS if reads(text) is not True]
-    lines = len(INLINE_LINES) + len(READ_AS_IS)
+    wrong += [text for text in REFUSED if reads(text) is not None]
+    lines = len(INLINE_LINES) + len(READ_AS_IS) + len(REFUSED)
     print(f"  {'ok  ' if not wrong else 'FAIL'} inline markup read as GitHub shows it in {lines} lines", end="")
     print(f": {wrong}" if wrong else "")
     return not wrong
