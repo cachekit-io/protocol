@@ -88,6 +88,14 @@ def present(**inputs: object) -> Callable[[dict], None]:
     return mutate
 
 
+def kc(doc: dict, name: str) -> dict:
+    return next(r for r in doc["keyring"]["configuration"]["vectors"] if r["name"] == name)
+
+
+def set_decrypt_only(name: str, change: Callable[[list[str]], list[str]]) -> Callable[[dict], None]:
+    return lambda d: kc(d, name).__setitem__("decrypt_only_master_keys_hex", change(kc(d, name)["decrypt_only_master_keys_hex"]))
+
+
 def master_fingerprint(doc: dict, key_id: str) -> str:
     entry = next(e for e in doc["keyring"]["entries"] if e["id"] == key_id)
     return ev.key_fingerprint(bytes.fromhex(entry["master_key_hex"]))
@@ -213,6 +221,50 @@ STDLIB_CASES: dict[str, Case] = {
         "frozen aad_reject_vectors missing",
     ),
     "aad reject row duplicated": (lambda d: d["aad_reject_vectors"].append(copy.deepcopy(ar(d))), "duplicate name"),
+    # encryption.md ENC-7 and ENC-9 — keyring configurations an SDK accepts or refuses at load.
+    "keyring configuration block deleted": (lambda d: d["keyring"].pop("configuration"), "keyring configuration rows missing"),
+    "four-key row cut to three keys": (
+        set_decrypt_only("keyring_four_decrypt_only_keys", lambda k: k[:3]),
+        "keyring_four_decrypt_only_keys: a conforming load does not reject it",
+    ),
+    "three-key row grown to four keys": (
+        set_decrypt_only("keyring_three_decrypt_only_keys", lambda k: [*k, "33" * 32]),
+        "keyring_three_decrypt_only_keys: a conforming load does not accept it",
+    ),
+    "uppercase row with the repeat in lowercase": (
+        set_decrypt_only("keyring_current_key_decrypt_only_uppercase", lambda k: [k[0], k[1].lower()]),
+        "judges keyring_current_key_decrypt_only_uppercase correctly",
+    ),
+    "a key twice in a decrypt-only list": (
+        set_decrypt_only("keyring_three_decrypt_only_keys", lambda k: [k[0], k[0], k[2]]),
+        "appears twice in the decrypt-only list",
+    ),
+    "an uppercase decrypt-only key that is not the current key": (
+        set_decrypt_only("keyring_three_decrypt_only_keys", lambda k: [k[0], k[1], accept_row(DOC)["master_key_hex"][:-2].upper() + "AB"]),
+        "the two readings of rule 1 load it differently",
+    ),
+    "a decrypt-only key of 31 bytes": (
+        set_decrypt_only("keyring_current_key_decrypt_only", lambda k: [k[0][:62], k[1]]),
+        "every key must be a valid 32-byte key",
+    ),
+    "verdict flipped against the frozen name": (
+        lambda d: kc(d, "keyring_four_decrypt_only_keys").__setitem__("verdict", "accept"),
+        "the one its frozen name declares",
+    ),
+    "keyring configuration row renamed": (
+        lambda d: kc(d, "keyring_current_key_decrypt_only").__setitem__("name", "renamed"),
+        "frozen keyring configuration rows missing",
+    ),
+    "keyring configuration row with an unknown field": (
+        lambda d: kc(d, "keyring_three_decrypt_only_keys").__setitem__("tenant_id", "default"),
+        "keyring configuration keyring_three_decrypt_only_keys: fields",
+    ),
+    "keyring configuration row added with no wrong loader to show its mistake": (
+        lambda d: d["keyring"]["configuration"]["vectors"].append(
+            {**copy.deepcopy(kc(d, "keyring_three_decrypt_only_keys")), "name": "keyring_no_decrypt_only_keys", "decrypt_only_master_keys_hex": []}
+        ),
+        "no wrong keyring loader shows why these rows exist: ['keyring_no_decrypt_only_keys']",
+    ),
     # intent-presets.md rule 5 — the default-tenant block is ground truth for "no tenant configured".
     "default_tenant block deleted": lambda d: d.pop("default_tenant"),
     "default_tenant is not the literal": lambda d: d["default_tenant"].__setitem__("tenant_id", "cross-sdk-test"),

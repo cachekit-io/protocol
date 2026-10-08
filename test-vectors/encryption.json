@@ -49,7 +49,55 @@
         "ciphertext_hex": "020202020202020202020202c9e7a0e25b70e67fc71a191af2d8ec795ce7fa3bf69d06e291ec1bce",
         "key_fingerprint_hex": "e066ffdacfb5fb11a6ecc44c7a0ecb4e"
       }
-    ]
+    ],
+    "configuration": {
+      "note": "spec/encryption.md \u00a7 Key Rotation (Keyring). Configurations a keyring is loaded from: a current master key and a list of decrypt-only master keys, as CACHEKIT_MASTER_KEY and CACHEKIT_PREVIOUS_MASTER_KEYS (comma-separated) or an SDK's own parameters give them. A conforming SDK accepts each accept row and refuses each reject row when the keyring is loaded, before any entry is read. No row's verdict depends on what the spec leaves open: uppercase hex (intent-presets.md \u00a7 Master Key Input rule 1) or a key repeated within the decrypt-only list. Each note names mistakes its row catches; tools/encryption-verify.py checks that each one misjudges its row.",
+      "vectors": [
+        {
+          "name": "keyring_three_decrypt_only_keys",
+          "current_master_key_hex": "007f80ffa55ac33c1ee12dd24bb469968778f00f01102332455467768998abba",
+          "decrypt_only_master_keys_hex": [
+            "1111111111111111111111111111111111111111111111111111111111111111",
+            "2222222222222222222222222222222222222222222222222222222222222222",
+            "6161616161616161616161616161616161616161616161616161616161616161"
+          ],
+          "verdict": "accept",
+          "note": "One current key and three decrypt-only keys, the cap, each a valid 32-byte key and none repeated. A conforming SDK accepts it at load. One whose cap is below three refuses it."
+        },
+        {
+          "name": "keyring_four_decrypt_only_keys",
+          "current_master_key_hex": "007f80ffa55ac33c1ee12dd24bb469968778f00f01102332455467768998abba",
+          "decrypt_only_master_keys_hex": [
+            "1111111111111111111111111111111111111111111111111111111111111111",
+            "2222222222222222222222222222222222222222222222222222222222222222",
+            "6161616161616161616161616161616161616161616161616161616161616161",
+            "807f80ffa55ac33c1ee12dd24bb469968778f00f01102332455467768998abba"
+          ],
+          "verdict": "reject",
+          "note": "One current key and four decrypt-only keys, one over the cap, each a valid 32-byte key and none repeated, so nothing but the count can refuse it. A conforming SDK refuses it at load. One with no cap accepts it, and so does one that keeps the first three keys and drops the rest."
+        },
+        {
+          "name": "keyring_current_key_decrypt_only",
+          "current_master_key_hex": "007f80ffa55ac33c1ee12dd24bb469968778f00f01102332455467768998abba",
+          "decrypt_only_master_keys_hex": [
+            "1111111111111111111111111111111111111111111111111111111111111111",
+            "007f80ffa55ac33c1ee12dd24bb469968778f00f01102332455467768998abba"
+          ],
+          "verdict": "reject",
+          "note": "The current key repeated, as given, in the decrypt-only list. A conforming SDK refuses it at load. One that does not compare the current key with the decrypt-only keys accepts it."
+        },
+        {
+          "name": "keyring_current_key_decrypt_only_uppercase",
+          "current_master_key_hex": "007f80ffa55ac33c1ee12dd24bb469968778f00f01102332455467768998abba",
+          "decrypt_only_master_keys_hex": [
+            "1111111111111111111111111111111111111111111111111111111111111111",
+            "007F80FFA55AC33C1EE12DD24BB469968778F00F01102332455467768998ABBA"
+          ],
+          "verdict": "reject",
+          "note": "The current key repeated in the decrypt-only list in uppercase hex. Its verdict does not depend on uppercase handling, which spec/intent-presets.md \u00a7 Master Key Input rule 1 leaves open: an SDK that refuses uppercase hex refuses the list, and one that reads it as the same bytes finds the repeat. One that accepts uppercase hex and compares the keys as strings accepts it, and so does one that accepts uppercase hex and does not compare the current key with the decrypt-only keys."
+        }
+      ]
+    }
   },
   "vectors": [
     {

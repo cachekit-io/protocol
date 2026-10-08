@@ -20,6 +20,11 @@ Stdlib-only checks (always run):
     row's note names is modelled in WRONG_HEX_ENTRY_POINTS or WRONG_RAW_ENTRY_POINTS
     and must misjudge the rows it lists, so editing a row until it no longer shows
     the mistake goes red.
+  - Keyring configurations (spec/encryption.md § Key Rotation, ENC-7 and ENC-9): each
+    accept row loads, and each reject row is refused, under both readings of what
+    intent-presets.md rule 1 leaves open, and no row holds a key twice in its
+    decrypt-only list, which the spec leaves open too. Each mistake a note names is
+    modelled in WRONG_KEYRING_LOADS and must misjudge the rows it lists.
   - AAD reject rows (spec/encryption.md, ENC-1): each presents a published vector's
     ciphertext under AAD inputs that differ from its own in exactly one component, and
     with `cryptography` the ciphertext fails authentication under them, so a reader
@@ -171,7 +176,7 @@ AAD_INPUTS = ("cache_key", "format", "compressed", "original_type")
 # Every vector table this file may hold. tools/conformance.py indexes each list under a key ending in "vectors", so a
 # table missing here would publish rows that nothing verifies.
 VECTOR_TABLES = frozenset(
-    {"vectors", "aad_reject_vectors", "keyring.vectors", "default_tenant.vectors"}
+    {"vectors", "aad_reject_vectors", "keyring.vectors", "keyring.configuration.vectors", "default_tenant.vectors"}
     | {f"master_key_input.{t}" for t in FROZEN_MASTER_KEY_INPUT_VECTORS}
 )
 
@@ -749,6 +754,139 @@ def verify_wrong_entry_points(rows: dict[str, tuple[str, dict]]) -> int:
     return failures
 
 
+# Keyring configurations (spec/encryption.md § Key Rotation (Keyring), ENC-7 and ENC-9): a current master key and the
+# decrypt-only keys a keyring is loaded from, and whether a conforming SDK accepts it at load. Names are frozen and a row
+# has exactly these fields.
+FROZEN_KEYRING_CONFIGURATIONS = {
+    "keyring_three_decrypt_only_keys": "accept",
+    "keyring_four_decrypt_only_keys": "reject",
+    "keyring_current_key_decrypt_only": "reject",
+    "keyring_current_key_decrypt_only_uppercase": "reject",
+}
+KEYRING_CONFIGURATION_FIELDS = frozenset({"name", "current_master_key_hex", "decrypt_only_master_keys_hex", "verdict", "note"})
+DECRYPT_ONLY_CAP = 3
+
+
+def keyring_loads(current: str, decrypt_only: list[str], *, lenient: bool, cap: int = DECRYPT_ONLY_CAP, compare: bool = True) -> bool:
+    """Whether an SDK accepts the configuration at load, under one reading of rule 1 (`read_hex_key`).
+
+    A conforming SDK refuses a key it cannot read, more than `cap` decrypt-only keys, and the current key among the
+    decrypt-only keys, compared as key bytes. `cap` and `compare` let a wrong entry point loosen one of those rules.
+    """
+    keys = [read_hex_key(text, lenient=lenient) for text in (current, *decrypt_only)]
+    if any(key is None or len(key) != KEY_BYTES for key in keys):
+        return False
+    return len(decrypt_only) <= cap and not (compare and keys[0] in keys[1:])
+
+
+# Plausible wrong keyring loaders, one per mistake a configuration note names: each returns whether it accepts the
+# configuration at load and must misjudge every row it lists; it lists a row only if that row's note names its mistake.
+# Each reads uppercase hex as lowercase, the reading under which every mistake shows.
+WRONG_KEYRING_LOADS: dict[str, tuple[Callable[[str, list[str]], bool], tuple[str, ...]]] = {
+    "no cap on decrypt-only keys": (
+        lambda c, d: keyring_loads(c, d, lenient=True, cap=len(d)),
+        ("keyring_four_decrypt_only_keys",),
+    ),
+    "the first three decrypt-only keys kept and the rest dropped": (
+        lambda c, d: keyring_loads(c, d[:DECRYPT_ONLY_CAP], lenient=True),
+        ("keyring_four_decrypt_only_keys",),
+    ),
+    "a cap of two decrypt-only keys": (
+        lambda c, d: keyring_loads(c, d, lenient=True, cap=DECRYPT_ONLY_CAP - 1),
+        ("keyring_three_decrypt_only_keys",),
+    ),
+    "no check that the current key is not a decrypt-only key": (
+        lambda c, d: keyring_loads(c, d, lenient=True, compare=False),
+        ("keyring_current_key_decrypt_only", "keyring_current_key_decrypt_only_uppercase"),
+    ),
+    "the current key compared with each decrypt-only key as a string": (
+        lambda c, d: keyring_loads(c, d, lenient=True, compare=False) and c not in d,
+        ("keyring_current_key_decrypt_only_uppercase",),
+    ),
+}
+
+
+def verify_keyring_configurations(keyring: dict | None) -> int:
+    """Return the number of failed keyring configuration checks (spec/encryption.md ENC-7 and ENC-9).
+
+    Each row's keys must each be a valid 32-byte key once uppercase is read as lowercase, with no key twice in the
+    decrypt-only list. Its verdict must be what a conforming load gives under both readings of rule 1, so no row
+    settles uppercase handling; then each wrong loader must misjudge the rows it lists.
+    """
+    block = keyring.get("configuration") if isinstance(keyring, dict) else None
+    if not isinstance(block, dict) or not isinstance(block.get("vectors"), list):
+        print("FAIL keyring configuration rows missing")
+        return 1
+    failures = 0
+    if not isinstance(block.get("note"), str) or not block["note"].strip():
+        print("FAIL keyring configuration: note must be a non-empty string")
+        failures += 1
+    vectors = block["vectors"]
+    missing = set(FROZEN_KEYRING_CONFIGURATIONS) - {row.get("name") for row in vectors}
+    if missing:
+        print(f"FAIL frozen keyring configuration rows missing (append-only, never rename): {sorted(missing)}")
+        failures += 1
+    rows: dict[str, dict] = {}
+    for row in vectors:
+        name = row.get("name")
+        label = f"keyring configuration {name}"
+        if set(row) != KEYRING_CONFIGURATION_FIELDS:
+            print(f"FAIL {label}: fields {sorted(row)} != {sorted(KEYRING_CONFIGURATION_FIELDS)}")
+            failures += 1
+            continue
+        if name in rows:
+            print(f"FAIL {label}: duplicate name")
+            failures += 1
+            continue
+        current, decrypt_only = row["current_master_key_hex"], row["decrypt_only_master_keys_hex"]
+        if not (
+            isinstance(row["note"], str) and row["note"].strip() and isinstance(current, str) and isinstance(decrypt_only, list)
+            and all(isinstance(k, str) and set(k) <= ROW_CHARACTERS for k in decrypt_only) and set(current) <= ROW_CHARACTERS
+        ):
+            print(f"FAIL {label}: needs a non-empty note, a key string and a list of key strings of printable ASCII")
+            failures += 1
+            continue
+        if row["verdict"] != FROZEN_KEYRING_CONFIGURATIONS.get(name, row["verdict"]) or row["verdict"] not in ("accept", "reject"):
+            print(f"FAIL {label}: verdict must be accept or reject, and the one its frozen name declares")
+            failures += 1
+            continue
+        read = [read_hex_key(text, lenient=True) for text in (current, *decrypt_only)]
+        if any(key is None or len(key) != KEY_BYTES for key in read):
+            print(f"FAIL {label}: every key must be a valid {KEY_BYTES}-byte key once uppercase is read, so only the keyring rules decide the row")
+            failures += 1
+            continue
+        if len(set(read[1:])) != len(read) - 1:
+            print(f"FAIL {label}: a key appears twice in the decrypt-only list, which the spec leaves open")
+            failures += 1
+            continue
+        rows[name] = row
+        verdicts = {keyring_loads(current, decrypt_only, lenient=lenient) for lenient in READINGS.values()}
+        if len(verdicts) != 1:
+            print(f"FAIL {label}: the two readings of rule 1 load it differently, so the row decides what the spec leaves open")
+            failures += 1
+            continue
+        if ("accept" if verdicts.pop() else "reject") != row["verdict"]:
+            print(f"FAIL {label}: a conforming load does not {row['verdict']} it")
+            failures += 1
+            continue
+        print(f"ok  {label} ({row['verdict']})")
+    listed: set[str] = set()
+    for label, (loads, targets) in WRONG_KEYRING_LOADS.items():
+        for target in targets:
+            listed.add(target)
+            row = rows.get(target)
+            if row is None:
+                continue  # the frozen-name or row guards report it
+            if ("accept" if loads(row["current_master_key_hex"], row["decrypt_only_master_keys_hex"]) else "reject") == row["verdict"]:
+                print(f"FAIL wrong keyring loader {label!r} judges {target} correctly, so the row no longer shows the mistake its note names")
+                failures += 1
+    unshown = sorted((set(FROZEN_KEYRING_CONFIGURATIONS) | set(rows)) - listed)
+    if unshown:
+        print(f"FAIL no wrong keyring loader shows why these rows exist: {unshown}")
+        failures += 1
+    return failures
+
+
 def verify_master_key_input(block: dict | None, default_tenant: dict | None, main_master_key_hex: str, *, seal: bool) -> int:
     """Return the number of failed master key input checks (spec/intent-presets.md § Master Key Input).
 
@@ -893,6 +1031,7 @@ def verify(doc: dict, *, require_seal: bool) -> int:
 
     failures += verify_aad_rejects(doc, key, seal=seal)
     failures += verify_keyring(doc.get("keyring"), seal=seal)
+    failures += verify_keyring_configurations(doc.get("keyring"))
     failures += verify_default_tenant(doc.get("default_tenant"), bytes.fromhex(doc["master_key_hex"]), seal=seal)
     failures += verify_master_key_input(doc.get("master_key_input"), doc.get("default_tenant"), doc["master_key_hex"], seal=seal)
 
@@ -905,7 +1044,8 @@ def verify(doc: dict, *, require_seal: bool) -> int:
     master_key_count = sum(len(doc["master_key_input"][table]) for table in FROZEN_MASTER_KEY_INPUT_VECTORS)
     print(
         f"all {len(doc['vectors'])} encryption vectors plus {len(doc['aad_reject_vectors'])} AAD reject, {keyring_count} "
-        f"keyring, {default_count} default-tenant and {master_key_count} master key input vectors verified ({mode})"
+        f"keyring, {len(doc['keyring']['configuration']['vectors'])} keyring configuration, {default_count} default-tenant "
+        f"and {master_key_count} master key input vectors verified ({mode})"
     )
     return 0
 
