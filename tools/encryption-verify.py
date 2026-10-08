@@ -20,6 +20,10 @@ Stdlib-only checks (always run):
     row's note names is modelled in WRONG_HEX_ENTRY_POINTS or WRONG_RAW_ENTRY_POINTS
     and must misjudge the rows it lists, so editing a row until it no longer shows
     the mistake goes red.
+  - AAD reject rows (spec/encryption.md, ENC-1): each presents a published vector's
+    ciphertext under AAD inputs that differ from its own in exactly one component, and
+    with `cryptography` the ciphertext fails authentication under them, so a reader
+    that does not retry with an alternative AAD input refuses every row.
   - No vector table outside the ones verified here: tools/conformance.py indexes
     every list under a key ending in "vectors".
   - The vector count never drops below the frozen floor — vectors are
@@ -148,10 +152,27 @@ ASCII_WHITE_SPACE = frozenset(" \t\n\r\x0b\x0c")
 # (trim() also strips non-ASCII white space and U+FEFF).
 ROW_CHARACTERS = frozenset(string.printable)
 
+# AAD reject rows (spec/encryption.md § AAD v0x03 Format, ENC-1): a vector's ciphertext presented under AAD inputs that
+# differ from its own in one component. A reader that retries with an alternative AAD input decrypts a row; a reader
+# that does not fails authentication. Names are frozen, and a row has exactly these fields, original_type optional.
+FROZEN_AAD_REJECT_VECTOR_NAMES = frozenset(
+    {
+        "aad_compressed_false_sealed_true",
+        "aad_compressed_true_sealed_false",
+        "aad_format_msgpack_sealed_arrow",
+        "aad_without_original_type_sealed_with",
+        "aad_with_original_type_sealed_without",
+        "aad_key_with_prefix_sealed_without",
+    }
+)
+AAD_REJECT_FIELDS = frozenset({"name", "sealed_as", "cache_key", "format", "compressed", "aad_hex", "ciphertext_hex", "note"})
+AAD_INPUTS = ("cache_key", "format", "compressed", "original_type")
+
 # Every vector table this file may hold. tools/conformance.py indexes each list under a key ending in "vectors", so a
 # table missing here would publish rows that nothing verifies.
 VECTOR_TABLES = frozenset(
-    {"vectors", "keyring.vectors", "default_tenant.vectors"} | {f"master_key_input.{t}" for t in FROZEN_MASTER_KEY_INPUT_VECTORS}
+    {"vectors", "aad_reject_vectors", "keyring.vectors", "default_tenant.vectors"}
+    | {f"master_key_input.{t}" for t in FROZEN_MASTER_KEY_INPUT_VECTORS}
 )
 
 
@@ -241,6 +262,72 @@ def verify_sealed_vector(
         print(f"FAIL {label}: plaintext mismatch\n  expected {vec['plaintext_hex']}\n  got      {plaintext.hex()}")
         return None
     return aad, index
+
+
+def verify_aad_rejects(doc: dict, key: bytes, *, seal: bool) -> int:
+    """Return the number of failed AAD reject rows (spec/encryption.md ENC-1: readers never retry with another AAD input).
+
+    Each row names the vector in `vectors` whose ciphertext it carries (`sealed_as`) and presents AAD inputs that differ
+    from that vector's in exactly one of cache_key, format, compressed and original_type (present or absent). Its
+    aad_hex must rebuild from what it presents. With `cryptography`, the ciphertext must fail authentication under the
+    presented AAD, which the one-input rule already implies; the check shows the row's claim with the cipher itself.
+    """
+    rows = doc.get("aad_reject_vectors")
+    if not isinstance(rows, list):
+        print("FAIL aad_reject_vectors missing")
+        return 1
+    failures = 0
+    missing = FROZEN_AAD_REJECT_VECTOR_NAMES - {row.get("name") for row in rows}
+    if missing:
+        print(f"FAIL frozen aad_reject_vectors missing (append-only, never rename): {sorted(missing)}")
+        failures += 1
+    sealed = {v["name"]: v for v in doc["vectors"]}
+    seen: set[str] = set()
+    for row in rows:
+        name = row.get("name")
+        label = f"aad_reject {name}"
+        if set(row) - {"original_type"} != AAD_REJECT_FIELDS:
+            print(f"FAIL {label}: fields {sorted(row)} != {sorted(AAD_REJECT_FIELDS)} (original_type optional)")
+            failures += 1
+            continue
+        if name in seen:
+            print(f"FAIL {label}: duplicate name")
+            failures += 1
+            continue
+        seen.add(name)
+        if not isinstance(row["note"], str) or not row["note"].strip():
+            print(f"FAIL {label}: note must be a non-empty string")
+            failures += 1
+            continue
+        if not isinstance(row["compressed"], bool) or row["format"] not in FORMAT_REGISTRY:
+            print(f"FAIL {label}: invalid metadata (compressed must be a JSON boolean, format must be in {sorted(FORMAT_REGISTRY)})")
+            failures += 1
+            continue
+        base = sealed.get(row["sealed_as"])
+        if base is None:
+            print(f"FAIL {label}: sealed_as names no vector in `vectors`: {row['sealed_as']!r}")
+            failures += 1
+            continue
+        if row["ciphertext_hex"] != base["ciphertext_hex"]:
+            print(f"FAIL {label}: ciphertext is not {row['sealed_as']}'s")
+            failures += 1
+            continue
+        aad = aad_v3(doc["tenant_id"], row["cache_key"], fmt=row["format"], compressed=row["compressed"], original_type=row.get("original_type"))
+        if aad.hex() != row["aad_hex"]:
+            print(f"FAIL {label}: AAD mismatch\n  expected {row['aad_hex']}\n  rebuilt  {aad.hex()}")
+            failures += 1
+            continue
+        differs = [f for f in AAD_INPUTS if (f in row) != (f in base) or row.get(f) != base.get(f)]
+        if len(differs) != 1:
+            print(f"FAIL {label}: differs from {row['sealed_as']} in {differs or 'no'} AAD input(s); a row presents exactly one alternative")
+            failures += 1
+            continue
+        if seal and decrypt_with_keyring([key], bytes.fromhex(row["ciphertext_hex"]), aad) is not None:
+            print(f"FAIL {label}: decrypts under the AAD it presents, so a reader that never retries returns a value")
+            failures += 1
+            continue
+        print(f"ok  {label} ({differs[0]} differs{'; authentication fails' if seal else ''})")
+    return failures
 
 
 def verify_keyring(keyring: dict | None, *, seal: bool) -> int:
@@ -804,6 +891,7 @@ def verify(doc: dict, *, require_seal: bool) -> int:
             continue
         print(f"ok  {name}")
 
+    failures += verify_aad_rejects(doc, key, seal=seal)
     failures += verify_keyring(doc.get("keyring"), seal=seal)
     failures += verify_default_tenant(doc.get("default_tenant"), bytes.fromhex(doc["master_key_hex"]), seal=seal)
     failures += verify_master_key_input(doc.get("master_key_input"), doc.get("default_tenant"), doc["master_key_hex"], seal=seal)
@@ -816,8 +904,8 @@ def verify(doc: dict, *, require_seal: bool) -> int:
     default_count = len(doc.get("default_tenant", {}).get("vectors", []))
     master_key_count = sum(len(doc["master_key_input"][table]) for table in FROZEN_MASTER_KEY_INPUT_VECTORS)
     print(
-        f"all {len(doc['vectors'])} encryption vectors plus {keyring_count} keyring, "
-        f"{default_count} default-tenant and {master_key_count} master key input vectors verified ({mode})"
+        f"all {len(doc['vectors'])} encryption vectors plus {len(doc['aad_reject_vectors'])} AAD reject, {keyring_count} "
+        f"keyring, {default_count} default-tenant and {master_key_count} master key input vectors verified ({mode})"
     )
     return 0
 

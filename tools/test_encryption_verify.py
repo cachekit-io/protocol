@@ -67,6 +67,27 @@ def dt(doc: dict) -> dict:
     return next(v for v in doc["default_tenant"]["vectors"] if v["name"] == "default_tenant_interop")
 
 
+def ar(doc: dict, name: str = "aad_compressed_false_sealed_true") -> dict:
+    return next(r for r in doc["aad_reject_vectors"] if r["name"] == name)
+
+
+def present(**inputs: object) -> Callable[[dict], None]:
+    """An AAD reject row presenting other inputs, its aad_hex rebuilt, so only the one-input rule can fail it."""
+
+    def mutate(doc: dict) -> None:
+        row = ar(doc)
+        for k, v in inputs.items():
+            if v is None:
+                row.pop(k, None)
+            else:
+                row[k] = v
+        row["aad_hex"] = ev.aad_v3(
+            doc["tenant_id"], row["cache_key"], fmt=row["format"], compressed=row["compressed"], original_type=row.get("original_type")
+        ).hex()
+
+    return mutate
+
+
 def master_fingerprint(doc: dict, key_id: str) -> str:
     entry = next(e for e in doc["keyring"]["entries"] if e["id"] == key_id)
     return ev.key_fingerprint(bytes.fromhex(entry["master_key_hex"]))
@@ -173,6 +194,25 @@ STDLIB_CASES: dict[str, Case] = {
     "aad corrupted": lambda d: k1(d).__setitem__("aad_hex", "03" + k1(d)["aad_hex"][2:].replace("6b", "6c", 1)),
     "cache_key substituted": lambda d: k1(d).__setitem__("cache_key", "keyring:attacker:entry"),
     "frozen keyring vector renamed": lambda d: k1(d).__setitem__("name", "renamed"),
+    # encryption.md ENC-1 — AAD reject rows: a published ciphertext presented under one other AAD input. Each case names
+    # the FAIL text of the guard it targets. No case reaches the seal lane's decrypt check alone: a row that keeps to
+    # one other input and its sealed vector's ciphertext cannot authenticate, which that check shows with the cipher.
+    "aad_reject_vectors deleted": (lambda d: d.pop("aad_reject_vectors"), "aad_reject_vectors missing"),
+    "aad reject row presenting its sealed vector's own inputs": (present(compressed=True), "in no AAD input(s)"),
+    "aad reject row differing in two inputs": (present(format="orjson"), "in ['format', 'compressed'] AAD input(s)"),
+    "aad reject row carrying another vector's ciphertext": (
+        lambda d: ar(d).__setitem__("ciphertext_hex", next(v for v in d["vectors"] if v["name"] == "basic_bytes")["ciphertext_hex"]),
+        "ciphertext is not compressed_basic's",
+    ),
+    "aad reject row naming no sealed vector": (lambda d: ar(d).__setitem__("sealed_as", "no_such_vector"), "sealed_as names no vector"),
+    "aad reject row whose aad_hex is not rebuilt": (lambda d: ar(d).__setitem__("compressed", True), "AAD mismatch"),
+    "aad reject row with compressed as a JSON int": (lambda d: ar(d).__setitem__("compressed", 0), "invalid metadata"),
+    "aad reject row with an unknown field": (lambda d: ar(d).__setitem__("plaintext_hex", "00"), "(original_type optional)"),
+    "frozen aad reject row deleted": (
+        lambda d: d["aad_reject_vectors"].remove(ar(d, "aad_key_with_prefix_sealed_without")),
+        "frozen aad_reject_vectors missing",
+    ),
+    "aad reject row duplicated": (lambda d: d["aad_reject_vectors"].append(copy.deepcopy(ar(d))), "duplicate name"),
     # intent-presets.md rule 5 — the default-tenant block is ground truth for "no tenant configured".
     "default_tenant block deleted": lambda d: d.pop("default_tenant"),
     "default_tenant is not the literal": lambda d: d["default_tenant"].__setitem__("tenant_id", "cross-sdk-test"),

@@ -1,5 +1,5 @@
 {
-  "version": "1.4.0",
+  "version": "1.5.0",
   "generator": "extracted from cachekit-rs v0.5.1 + cachekit-ts v0.1.0 (Python ground truth); arrow/orjson/original_type and standard_serializer vectors generated with cryptography/OpenSSL (fixed nonces) matching real cachekit-py serializer metadata (the standard_serializer plaintexts are cachekit-py 0.22.0's own: python-frame.json's default and integrity-off payloads), verified by tools/encryption-verify.py; master_key_input rows hand-written from one key, the sealed rows sealed with the stdlib HKDF + cryptography AES-GCM (fixed nonce)",
   "algorithm": "AES-256-GCM",
   "key_derivation": "HKDF-SHA256 with cachekit_v1_ salt prefix",
@@ -138,6 +138,70 @@
       "original_type": "msgpack",
       "aad_hex": "030000000e63726f73732d73646b2d746573740000001b746573743a7374616e646172643a696e746567726974792d6f6666000000076d73677061636b0000000546616c7365000000076d73677061636b",
       "ciphertext_hex": "0a0b0c0d0e0f101100000005275a8abbe4e2c89ffd42723b89608fe7132ba8aca55b350621e6792789e510f88f9a47783090d2fa823c07bf81984708"
+    }
+  ],
+  "aad_reject_vectors": [
+    {
+      "name": "aad_compressed_false_sealed_true",
+      "sealed_as": "compressed_basic",
+      "cache_key": "test:compressed:vector",
+      "format": "msgpack",
+      "compressed": false,
+      "aad_hex": "030000000e63726f73732d73646b2d7465737400000016746573743a636f6d707265737365643a766563746f72000000076d73677061636b0000000546616c7365",
+      "ciphertext_hex": "44cc06e600000000000000000eb8450c4aac2337265323f7f1b03fc3966deaa515f7",
+      "note": "compressed_basic's ciphertext, sealed with compressed True, presented with compressed False, the value a reader configured without compression builds. A reader that retries with the other compressed value, or with every value, decrypts it."
+    },
+    {
+      "name": "aad_compressed_true_sealed_false",
+      "sealed_as": "basic_bytes",
+      "cache_key": "test:vector:1",
+      "format": "msgpack",
+      "compressed": true,
+      "aad_hex": "030000000e63726f73732d73646b2d746573740000000d746573743a766563746f723a31000000076d73677061636b0000000454727565",
+      "ciphertext_hex": "f8f69c70000000000000000087d9ec09f2c2347a4b37d5330ccf50e3c31e69642801bef5",
+      "note": "basic_bytes's ciphertext, sealed with compressed False, presented with compressed True, the value a reader configured with compression builds. A reader that retries with the other compressed value decrypts it, as one that falls back to compressed False for entries it takes for legacy ones does."
+    },
+    {
+      "name": "aad_format_msgpack_sealed_arrow",
+      "sealed_as": "arrow_uncompressed",
+      "cache_key": "test:arrow:uncompressed",
+      "format": "msgpack",
+      "compressed": false,
+      "original_type": "arrow",
+      "aad_hex": "030000000e63726f73732d73646b2d7465737400000017746573743a6172726f773a756e636f6d70726573736564000000076d73677061636b0000000546616c7365000000056172726f77",
+      "ciphertext_hex": "0a0b0c0d0e0f10110000000066ee6349733c18b89159de7db35910d6b996bdb9150d5f1d",
+      "note": "arrow_uncompressed's ciphertext, sealed with the format token arrow, presented with msgpack and the same original_type. A reader that retries with other registry tokens, or with its own serializer's token after the stored one fails, decrypts it."
+    },
+    {
+      "name": "aad_without_original_type_sealed_with",
+      "sealed_as": "original_type_numpy",
+      "cache_key": "test:original-type:numpy",
+      "format": "msgpack",
+      "compressed": false,
+      "aad_hex": "030000000e63726f73732d73646b2d7465737400000018746573743a6f726967696e616c2d747970653a6e756d7079000000076d73677061636b0000000546616c7365",
+      "ciphertext_hex": "0a0b0c0d0e0f101100000003657e765491f9790882c0543d98ab280c5951a1ed",
+      "note": "original_type_numpy's ciphertext, sealed with the fifth component original_type numpy, presented with four components, as a reader that never adds original_type (cachekit-ts, cachekit-rs, interop mode) or a cachekit-py frame header without one presents it. A reader that retries with a type hint decrypts it."
+    },
+    {
+      "name": "aad_with_original_type_sealed_without",
+      "sealed_as": "basic_bytes",
+      "cache_key": "test:vector:1",
+      "format": "msgpack",
+      "compressed": false,
+      "original_type": "msgpack",
+      "aad_hex": "030000000e63726f73732d73646b2d746573740000000d746573743a766563746f723a31000000076d73677061636b0000000546616c7365000000076d73677061636b",
+      "ciphertext_hex": "f8f69c70000000000000000087d9ec09f2c2347a4b37d5330ccf50e3c31e69642801bef5",
+      "note": "basic_bytes's ciphertext, sealed with four components, presented with the fifth component original_type msgpack, which cachekit-py's StandardSerializer records. A reader that retries without original_type after a five-component attempt fails, to read entries that cachekit-ts, cachekit-rs or interop mode wrote, decrypts it."
+    },
+    {
+      "name": "aad_key_with_prefix_sealed_without",
+      "sealed_as": "basic_bytes",
+      "cache_key": "app:test:vector:1",
+      "format": "msgpack",
+      "compressed": false,
+      "aad_hex": "030000000e63726f73732d73646b2d74657374000000116170703a746573743a766563746f723a31000000076d73677061636b0000000546616c7365",
+      "ciphertext_hex": "f8f69c70000000000000000087d9ec09f2c2347a4b37d5330ccf50e3c31e69642801bef5",
+      "note": "basic_bytes's ciphertext, sealed under the cache_key test:vector:1, presented under app:test:vector:1, the key with a prefix in front. A reader whose cache_key carries a namespace or key prefix and that retries with the key stripped of it decrypts it."
     }
   ],
   "default_tenant": {
