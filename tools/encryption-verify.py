@@ -14,9 +14,9 @@ Stdlib-only checks (always run):
     row is accepted, and each reject row refused, by a conformant hex entry point
     whether it takes exactly 32 bytes or 32 and more, and under both readings of
     what rule 1 leaves open (an uppercase digit, white space, a 0x prefix); each raw
-    reject row is not 32 bytes; the accept row shares neither its master key nor its
-    cache_key or plaintext with a default_tenant entry; the accept row's fingerprint
-    and AAD. Each mistake a
+    reject row is not 32 bytes; an accept row shares neither its master key nor its
+    cache_key or plaintext with a default_tenant entry or the other accept row; each accept
+    row's fingerprint and AAD. Each mistake a
     row's note names is modelled in WRONG_HEX_ENTRY_POINTS or WRONG_RAW_ENTRY_POINTS
     and must misjudge the rows it lists, so editing a row until it no longer shows
     the mistake goes red.
@@ -33,7 +33,7 @@ its absence a hard failure — CI passes the flag in the optional-deps step):
     already proves the seal.)
   - Keyring vectors decrypt under [k2, k1] at the declared entry, and the k1 entry
     is rejected under [k2] alone (sequential-attempt path).
-  - The master key input accept row decrypts under the key its own master key
+  - Each master key input accept row decrypts under the key its own master key
     derives for tenant "default".
 
 Exit status is non-zero on any mismatch. Vectors are frozen ground truth and
@@ -88,7 +88,7 @@ FROZEN_DEFAULT_TENANT_VECTOR_NAMES = frozenset({"default_tenant_interop"})
 # Master key input (spec/intent-presets.md § Master Key Input): hex keys an entry point must accept or refuse, and raw
 # keys a raw-bytes entry point must refuse. Names are frozen per table, and each table's rows have exactly its fields.
 FROZEN_MASTER_KEY_INPUT_VECTORS = {
-    "accept_vectors": frozenset({"master_key_every_hex_digit"}),
+    "accept_vectors": frozenset({"master_key_every_hex_digit", "master_key_first_byte_80"}),
     "reject_vectors": frozenset(
         {
             "master_key_odd_65_digits",
@@ -384,7 +384,10 @@ def vector_tables(node: object, path: str = "") -> Iterator[str]:
 # A decoding mistake sits behind a conformant length rule, so its row must catch the mistake itself, not a
 # length check that happens to; where only one of the two rules lets the mistake through, the entry point uses that one.
 HEX_DIGITS = frozenset(string.hexdigits)
+# The row every other row comes from, which the notes call the accept row, and the one accept row whose key's first
+# byte is 80 or above: one key cannot hold both a leading 00 byte and a first byte at 80 or above.
 ACCEPT_ROW = "master_key_every_hex_digit"
+FIRST_BYTE_80_ROW = "master_key_first_byte_80"
 EXACTLY_32, AT_LEAST_32 = HEX_LENGTH_RULES[EXACTLY], HEX_LENGTH_RULES[OR_MORE]
 
 
@@ -414,6 +417,17 @@ def twos_complement(text: str) -> bytes:
     sign byte when the top bit is set, which restores a leading 00 only when the byte after it is 80 or above."""
     value = int(text, 16)
     return value.to_bytes(value.bit_length() // 8 + 1, "big")
+
+
+def padded_twos_complement(text: str) -> bytes | None:
+    """int(text, 16).to_bytes(32, "big", signed=True) behind a strict hex check: right for a key whose first byte is
+    below 80, refused for one at 80 or above, whose sign needs a 33rd byte (where Java's toByteArray() returns 33)."""
+    if read_hex_key(text) is None:
+        return None
+    try:
+        return int(text, 16).to_bytes(KEY_BYTES, "big", signed=True)
+    except OverflowError:
+        return None
 
 
 def digits_swapped(text: str) -> bytes | None:
@@ -493,7 +507,7 @@ SHORT_ROWS = ("master_key_31_bytes", "master_key_24_bytes", "master_key_16_bytes
 WRONG_LENGTH_RULES: dict[str, tuple[Callable[[int], bool], tuple[str, ...], tuple[str, ...]]] = {
     "no length check": (lambda n: True, SHORT_ROWS, ("raw_key_31_bytes",)),
     "off by one (31 bytes or more)": (lambda n: n >= KEY_BYTES - 1, ("master_key_31_bytes",), ("raw_key_31_bytes",)),
-    # No hex row: a hex reject row never decodes to 32 bytes, so on hex rows this is off by one.
+    # No hex row: no hex reject row decodes to 32 bytes or more, so on hex rows this is off by one.
     "31 or 32 bytes": (lambda n: n in (KEY_BYTES - 1, KEY_BYTES), (), ("raw_key_31_bytes",)),
     "16 bytes or more, the HKDF floor encryption.md once listed": (lambda n: n >= 16, SHORT_ROWS, ()),
     "AES key sizes (16, 24 or 32 bytes)": (lambda n: n in (16, 24, 32), ("master_key_24_bytes",), ("raw_key_24_bytes",)),
@@ -512,6 +526,10 @@ WRONG_HEX_ENTRY_POINTS: dict[str, tuple[Callable[[str], bytes | None], tuple[str
         lambda t: behind(AT_LEAST_32, twos_complement(t)),
         (ACCEPT_ROW,),
     ),
+    "a two's-complement big-integer decoder padded to 32 bytes (int(key, 16).to_bytes(32, 'big', signed=True))": (
+        padded_twos_complement,
+        (FIRST_BYTE_80_ROW,),
+    ),
     "bytes reversed (a little-endian integer)": (lambda t: behind(AT_LEAST_32, bytes.fromhex(t)[::-1]), (ACCEPT_ROW,)),
     "the two digits of each byte swapped": (lambda t: behind(AT_LEAST_32, digits_swapped(t)), (ACCEPT_ROW,)),
     "a letter read as ord(c) - ord('0')": (lambda t: behind(AT_LEAST_32, digits_only_decoder(t)), (ACCEPT_ROW,)),
@@ -523,7 +541,7 @@ WRONG_HEX_ENTRY_POINTS: dict[str, tuple[Callable[[str], bytes | None], tuple[str
     ),
     "Node's Buffer.from(key, 'hex'), then a check that the key is 32 bytes": (
         lambda t: behind(EXACTLY_32, buffer_from_hex(t)),
-        ("master_key_odd_65_digits",),
+        ("master_key_odd_65_digits", "master_key_trailing_non_hex"),
     ),
     "a check that the length is even, then Node's Buffer.from(key, 'hex') and a check that the key is 32 bytes": (
         lambda t: behind(EXACTLY_32, buffer_from_hex(t)) if len(t) % 2 == 0 else None,
@@ -647,9 +665,9 @@ def verify_master_key_input(block: dict | None, default_tenant: dict | None, mai
 
     Accept rows must be accepted, and reject rows refused, under every conformant length rule and both readings of
     what rule 1 leaves open; raw reject rows must not be 32 bytes. An accept row shares neither its master key nor
-    its cache_key or plaintext with a default_tenant entry, so a test can read the two under different keys (PRE-51).
-    The accept row's fingerprint, AAD and (with `cryptography`) seal are checked under the key its own master key
-    derives, then each wrong entry point must misjudge the rows it lists.
+    its cache_key or plaintext with a default_tenant entry or another accept row, so a test can read them under
+    different keys (PRE-51). Each accept row's fingerprint, AAD and (with `cryptography`) seal are checked under the
+    key its own master key derives, then each wrong entry point must misjudge the rows it lists.
     """
     if block is None:
         print("FAIL master_key_input rows missing")
@@ -662,6 +680,7 @@ def verify_master_key_input(block: dict | None, default_tenant: dict | None, mai
     # whose verdict is wrong is still checked against the models. A model that cannot parse such a row (an odd-length
     # accept row, say) raises, and verify_wrong_entry_points reports that as a failure, not a traceback.
     dt_vectors = (default_tenant or {}).get("vectors", [])
+    accept_vectors = block.get("accept_vectors", [])
     rows: dict[str, tuple[str, dict]] = {}
     seen: set[str] = set()
     for table, frozen in FROZEN_MASTER_KEY_INPUT_VECTORS.items():
@@ -705,13 +724,17 @@ def verify_master_key_input(block: dict | None, default_tenant: dict | None, mai
                 continue
             rows[name] = (table, row)
             wanted = table == "accept_vectors"
+            others = [v for v in accept_vectors if v is not row]
             if wanted and (
-                text == main_master_key_hex
-                or any(row["cache_key"] == v.get("cache_key") or row["plaintext_hex"] == v.get("plaintext_hex") for v in dt_vectors)
+                text in [main_master_key_hex, *(v.get("master_key_hex") for v in others)]
+                or any(
+                    row["cache_key"] == v.get("cache_key") or row["plaintext_hex"] == v.get("plaintext_hex")
+                    for v in dt_vectors + others
+                )
             ):
                 print(
-                    f"FAIL {label}: shares its master key, cache_key or plaintext with a default_tenant entry, so a test "
-                    "cannot read the two under different keys"
+                    f"FAIL {label}: shares its master key, cache_key or plaintext with a default_tenant entry or another "
+                    "accept row, so a test cannot read them under different keys"
                 )
                 failures += 1
                 continue

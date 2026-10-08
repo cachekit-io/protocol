@@ -22,6 +22,7 @@ import importlib.util
 import io
 import json
 import sys
+import traceback
 from collections.abc import Callable
 from pathlib import Path
 
@@ -37,10 +38,10 @@ HAVE_SEAL = importlib.util.find_spec("cryptography") is not None
 
 
 def run(mutate: Callable[[dict], None]) -> tuple[int | None, str]:
-    """The verifier's exit status and output on a mutated copy of the fixture; None, and the exception, if it raised.
+    """The verifier's exit status and output on a mutated copy of the fixture; None as the status if it raised.
 
     The verifier reports a bad fixture with a FAIL line, never a traceback. A raise is caught here so that it is
-    reported against its own case and cannot hide the cases after it.
+    reported against its own case and cannot hide the cases after it; its traceback ends the output.
     """
     doc = copy.deepcopy(DOC)
     mutate(doc)
@@ -48,8 +49,8 @@ def run(mutate: Callable[[dict], None]) -> tuple[int | None, str]:
     with contextlib.redirect_stdout(out):
         try:
             rc = ev.verify(doc, require_seal=HAVE_SEAL)
-        except Exception as exc:  # noqa: BLE001 -- any raise is a finding, reported by the caller
-            print(f"RAISED {type(exc).__name__}: {exc}")
+        except Exception:  # noqa: BLE001 -- any raise is a finding, reported by the caller
+            print(f"RAISED\n{traceback.format_exc()}")
             return None, out.getvalue()
     return rc, out.getvalue()
 
@@ -79,6 +80,10 @@ def accept_row(doc: dict) -> dict:
     return mk(doc, ev.ACCEPT_ROW)
 
 
+def first_byte_80_row(doc: dict) -> dict:
+    return mk(doc, ev.FIRST_BYTE_80_ROW)
+
+
 def set_key(name: str, text: str) -> Callable[[dict], None]:
     return lambda d: mk(d, name).__setitem__("master_key_hex", text)
 
@@ -87,14 +92,14 @@ def set_raw(name: str, raw: bytes) -> Callable[[dict], None]:
     return lambda d: mk(d, name).__setitem__("raw_key_hex", raw.hex())
 
 
-def rekey(key: bytes) -> Callable[[dict], None]:
-    """The accept row under another key with its fingerprint recomputed, so only a property the key lacks can fail it.
+def rekey(key: bytes, name: str = ev.ACCEPT_ROW) -> Callable[[dict], None]:
+    """An accept row under another key with its fingerprint recomputed, so only a property the key lacks can fail it.
 
     The sealed entry is left as it was, so in the seal lane the decrypt fails as well.
     """
 
     def mutate(doc: dict) -> None:
-        accept_row(doc).update(
+        mk(doc, name).update(
             master_key_hex=key.hex(),
             derived_key_fingerprint_hex=ev.key_fingerprint(ev.derive_encryption_key(key, ev.DEFAULT_TENANT_ID)),
         )
@@ -117,6 +122,8 @@ H = KEY.hex()
 LOW_KEY = bytes(range(32))
 # KEY with bytes 1 and 3 swapped, so byte 1 is ff: a two's-complement decoder's sign byte restores the leading 00.
 SIGN_BYTE_KEY = bytes.fromhex("00ff807fa55ac33c1ee12dd24bb469968778f00f01102332455467768998abba")
+# KEY with its first byte set to 7f, the highest first byte a two's-complement decoder padded to 32 bytes reads right.
+FIRST_BYTE_7F_KEY = bytes.fromhex("7f" + KEY.hex()[2:])
 # Digits only, with a leading 00 and bytes above 7f.
 ALL_DIGITS = bytes.fromhex("00" + "".join(f"{n:02d}" for n in range(99, 79, -1)) + "".join(f"{n:02d}" for n in range(79, 68, -1)))
 # A leading 00, bytes above 7f and letters in both digits, reading the same reversed.
@@ -293,6 +300,10 @@ STDLIB_CASES: dict[str, Case] = {
         rekey(SIGN_BYTE_KEY),
         'to_signed_bytes_be)" judges master_key_every_hex_digit correctly',
     ),
+    "first-byte-80 row whose first byte is 7f": (
+        rekey(FIRST_BYTE_7F_KEY, ev.FIRST_BYTE_80_ROW),
+        "signed=True))\" judges master_key_first_byte_80 correctly",
+    ),
     # PRE-51's pairing needs the accept row and default_tenant_interop under different keys, in different entries. One
     # case per clause of the guard; the AAD is rebuilt, and the guard runs before the seal check, so only that clause
     # rejects each.
@@ -308,6 +319,20 @@ STDLIB_CASES: dict[str, Case] = {
         "shares its master key, cache_key or plaintext",
     ),
     "accept row under the main master key": (rekey(bytes.fromhex(DOC["master_key_hex"])), "shares its master key, cache_key or plaintext"),
+    # The two accept rows must differ from each other the same way, so a test can plant both and read each under its
+    # own key. The first-byte-80 row under the accept row's key also fails the model check; the guard's text is asked.
+    "first-byte-80 row on the accept row's cache_key": (
+        lambda d: first_byte_80_row(d).update(
+            cache_key=accept_row(d)["cache_key"],
+            aad_hex=ev.aad_v3(ev.DEFAULT_TENANT_ID, accept_row(d)["cache_key"], fmt="msgpack", compressed=False).hex(),
+        ),
+        "shares its master key, cache_key or plaintext",
+    ),
+    "first-byte-80 row on the accept row's plaintext": (
+        lambda d: first_byte_80_row(d).__setitem__("plaintext_hex", accept_row(d)["plaintext_hex"]),
+        "shares its master key, cache_key or plaintext",
+    ),
+    "first-byte-80 row under the accept row's key": (rekey(KEY, ev.FIRST_BYTE_80_ROW), "shares its master key, cache_key or plaintext"),
     # A row of sound shape that a model cannot parse reaches the models, which report the raise as a failure.
     "accept row of 63 digits": (
         lambda d: accept_row(d).__setitem__("master_key_hex", H[:63]),
@@ -334,6 +359,11 @@ SEAL_CASES: dict[str, Case] = {
         "decrypt failed",
     ),
     "accept row plaintext pinned wrong": (lambda d: accept_row(d).__setitem__("plaintext_hex", "00"), "plaintext mismatch"),
+    # The accept row's bytes, sealed under another master key: the first-byte-80 row's own fields still match.
+    "first-byte-80 row sealed under another master key": (
+        lambda d: first_byte_80_row(d).__setitem__("ciphertext_hex", accept_row(d)["ciphertext_hex"]),
+        "decrypt failed",
+    ),
 }
 
 
