@@ -18,7 +18,11 @@
             "cache-keys.json:serializer_orjson",
             "cache-keys.json:serializer_arrow",
             "cache-keys.json:serializer_local",
-            "cache-keys.json:serializer_custom_identity"
+            "cache-keys.json:serializer_custom_identity",
+            "cache-keys.json:serializer_derived_spec_example",
+            "cache-keys.json:serializer_derived_leading_zero",
+            "cache-keys.json:serializer_custom_identity_orjson",
+            "cache-keys.json:serializer_custom_identity_non_ascii"
           ],
           "gap": "The vectors give the serializer to key generation as an input; whether an SDK's test keys a call through a cache configured with it, which a cache that hands the generator a fixed default fails, is SDK test code no vector can check."
         },
@@ -34,9 +38,14 @@
             "cache-keys.json:serializer_orjson",
             "cache-keys.json:serializer_arrow",
             "cache-keys.json:serializer_local",
-            "cache-keys.json:serializer_custom_identity"
-          ],
-          "gap": "Only one derived identity is pinned and no vector checks the name an alias is recorded under, so a derivation that merges off-table identities the vector does not hold, or an alias table that maps a name recorded as given onto a table code, passes."
+            "cache-keys.json:serializer_custom_identity",
+            "cache-keys.json:serializer_derived_spec_example",
+            "cache-keys.json:serializer_derived_leading_zero",
+            "cache-keys.json:serializer_custom_identity_orjson",
+            "cache-keys.json:serializer_custom_identity_non_ascii",
+            "python-frame.json:std_alias_write",
+            "python-frame.json:pythonic_alias_write"
+          ]
         },
         "KEY-3": {
           "section": "Serializer Codes",
@@ -50,12 +59,18 @@
             "python-frame.json:arrow_dataframe_write",
             "python-frame.json:forged_plaintext_orjson",
             "python-frame.json:ciphertext_key_not_in_keyring",
-            "python-frame.json:ciphertext_other_tenant"
+            "python-frame.json:ciphertext_other_tenant",
+            "python-frame.json:auto_serializer_write",
+            "python-frame.json:standard_serializer_instance_write",
+            "python-frame.json:std_alias_write",
+            "python-frame.json:pythonic_alias_write",
+            "python-frame.json:integrity_checking_off_write",
+            "python-frame.json:arrow_compression_off_write"
           ],
           "tests": [
             "tools/python-frame-reference.py:verify"
           ],
-          "gap": "The frames record default on plaintext and encrypted writes, arrow and orjson; no vector holds an entry written by AutoSerializer or a serializer instance, so a writer that records the name only for those passes."
+          "gap": "Encrypted writes are pinned only for the default serializer, so a writer that records the name on encrypted entries only for that serializer passes."
         },
         "KEY-4": {
           "section": "Serializer Codes",
@@ -66,9 +81,14 @@
           "vectors": [
             "python-frame.json:default_saas_write_msgpack_bytestorage",
             "python-frame.json:default_saas_write_msgpack_bytestorage_bin",
-            "python-frame.json:arrow_dataframe_write"
+            "python-frame.json:arrow_dataframe_write",
+            "python-frame.json:auto_serializer_write",
+            "python-frame.json:standard_serializer_instance_write",
+            "python-frame.json:std_alias_write",
+            "python-frame.json:pythonic_alias_write",
+            "python-frame.json:arrow_compression_off_write"
           ],
-          "gap": "The frames are reads under the serializer that wrote them, so only a test that plants one under another serializer's key and asserts a miss exercises the check, and no vector pins that; such a test still passes a reader that skips the check (neither the default nor the arrow payload decodes under the other serializer, so it misses on a decode error), one that decodes the payload before comparing names, and one that compares its key identity (<custom>:ArrowSerializer) instead of the name it records (ArrowSerializer), since every frame is configured by name; no frame records auto, which writes the same envelope as default."
+          "gap": "A test exercises the check by planting a frame under another configuration's reader: auto_serializer_write and standard_serializer_instance_write carry the default write's payload, so a default-configured reader that skips the check returns the value, and a reader configured with a StandardSerializer() instance must read standard_serializer_instance_write, which one that compares its key identity (<custom>:StandardSerializer) instead of the recorded name misses. A reader that decodes the payload before it compares names reaches the same outcome on every frame, so no vector shows the order."
         },
         "KEY-5": {
           "section": "Serializer Codes",
@@ -76,10 +96,17 @@
           "sdks": [
             "cachekit-py"
           ],
-          "gap": "forged_plaintext_orjson records another writer's name, orjson, but a default-configured reader that skips the check still misses on it, because its payload does not decode under the default serializer; no frame records a name whose payload the reader could decode, or no name or an empty one, so a reader that returns the decoded value on a mismatch, or treats a nameless frame as a match, passes every vector, and tools/python-frame-reference.py refuses a nameless frame only as a malformed vector.",
           "vectors": [
-            "python-frame.json:forged_plaintext_orjson"
-          ]
+            "python-frame.json:forged_plaintext_orjson",
+            "python-frame.json:auto_serializer_write",
+            "python-frame.json:standard_serializer_instance_write",
+            "python-frame.json:serializer_name_missing",
+            "python-frame.json:serializer_name_empty"
+          ],
+          "tests": [
+            "tools/python-frame-reference.py:_require_serializer_name"
+          ],
+          "gap": "The vectors show which frames a reader must reject; that the rejection reaches the caller as a miss, not as an error, is what a test asserts when it reads them through its SDK's cache rather than its frame parser."
         },
         "KEY-6": {
           "section": "Serializer Codes",
@@ -94,9 +121,13 @@
             "cache-keys.json:serializer_orjson",
             "cache-keys.json:serializer_arrow",
             "cache-keys.json:serializer_local",
-            "cache-keys.json:serializer_custom_identity"
+            "cache-keys.json:serializer_custom_identity",
+            "cache-keys.json:serializer_derived_spec_example",
+            "cache-keys.json:serializer_derived_leading_zero",
+            "cache-keys.json:serializer_custom_identity_orjson",
+            "cache-keys.json:serializer_custom_identity_non_ascii"
           ],
-          "gap": "The vectors pass the identity as a string, so no vector runs the reduction of a serializer object to its identity, where an object address or a per-process hash would enter; one derived identity is pinned."
+          "gap": "The vectors pass the identity as a string, so no vector runs the reduction of a serializer object to its identity, where an object address or a per-process hash would enter."
         },
         "KEY-7": {
           "section": "Serializer Codes",
@@ -106,9 +137,10 @@
           ],
           "vectors": [
             "cache-keys.json:single_integer",
-            "cache-keys.json:serializer_pythonic_alias"
-          ],
-          "gap": "The vectors resolve each alias only in key generation, so an SDK that resolves a spelling to another name where it records or writes the entry passes (KEY-8)."
+            "cache-keys.json:serializer_pythonic_alias",
+            "python-frame.json:std_alias_write",
+            "python-frame.json:pythonic_alias_write"
+          ]
         },
         "KEY-8": {
           "section": "Serializer Codes",
@@ -118,9 +150,10 @@
           ],
           "vectors": [
             "cache-keys.json:single_integer",
-            "cache-keys.json:serializer_pythonic_alias"
-          ],
-          "gap": "No vector writes an entry under an alias, so only the code is pinned; a writer that records the alias as given, or picks a serializer by the raw spelling, passes."
+            "cache-keys.json:serializer_pythonic_alias",
+            "python-frame.json:std_alias_write",
+            "python-frame.json:pythonic_alias_write"
+          ]
         },
         "KEY-9": {
           "section": "Serializer Codes",
@@ -166,12 +199,18 @@
         "ENC-2": {
           "section": "AAD v0x03 Format",
           "binds": "sdk",
-          "gap": "Every encrypted vector decrypts to the container its reader is configured for, or to bare bytes that no container step reads, so a reader that picks the container by sniffing the plaintext, or falls back from one container to another, passes them all."
+          "vectors": [
+            "python-frame.json:ciphertext_plain_msgpack_not_envelope"
+          ],
+          "gap": "Only cachekit-py's reader configured for a ByteStorage envelope has a vector: ciphertext_plain_msgpack_not_envelope decrypts under its own AAD to plain MessagePack, which a reader that falls back to plain MessagePack, or picks the container by sniffing, returns as the value. No vector gives a plain-MessagePack reader (cachekit-ts with compression off, cachekit-rs, interop mode, cachekit-py with integrity checking off) a valid ByteStorage envelope, which a sniffing reader unwraps, or gives cachekit-py's Arrow reader bare Arrow IPC with no checksum."
         },
         "ENC-3": {
           "section": "AAD v0x03 Format",
           "binds": "sdk",
-          "gap": "No encrypted vector decrypts to bytes its reader's container cannot parse, so a reader that falls back to another container on a parse failure, or ignores bytes after the first document, passes every vector."
+          "vectors": [
+            "python-frame.json:ciphertext_plain_msgpack_not_envelope"
+          ],
+          "gap": "Only cachekit-py's ByteStorage reader has a vector, ciphertext_plain_msgpack_not_envelope, whose plain MessagePack its envelope parse refuses, so a reader that falls back to another container on that failure returns the value. No vector decrypts to bytes a plain-MessagePack reader cannot parse, so one that ignores bytes after the first document passes."
         },
         "ENC-4": {
           "section": "`format` tokens",
@@ -186,9 +225,16 @@
             "interop-mode.json:interop_encryption_roundtrip",
             "python-frame.json:default_saas_write_msgpack_bytestorage",
             "python-frame.json:default_saas_write_msgpack_bytestorage_bin",
-            "python-frame.json:arrow_dataframe_write"
+            "python-frame.json:arrow_dataframe_write",
+            "python-frame.json:forged_plaintext_orjson",
+            "python-frame.json:ciphertext_key_not_in_keyring",
+            "python-frame.json:ciphertext_other_tenant",
+            "python-frame.json:auto_serializer_write",
+            "python-frame.json:standard_serializer_instance_write",
+            "python-frame.json:integrity_checking_off_write",
+            "python-frame.json:arrow_compression_off_write"
           ],
-          "gap": "Only cachekit-py's default and Arrow writes, on plaintext frames, and the interop AAD are pinned against the token a writer emits: no vector holds an OrjsonSerializer write or an auto-mode cachekit-ts or cachekit-rs write, and encryption.json takes the token as an input, so a writer that emits an off-registry token in any of those passes."
+          "gap": "Only cachekit-py's writes, as plaintext and encrypted frames, and the interop AAD are pinned against the token a writer emits: no vector holds an auto-mode cachekit-ts or cachekit-rs write, and encryption.json takes the token as an input, so such a writer that emits an off-registry token passes; no SDK can seal with a fixed nonce, so only a test that decrypts what its write path stores under the aad_hex of the encryption.json vector with its shape catches it."
         },
         "ENC-6": {
           "section": "`compressed` tokens",
@@ -201,6 +247,8 @@
             "encryption.json:arrow_compressed",
             "encryption.json:orjson_uncompressed",
             "encryption.json:original_type_numpy",
+            "encryption.json:standard_serializer_default",
+            "encryption.json:standard_serializer_integrity_off",
             "encryption.json:encrypted_with_k1",
             "encryption.json:encrypted_with_k2",
             "encryption.json:default_tenant_interop",
@@ -213,7 +261,7 @@
             "tools/encryption-verify.py:verify_sealed_vector",
             "tools/interop-crosscheck.mjs:aadV3"
           ],
-          "gap": "The vectors pin the bytes a renderer emits for a JSON boolean, not the AAD an SDK's write path emits: an SDK whose writer spells the token itself, in stored metadata or on a second code path, and whose reader rebuilds the AAD from that spelling round-trips with itself and passes them through whichever renderer its test drives; no SDK can seal with a fixed nonce, so only a test that captures the AAD its write path emits catches it."
+          "gap": "The vectors pin the bytes a renderer emits for a JSON boolean, not the AAD an SDK's write path emits: an SDK whose writer spells the token itself, in stored metadata or on a second code path, and whose reader rebuilds the AAD from that spelling round-trips with itself and passes them through whichever renderer its test drives; no SDK can seal with a fixed nonce, so only a test that decrypts what its write path stores under the aad_hex of the vector with the same shape catches it."
         },
         "ENC-7": {
           "section": "Key Rotation (Keyring)",
@@ -238,9 +286,13 @@
             "interop-mode.json:interop_encryption_roundtrip",
             "python-frame.json:default_saas_write_msgpack_bytestorage",
             "python-frame.json:default_saas_write_msgpack_bytestorage_bin",
-            "python-frame.json:arrow_dataframe_write"
+            "python-frame.json:arrow_dataframe_write",
+            "encryption.json:standard_serializer_default",
+            "encryption.json:standard_serializer_integrity_off",
+            "python-frame.json:integrity_checking_off_write",
+            "python-frame.json:arrow_compression_off_write"
           ],
-          "gap": "Only cachekit-py's StandardSerializer writes, on plaintext frames, and the interop write are pinned against their containers: arrow_dataframe_write checks frame structure, not its IPC bytes, so an Arrow writer that records compressed true over uncompressed buffers passes it; no vector holds a cachekit-ts write with compression on or off, a cachekit-py write with integrity checking off, or an ArrowSerializer write with compression disabled (the case the spec names), so a writer whose flag ignores what its envelope step did passes there."
+          "gap": "cachekit-py's StandardSerializer writes with integrity checking on and off, and its Arrow writes with compression on and off, are pinned against the compressed flag they record, so a writer that records one flag whatever its container did fails one of each pair; the interop write is pinned against its container. The Arrow frames check frame structure, not IPC bytes, so an Arrow writer whose IPC body compression disagrees with the flag it records passes. No vector holds a cachekit-ts write, with compression on or off, or a cachekit-rs write: no SDK can seal with a fixed nonce, so only a test that decrypts what its write path stores under the aad_hex of the vector with its shape (compressed_basic, basic_bytes) catches a flag that disagrees with its container."
         }
       },
       "retired": {}
@@ -411,6 +463,8 @@
             "encryption.json:arrow_compressed",
             "encryption.json:orjson_uncompressed",
             "encryption.json:original_type_numpy",
+            "encryption.json:standard_serializer_default",
+            "encryption.json:standard_serializer_integrity_off",
             "encryption.json:encrypted_with_k1",
             "encryption.json:encrypted_with_k2",
             "encryption.json:default_tenant_interop",
@@ -435,6 +489,8 @@
             "encryption.json:arrow_compressed",
             "encryption.json:orjson_uncompressed",
             "encryption.json:original_type_numpy",
+            "encryption.json:standard_serializer_default",
+            "encryption.json:standard_serializer_integrity_off",
             "encryption.json:encrypted_with_k1",
             "encryption.json:encrypted_with_k2",
             "encryption.json:default_tenant_interop",
@@ -464,6 +520,8 @@
             "encryption.json:arrow_compressed",
             "encryption.json:orjson_uncompressed",
             "encryption.json:original_type_numpy",
+            "encryption.json:standard_serializer_default",
+            "encryption.json:standard_serializer_integrity_off",
             "encryption.json:encrypted_with_k1",
             "encryption.json:encrypted_with_k2",
             "encryption.json:default_tenant_interop",
@@ -511,6 +569,8 @@
             "encryption.json:arrow_compressed",
             "encryption.json:orjson_uncompressed",
             "encryption.json:original_type_numpy",
+            "encryption.json:standard_serializer_default",
+            "encryption.json:standard_serializer_integrity_off",
             "encryption.json:encrypted_with_k1",
             "encryption.json:encrypted_with_k2",
             "encryption.json:default_tenant_interop",
@@ -557,6 +617,8 @@
             "encryption.json:arrow_compressed",
             "encryption.json:orjson_uncompressed",
             "encryption.json:original_type_numpy",
+            "encryption.json:standard_serializer_default",
+            "encryption.json:standard_serializer_integrity_off",
             "encryption.json:encrypted_with_k1",
             "encryption.json:encrypted_with_k2",
             "encryption.json:default_tenant_interop",
@@ -610,6 +672,8 @@
             "encryption.json:arrow_compressed",
             "encryption.json:orjson_uncompressed",
             "encryption.json:original_type_numpy",
+            "encryption.json:standard_serializer_default",
+            "encryption.json:standard_serializer_integrity_off",
             "encryption.json:encrypted_with_k1",
             "encryption.json:encrypted_with_k2",
             "encryption.json:default_tenant_interop",
