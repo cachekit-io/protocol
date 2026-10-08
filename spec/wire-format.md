@@ -934,6 +934,10 @@ where the reader's configured container is a ByteStorage envelope, one with a he
 and AAD claiming `compressed: true` and one claiming `false`
 ([Encryption → AAD v0x03](encryption.md#additional-authenticated-data-aad): the
 container after decryption is the configured one, never one the stored flag picks).
+Two more carry one of the reader's own encrypted writes, which authenticates, under a
+header that records the serializer name `auto` or none: the name is no AAD input, so
+only the reader's name check stands between them and the value
+([Cache Key Format → Serializer Codes](cache-key-format.md#serializer-codes)).
 `header_claims` records what each header claims. `generate` proves against the real
 cachekit-py that each read fails closed under both tamper policies. The stdlib verifier
 cannot run that read, so it pins the vector set and each frame's sha256 to what

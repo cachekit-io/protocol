@@ -210,6 +210,13 @@ STDLIB_CASES: dict[str, Case] = {
         lambda d: reshape("standard_serializer_integrity_off", plaintext_hex=shape_vector(d, "standard_serializer_default")["plaintext_hex"])(d),
         "claims compressed False, but its plaintext is not one plain MessagePack document",
     ),
+    # Append-only means a published row never moves either: consumers read rows by position (accept_vectors[0]).
+    "accept rows reversed": (
+        lambda d: d["master_key_input"]["accept_vectors"].reverse(),
+        "frozen master_key_input.accept_vectors rows missing or moved",
+    ),
+    "first two vectors swapped": (lambda d: d["vectors"].insert(0, d["vectors"].pop(1)), "frozen vectors rows missing or moved"),
+    "keyring vectors reversed": (lambda d: d["keyring"]["vectors"].reverse(), "frozen keyring.vectors rows missing or moved"),
     # intent-presets.md rule 5 — the default-tenant block is ground truth for "no tenant configured".
     "default_tenant block deleted": lambda d: d.pop("default_tenant"),
     "default_tenant is not the literal": lambda d: d["default_tenant"].__setitem__("tenant_id", "cross-sdk-test"),
@@ -404,6 +411,45 @@ SEAL_CASES: dict[str, Case] = {
 }
 
 
+# Each model of a mistake, replaced in turn by an entry point that conforms, must turn the verifier red under its own
+# label: proof that every model's check is live, not covered by another guard. A model that lists a row its table does
+# not freeze must turn it red too.
+CONFORMING_MODELS: dict[str, Callable] = {
+    "WRONG_HEX_ENTRY_POINTS": lambda t: ev.behind(ev.EXACTLY_32, ev.read_hex_key(t)),
+    "WRONG_RAW_ENTRY_POINTS": lambda k: ev.behind(ev.EXACTLY_32, k),
+}
+
+
+def model_cases() -> dict[str, tuple[str, str, Callable, tuple[str, ...], str]]:
+    """Case name -> (model table, label, stand-in, rows it lists, text the verifier must print)."""
+    cases = {}
+    for table, conforming in CONFORMING_MODELS.items():
+        for label, (_, targets) in getattr(ev, table).items():
+            cases[f"{table}: {label!r} replaced by a conforming entry point"] = (table, label, conforming, targets, repr(label))
+        cases[f"{table}: a model listing a row that does not exist"] = (
+            table,
+            "a model listing a misspelled row",
+            conforming,
+            ("no_such_row",),
+            "which is not a frozen row",
+        )
+    return cases
+
+
+def run_model_case(table: str, label: str, stand_in: Callable, targets: tuple[str, ...]) -> tuple[int | None, str]:
+    """The verifier's status and output on the committed fixture with one model swapped in, the table restored after."""
+    models = getattr(ev, table)
+    saved = models.get(label)
+    models[label] = (stand_in, targets)
+    try:
+        return run(lambda _: None)
+    finally:
+        if saved is None:
+            del models[label]
+        else:
+            models[label] = saved
+
+
 def main() -> int:
     bad = 0
     rc, out = run(lambda _: None)
@@ -424,9 +470,14 @@ def main() -> int:
         cases.update(SEAL_CASES)
     else:
         print(f"note: {len(SEAL_CASES)} seal cases skipped — cryptography not installed")
-    for name, case in cases.items():
-        mutate, expected = case if isinstance(case, tuple) else (case, None)
-        rc, out = run(mutate)
+    runs = {name: (lambda case=case: run(case[0] if isinstance(case, tuple) else case)) for name, case in cases.items()}
+    expectations = {name: case[1] if isinstance(case, tuple) else None for name, case in cases.items()}
+    for name, (table, label, stand_in, targets, expected) in model_cases().items():
+        runs[name] = lambda table=table, label=label, stand_in=stand_in, targets=targets: run_model_case(table, label, stand_in, targets)
+        expectations[name] = expected
+    for name, go in runs.items():
+        expected = expectations[name]
+        rc, out = go()
         if rc is None:
             print(f"FAIL mutation '{name}' raised instead of failing a guard:\n{out}")
             bad += 1
@@ -441,7 +492,7 @@ def main() -> int:
     if bad:
         print(f"{bad} mutation(s) NOT caught")
         return 1
-    print(f"all {len(cases)} mutations caught")
+    print(f"all {len(runs)} mutations caught")
     return 0
 
 

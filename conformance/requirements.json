@@ -88,9 +88,10 @@
             "python-frame.json:std_alias_write",
             "python-frame.json:pythonic_alias_write",
             "python-frame.json:arrow_compression_off_write",
-            "python-frame.json:std_recorded_as_given_frame"
+            "python-frame.json:std_recorded_as_given_frame",
+            "python-frame.json:ciphertext_serializer_name_auto"
           ],
-          "gap": "A test exercises the check by planting a frame under another configuration's reader: auto_serializer_write, standard_serializer_instance_write and std_recorded_as_given_frame carry the default write's payload, so a default-configured reader that skips the check, or resolves the recorded name through its alias table before it compares, returns the value, and a reader configured with a StandardSerializer() instance must read standard_serializer_instance_write, which one that compares its key identity (<custom>:StandardSerializer) instead of the recorded name misses. A reader that decodes the payload before it compares names reaches the same outcome on every frame, so no vector shows the order, and none records a name that differs from the reader's only in case."
+          "gap": "A test exercises the check by planting a frame under another configuration's reader: auto_serializer_write, standard_serializer_instance_write and std_recorded_as_given_frame carry the default write's payload, and ciphertext_serializer_name_auto an encrypted write that authenticates under the reader's key, so a default-configured reader that skips the check, on plaintext or on encrypted entries, or resolves the recorded name through its alias table before it compares, returns the value, and a reader configured with a StandardSerializer() instance must read standard_serializer_instance_write, which one that compares its key identity (<custom>:StandardSerializer) instead of the recorded name misses. A reader that decodes the payload before it compares names reaches the same outcome on every frame, so no vector shows the order, and none records a name that differs from the reader's only in case."
         },
         "KEY-5": {
           "section": "Serializer Codes",
@@ -105,12 +106,14 @@
             "python-frame.json:auto_serializer_write",
             "python-frame.json:standard_serializer_instance_write",
             "python-frame.json:serializer_name_missing",
-            "python-frame.json:serializer_name_empty"
+            "python-frame.json:serializer_name_empty",
+            "python-frame.json:ciphertext_serializer_name_auto",
+            "python-frame.json:ciphertext_serializer_name_missing"
           ],
           "tests": [
             "tools/python-frame-reference.py:_require_serializer_name"
           ],
-          "gap": "A reader configured with auto or a StandardSerializer() instance must miss on the default write, whose payload it decodes, which is the reverse pair a test plants. The vectors show which frames a reader must reject; that the rejection reaches the caller as a miss, not as an error, is what a test asserts when it reads them through its SDK's cache rather than its frame parser. No frame records a name that differs from the reader's only in case."
+          "gap": "A reader configured with auto or a StandardSerializer() instance must miss on the default write, whose payload it decodes, which is the reverse pair a test plants. The vectors show which frames a reader must reject, plaintext and encrypted; that the rejection reaches the caller as a miss, not as an error, is what a test asserts when it reads them through its SDK's cache rather than its frame parser. No frame records a name that differs from the reader's only in case, and no encrypted frame records an empty name."
         },
         "KEY-6": {
           "section": "Serializer Codes",
