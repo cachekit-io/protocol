@@ -363,12 +363,19 @@ FROZEN_CONTAINER_VECTORS = {
     "container_envelope_to_plain_reader": ("plain_msgpack", "document"),
     "container_trailing_byte_to_plain_reader": ("plain_msgpack", "error"),
     "container_plain_to_envelope_reader": ("bytestorage_envelope", "error"),
+    "container_bare_arrow_to_arrow_reader": ("arrow_checksummed", "error"),
 }
 CONTAINER_FIELDS = frozenset(
     {"name", "reader", "cache_key", "format", "compressed", "aad_hex", "plaintext_hex", "ciphertext_hex", "outcome", "note"}
 )
-# The compressed value each reader's four-component AAD carries: what its container did.
-READER_COMPRESSED = {"plain_msgpack": False, "bytestorage_envelope": True}
+# The AAD inputs each reader builds, as (format, compressed, original_type): what its writer's container did. The
+# Arrow reader's flag follows its compression, so it is not fixed (None); its rows hold uncompressed IPC.
+READER_AAD: dict[str, tuple[str, bool | None, str | None]] = {
+    "plain_msgpack": ("msgpack", False, None),
+    "bytestorage_envelope": ("msgpack", True, None),
+    "arrow_checksummed": ("arrow", None, "arrow"),
+}
+ARROW_MAGIC = b"ARROW1"
 
 
 def one_document(data: bytes) -> bytes | None:
@@ -398,7 +405,16 @@ def envelope_value(data: bytes) -> bytes | None:
         return None
 
 
-CONFORMING_READERS: dict[str, Callable[[bytes], bytes | None]] = {"plain_msgpack": one_document, "bytestorage_envelope": envelope_value}
+def checksummed_arrow(data: bytes) -> bytes | None:
+    """The Arrow IPC file after an 8-byte checksum (unchecked: xxHash3-64 is not stdlib), or None without that layout."""
+    return data[8:] if data[8 : 8 + len(ARROW_MAGIC)] == ARROW_MAGIC else None
+
+
+CONFORMING_READERS: dict[str, Callable[[bytes], bytes | None]] = {
+    "plain_msgpack": one_document,
+    "bytestorage_envelope": envelope_value,
+    "arrow_checksummed": checksummed_arrow,
+}
 
 # Plausible wrong readers, one per mistake a container note names: each returns the bytes of the value it would return,
 # or None for none, and must return a value its row's outcome forbids; it lists a row only if that row's note names it.
@@ -411,6 +427,10 @@ WRONG_CONTAINER_READERS: dict[str, tuple[Callable[[bytes], bytes | None], tuple[
     "an envelope reader that falls back to plain MessagePack when the envelope does not parse": (
         lambda d: envelope_value(d) or one_document(d),
         ("container_plain_to_envelope_reader",),
+    ),
+    "an Arrow reader that accepts Arrow IPC with no checksum prefix": (
+        lambda d: d if d.startswith(ARROW_MAGIC) else checksummed_arrow(d),
+        ("container_bare_arrow_to_arrow_reader",),
     ),
 }
 
@@ -438,8 +458,8 @@ def verify_decrypted_containers(doc: dict, key: bytes, *, seal: bool) -> int:
     for row in block["vectors"]:
         name = row.get("name")
         label = f"decrypted_container {name}"
-        if set(row) != CONTAINER_FIELDS:
-            print(f"FAIL {label}: fields {sorted(row)} != {sorted(CONTAINER_FIELDS)}")
+        if set(row) - {"original_type"} != CONTAINER_FIELDS:
+            print(f"FAIL {label}: fields {sorted(row)} != {sorted(CONTAINER_FIELDS)} (original_type optional)")
             failures += 1
             continue
         if name in rows:
@@ -451,15 +471,17 @@ def verify_decrypted_containers(doc: dict, key: bytes, *, seal: bool) -> int:
             failures += 1
             continue
         declared = FROZEN_CONTAINER_VECTORS.get(name, (row["reader"], row["outcome"]))
-        if (row["reader"], row["outcome"]) != declared or row["reader"] not in READER_COMPRESSED or row["outcome"] not in ("document", "error"):
-            print(f"FAIL {label}: reader must be one of {sorted(READER_COMPRESSED)}, outcome document or error, as its frozen name declares")
+        if (row["reader"], row["outcome"]) != declared or row["reader"] not in READER_AAD or row["outcome"] not in ("document", "error"):
+            print(f"FAIL {label}: reader must be one of {sorted(READER_AAD)}, outcome document or error, as its frozen name declares")
             failures += 1
             continue
-        if row["compressed"] is not READER_COMPRESSED[row["reader"]]:
-            print(f"FAIL {label}: a {row['reader']} reader builds its AAD with compressed {READER_COMPRESSED[row['reader']]}")
+        fmt, compressed, original_type = READER_AAD[row["reader"]]
+        if row["format"] != fmt or row.get("original_type") != original_type or compressed not in (None, row["compressed"]):
+            print(f"FAIL {label}: a {row['reader']} reader builds its AAD with format {fmt}, original_type {original_type}"
+                  + ("" if compressed is None else f" and compressed {compressed}"))
             failures += 1
             continue
-        if verify_sealed_vector(label, row, doc["tenant_id"], [key], seal=seal) is None:
+        if verify_sealed_vector(label, row, doc["tenant_id"], [key], seal=seal, original_type=row.get("original_type")) is None:
             failures += 1
             continue
         plaintext = bytes.fromhex(row["plaintext_hex"])

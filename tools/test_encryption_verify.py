@@ -101,7 +101,7 @@ def reseal(name: str, plaintext_hex: str | None = None, **fields: object) -> Cal
         row.update(fields)
         if plaintext_hex is not None:
             row["plaintext_hex"] = plaintext_hex
-        aad = ev.aad_v3(doc["tenant_id"], row["cache_key"], fmt=row["format"], compressed=row["compressed"])
+        aad = ev.aad_v3(doc["tenant_id"], row["cache_key"], fmt=row["format"], compressed=row["compressed"], original_type=row.get("original_type"))
         row["aad_hex"] = aad.hex()
         if HAVE_SEAL:
             from cryptography.hazmat.primitives.ciphers.aead import AESGCM  # noqa: PLC0415
@@ -266,7 +266,17 @@ STDLIB_CASES: dict[str, Case] = {
     ),
     "plain-reader row sealed with compressed True": (
         reseal("container_trailing_byte_to_plain_reader", compressed=True),
-        "a plain_msgpack reader builds its AAD with compressed False",
+        "a plain_msgpack reader builds its AAD with format msgpack, original_type None and compressed False",
+    ),
+    "bare Arrow row holding the checksummed IPC instead": (
+        lambda d: reseal(
+            "container_bare_arrow_to_arrow_reader", "0102030405060708" + dc(d, "container_bare_arrow_to_arrow_reader")["plaintext_hex"]
+        )(d),
+        "container_bare_arrow_to_arrow_reader: a conforming arrow_checksummed reader returns a value from it",
+    ),
+    "Arrow row sealed without original_type": (
+        lambda d: (dc(d, "container_bare_arrow_to_arrow_reader").pop("original_type"), reseal("container_bare_arrow_to_arrow_reader")(d)),
+        "a arrow_checksummed reader builds its AAD with format arrow, original_type arrow",
     ),
     "container row naming a reader no SDK has": (
         lambda d: dc(d, "container_plain_to_envelope_reader").__setitem__("reader", "arrow"),
@@ -281,7 +291,7 @@ STDLIB_CASES: dict[str, Case] = {
         "frozen decrypted_container rows missing",
     ),
     "container row with an unknown field": (
-        lambda d: dc(d, "container_plain_to_envelope_reader").__setitem__("original_type", "msgpack"),
+        lambda d: dc(d, "container_plain_to_envelope_reader").__setitem__("tenant_id", "default"),
         "decrypted_container container_plain_to_envelope_reader: fields",
     ),
     "container row added with no wrong reader to show its mistake": (
