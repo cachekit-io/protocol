@@ -88,6 +88,14 @@ def present(**inputs: object) -> Callable[[dict], None]:
     return mutate
 
 
+def present_row(doc: dict, name: str) -> None:
+    """Rebuild an AAD reject row's aad_hex from what it presents."""
+    row = ar(doc, name)
+    row["aad_hex"] = ev.aad_v3(
+        doc["tenant_id"], row["cache_key"], fmt=row["format"], compressed=row["compressed"], original_type=row.get("original_type")
+    ).hex()
+
+
 def dc(doc: dict, name: str) -> dict:
     return next(r for r in doc["decrypted_container"]["vectors"] if r["name"] == name)
 
@@ -272,12 +280,34 @@ STDLIB_CASES: dict[str, Case] = {
         "frozen aad_reject_vectors missing",
     ),
     "aad reject row duplicated": (lambda d: d["aad_reject_vectors"].append(copy.deepcopy(ar(d))), "duplicate name"),
+    "aad reject row presenting another key than its name declares": (
+        lambda d: (
+            ar(d, "aad_key_with_prefix_sealed_without").update(cache_key="other:test:vector:1"),
+            present_row(d, "aad_key_with_prefix_sealed_without"),
+        ),
+        "must present cache_key 'app:test:vector:1'",
+    ),
+    "aad reject row presenting an original_type its name does not declare": (
+        lambda d: (
+            ar(d, "aad_without_original_type_sealed_with").__setitem__("original_type", "dataframe"),
+            present_row(d, "aad_without_original_type_sealed_with"),
+        ),
+        "must present original_type None",
+    ),
+    "aad reject row added with no retry to show its mistake": (
+        lambda d: d["aad_reject_vectors"].append({**copy.deepcopy(ar(d)), "name": "aad_another_row"}),
+        "no wrong AAD retry shows why these rows exist: ['aad_another_row']",
+    ),
+    "aad reject row that is not an object": (
+        lambda d: d["aad_reject_vectors"].append("not an object"),
+        "a row that is not an object with a string name",
+    ),
     # encryption.md ENC-2 and ENC-3 — containers after decryption. The plaintexts are the rows' own: the envelope, the
     # map's plain MessagePack (PLAIN) and that with a trailing byte.
     "decrypted_container block deleted": (lambda d: d.pop("decrypted_container"), "decrypted_container rows missing"),
     "envelope row holding plain MessagePack instead": (
         lambda d: reseal("container_envelope_to_plain_reader", PLAIN)(d),
-        "unwraps a plaintext which parses as a ByteStorage envelope' returns what container_envelope_to_plain_reader's outcome allows",
+        "holds no envelope whose value a conforming reader declines, so not_unwrapped pins nothing",
     ),
     "trailing-byte row without its trailing byte": (
         lambda d: reseal("container_trailing_byte_to_plain_reader", PLAIN)(d),
@@ -289,7 +319,7 @@ STDLIB_CASES: dict[str, Case] = {
     ),
     "plain-reader row sealed with compressed True": (
         reseal("container_trailing_byte_to_plain_reader", compressed=True),
-        "a plain_msgpack reader builds its AAD with format msgpack, original_type None and compressed False",
+        "a plain_msgpack reader builds its AAD with format msgpack, compressed False and original_type None",
     ),
     "bare Arrow row holding the checksummed IPC instead": (
         lambda d: reseal(
@@ -299,15 +329,23 @@ STDLIB_CASES: dict[str, Case] = {
     ),
     "Arrow row sealed without original_type": (
         lambda d: (dc(d, "container_bare_arrow_to_arrow_reader").pop("original_type"), reseal("container_bare_arrow_to_arrow_reader")(d)),
-        "a arrow_checksummed reader builds its AAD with format arrow, original_type arrow",
-    ),
-    "envelope-trailing row without its trailing byte": (
-        lambda d: reseal("container_envelope_trailing_byte_to_envelope_reader", dc(d, "container_envelope_trailing_byte_to_envelope_reader")["plaintext_hex"][:-2])(d),
-        "container_envelope_trailing_byte_to_envelope_reader: a conforming bytestorage_envelope reader returns a value from it",
+        "a arrow_checksummed reader builds its AAD with format arrow, compressed False and original_type arrow",
     ),
     "plain-JSON row holding the checksummed JSON instead": (
         lambda d: reseal("container_plain_json_to_orjson_reader", "0102030405060708" + dc(d, "container_plain_json_to_orjson_reader")["plaintext_hex"])(d),
         "container_plain_json_to_orjson_reader: a conforming orjson_checksummed reader returns a value from it",
+    ),
+    "trailing-byte row with another second document": (
+        lambda d: reseal("container_trailing_byte_to_plain_reader", PLAIN + "01")(d),
+        "container_trailing_byte_to_plain_reader: plaintext differs from the bytes its frozen name pins",
+    ),
+    "incomplete-tail row with a complete second document": (
+        lambda d: reseal("container_incomplete_tail_to_plain_reader", PLAIN + "00")(d),
+        "refuses only a second complete document' returns what container_incomplete_tail_to_plain_reader's outcome allows",
+    ),
+    "container row that is not an object": (
+        lambda d: d["decrypted_container"]["vectors"].append(["not", "an", "object"]),
+        "decrypted_container rows missing, or a row that is not an object",
     ),
     "container row naming a reader no SDK has": (
         lambda d: dc(d, "container_plain_to_envelope_reader").__setitem__("reader", "arrow"),
@@ -335,11 +373,11 @@ STDLIB_CASES: dict[str, Case] = {
     "keyring configuration block deleted": (lambda d: d["keyring"].pop("configuration"), "keyring configuration rows missing"),
     "four-key row cut to three keys": (
         set_decrypt_only("keyring_four_decrypt_only_keys", lambda k: k[:3]),
-        "keyring_four_decrypt_only_keys: a conforming load does not reject it",
+        "keyring_four_decrypt_only_keys: a conforming load that refuses uppercase digits, white space and a 0x prefix does not reject it",
     ),
     "three-key row grown to four keys": (
         set_decrypt_only("keyring_three_decrypt_only_keys", lambda k: [*k, "33" * 32]),
-        "keyring_three_decrypt_only_keys: a conforming load does not accept it",
+        "keyring_three_decrypt_only_keys: a conforming load that refuses uppercase digits, white space and a 0x prefix does not accept it",
     ),
     "uppercase row with the repeat in lowercase": (
         set_decrypt_only("keyring_current_key_decrypt_only_uppercase", lambda k: [k[0], k[1].lower()]),
@@ -351,7 +389,7 @@ STDLIB_CASES: dict[str, Case] = {
     ),
     "an uppercase decrypt-only key that is not the current key": (
         set_decrypt_only("keyring_three_decrypt_only_keys", lambda k: [k[0], k[1], accept_row(DOC)["master_key_hex"][:-2].upper() + "AB"]),
-        "the two readings of rule 1 load it differently",
+        "only a repeat of the current key in another case may need the lenient reading",
     ),
     "a decrypt-only key of 31 bytes": (
         set_decrypt_only("keyring_current_key_decrypt_only", lambda k: [k[0][:62], k[1]]),
@@ -368,6 +406,10 @@ STDLIB_CASES: dict[str, Case] = {
     "keyring configuration row with an unknown field": (
         lambda d: kc(d, "keyring_three_decrypt_only_keys").__setitem__("tenant_id", "default"),
         "keyring configuration keyring_three_decrypt_only_keys: fields",
+    ),
+    "keyring configuration row that is not an object": (
+        lambda d: d["keyring"]["configuration"]["vectors"].append(7),
+        "keyring configuration rows missing, or a row that is not an object",
     ),
     "keyring configuration row added with no wrong loader to show its mistake": (
         lambda d: d["keyring"]["configuration"]["vectors"].append(

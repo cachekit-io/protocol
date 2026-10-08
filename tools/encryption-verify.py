@@ -21,8 +21,9 @@ Stdlib-only checks (always run):
     and must misjudge the rows it lists, so editing a row until it no longer shows
     the mistake goes red.
   - Post-decryption containers (spec/encryption.md, ENC-2 and ENC-3): each row is sealed
-    under the four-component AAD of the reader it names, a conforming reader of that
-    container returns what its outcome says, and each mistake a note names is modelled
+    under the AAD of the reader it names and holds the plaintext its name pins, a
+    conforming reader of that container gives what its outcome says, and each mistake a
+    note names is modelled
     in WRONG_CONTAINER_READERS and returns a value its row's outcome forbids, read with
     the same stdlib decoders.
   - Keyring configurations (spec/encryption.md § Key Rotation, ENC-7 and ENC-9): each
@@ -31,9 +32,10 @@ Stdlib-only checks (always run):
     decrypt-only list, which the spec leaves open too. Each mistake a note names is
     modelled in WRONG_KEYRING_LOADS and must misjudge the rows it lists.
   - AAD reject rows (spec/encryption.md, ENC-1): each presents a published vector's
-    ciphertext under AAD inputs that differ from its own in exactly one component, and
-    with `cryptography` the ciphertext fails authentication under them, so a reader
-    that does not retry with an alternative AAD input refuses every row.
+    ciphertext under AAD inputs that differ from its own in exactly the component its
+    name declares, and with `cryptography` the ciphertext fails authentication under
+    them, so a reader that never retries refuses every row. Each retry a note names is
+    modelled in WRONG_AAD_RETRIES and must rebuild the sealed vector's AAD.
   - No vector table outside the ones verified here: tools/conformance.py indexes
     every list under a key ending in "vectors".
   - Writer-shape vectors (spec/encryption.md, ENC-10) keep the AAD shape a writer emits,
@@ -178,20 +180,65 @@ ASCII_WHITE_SPACE = frozenset(" \t\n\r\x0b\x0c")
 ROW_CHARACTERS = frozenset(string.printable)
 
 # AAD reject rows (spec/encryption.md § AAD v0x03 Format, ENC-1): a vector's ciphertext presented under AAD inputs that
-# differ from its own in one component. A reader that retries with an alternative AAD input decrypts a row; a reader
-# that does not fails authentication. Names are frozen, and a row has exactly these fields, original_type optional.
-FROZEN_AAD_REJECT_VECTOR_NAMES = frozenset(
-    {
-        "aad_compressed_false_sealed_true",
-        "aad_compressed_true_sealed_false",
-        "aad_format_msgpack_sealed_arrow",
-        "aad_without_original_type_sealed_with",
-        "aad_with_original_type_sealed_without",
-        "aad_key_with_prefix_sealed_without",
-    }
-)
+# differ from its own in one component. A reader that retries with the input it was sealed under decrypts a row; a
+# reader that never retries fails authentication. Names are frozen, each with the input it changes and the value it
+# presents (None: the component is absent), and a row has exactly these fields, original_type optional.
+FROZEN_AAD_REJECT_VECTORS: dict[str, tuple[str, object]] = {
+    "aad_compressed_false_sealed_true": ("compressed", False),
+    "aad_compressed_true_sealed_false": ("compressed", True),
+    "aad_format_msgpack_sealed_arrow": ("format", "msgpack"),
+    "aad_without_original_type_sealed_with": ("original_type", None),
+    "aad_with_original_type_sealed_without": ("original_type", "msgpack"),
+    "aad_key_with_prefix_sealed_without": ("cache_key", "app:test:vector:1"),
+    "aad_compressed_false_sealed_true_five_components": ("compressed", False),
+    "aad_compressed_true_sealed_false_five_components": ("compressed", True),
+}
 AAD_REJECT_FIELDS = frozenset({"name", "sealed_as", "cache_key", "format", "compressed", "aad_hex", "ciphertext_hex", "note"})
 AAD_INPUTS = ("cache_key", "format", "compressed", "original_type")
+# The original_type values cachekit-py emits (spec/encryption.md § original_type).
+ORIGINAL_TYPES = ("msgpack", "orjson", "arrow", "numpy", "dataframe", "series")
+
+
+def _with(inputs: dict, **changes: object) -> dict:
+    """AAD inputs with some changed; None removes original_type."""
+    out = {**inputs, **changes}
+    return {k: v for k, v in out.items() if v is not None or k != "original_type"}
+
+
+# Plausible retrying readers, one per mistake an AAD reject note names: each gives the inputs it retries with after the
+# presented ones fail, and must reach the row's sealed AAD, so it decrypts the row; it lists a row only if that row's
+# note names its mistake.
+WRONG_AAD_RETRIES: dict[str, tuple[Callable[[dict], list[dict]], tuple[str, ...]]] = {
+    "retries with the other compressed value": (
+        lambda i: [_with(i, compressed=not i["compressed"])],
+        (
+            "aad_compressed_false_sealed_true",
+            "aad_compressed_true_sealed_false",
+            "aad_compressed_false_sealed_true_five_components",
+            "aad_compressed_true_sealed_false_five_components",
+        ),
+    ),
+    "flips the compressed value only on five-component AADs": (
+        lambda i: [_with(i, compressed=not i["compressed"])] if "original_type" in i else [],
+        ("aad_compressed_false_sealed_true_five_components", "aad_compressed_true_sealed_false_five_components"),
+    ),
+    "retries with the other registry format tokens": (
+        lambda i: [_with(i, format=fmt) for fmt in sorted(FORMAT_REGISTRY - {i["format"]})],
+        ("aad_format_msgpack_sealed_arrow",),
+    ),
+    "retries with each original_type value cachekit-py emits": (
+        lambda i: [_with(i, original_type=t) for t in ORIGINAL_TYPES if t != i.get("original_type")],
+        ("aad_without_original_type_sealed_with",),
+    ),
+    "retries without original_type": (
+        lambda i: [_with(i, original_type=None)] if "original_type" in i else [],
+        ("aad_with_original_type_sealed_without",),
+    ),
+    "retries with the cache key stripped of its first segment": (
+        lambda i: [_with(i, cache_key=i["cache_key"].split(":", 1)[1])] if ":" in i["cache_key"] else [],
+        ("aad_key_with_prefix_sealed_without",),
+    ),
+}
 
 # Every vector table this file may hold. tools/conformance.py indexes each list under a key ending in "vectors", so a
 # table missing here would publish rows that nothing verifies.
@@ -343,18 +390,19 @@ def verify_aad_rejects(doc: dict, key: bytes, *, seal: bool) -> int:
     presented AAD, which the one-input rule already implies; the check shows the row's claim with the cipher itself.
     """
     rows = doc.get("aad_reject_vectors")
-    if not isinstance(rows, list):
-        print("FAIL aad_reject_vectors missing")
+    if not isinstance(rows, list) or not all(isinstance(row, dict) and isinstance(row.get("name"), str) for row in rows):
+        print("FAIL aad_reject_vectors missing, or a row that is not an object with a string name")
         return 1
     failures = 0
-    missing = FROZEN_AAD_REJECT_VECTOR_NAMES - {row.get("name") for row in rows}
+    missing = set(FROZEN_AAD_REJECT_VECTORS) - {row["name"] for row in rows}
     if missing:
         print(f"FAIL frozen aad_reject_vectors missing (append-only, never rename): {sorted(missing)}")
         failures += 1
     sealed = {v["name"]: v for v in doc["vectors"]}
     seen: set[str] = set()
+    checked: dict[str, tuple[dict, dict]] = {}
     for row in rows:
-        name = row.get("name")
+        name = row["name"]
         label = f"aad_reject {name}"
         if set(row) - {"original_type"} != AAD_REJECT_FIELDS:
             print(f"FAIL {label}: fields {sorted(row)} != {sorted(AAD_REJECT_FIELDS)} (original_type optional)")
@@ -392,33 +440,63 @@ def verify_aad_rejects(doc: dict, key: bytes, *, seal: bool) -> int:
             print(f"FAIL {label}: differs from {row['sealed_as']} in {differs or 'no'} AAD input(s); a row presents exactly one alternative")
             failures += 1
             continue
+        component, presented = FROZEN_AAD_REJECT_VECTORS.get(name, (differs[0], row.get(differs[0])))
+        if differs != [component] or row.get(component) != presented:
+            print(f"FAIL {label}: must present {component} {presented!r}, as its frozen name declares")
+            failures += 1
+            continue
         if seal and decrypt_with_keyring([key], bytes.fromhex(row["ciphertext_hex"]), aad) is not None:
             print(f"FAIL {label}: decrypts under the AAD it presents, so a reader that never retries returns a value")
             failures += 1
             continue
+        checked[name] = (row, base)
         print(f"ok  {label} ({differs[0]} differs{'; authentication fails' if seal else ''})")
+    # Each retrying reader must rebuild the sealed vector's AAD from what a row it lists presents: that AAD
+    # authenticates the ciphertext (the sealed vector's own check), so the retry decrypts the row.
+    listed: set[str] = set()
+    for label, (retries, targets) in WRONG_AAD_RETRIES.items():
+        for target in targets:
+            listed.add(target)
+            if target not in checked:
+                continue  # the frozen-name or row guards report it
+            row, base = checked[target]
+            presented = {f: row[f] for f in AAD_INPUTS if f in row}
+            rebuilt = {
+                aad_v3(doc["tenant_id"], i["cache_key"], fmt=i["format"], compressed=i["compressed"], original_type=i.get("original_type")).hex()
+                for i in retries(presented)
+            }
+            if base["aad_hex"] not in rebuilt:
+                print(f"FAIL wrong AAD retry {label!r} never reaches {target}'s sealed AAD, so the row no longer shows the mistake its note names")
+                failures += 1
+    unshown = sorted((set(FROZEN_AAD_REJECT_VECTORS) | set(checked)) - listed)
+    if unshown:
+        print(f"FAIL no wrong AAD retry shows why these rows exist: {unshown}")
+        failures += 1
     return failures
 
 
 # Post-decryption containers (spec/encryption.md § AAD v0x03 Format, ENC-2 and ENC-3). Each row names the reader whose
 # AAD sealed it and what a conforming read returns. Names are frozen and a row has exactly these fields.
+# Each row's plaintext is pinned by its sha256: the bytes its note names (python-frame.json's), which no structural check
+# here can tell from a lookalike (an Arrow IPC file, an envelope with a valid checksum).
 FROZEN_CONTAINER_VECTORS = {
-    "container_envelope_to_plain_reader": ("plain_msgpack", "document"),
-    "container_trailing_byte_to_plain_reader": ("plain_msgpack", "error"),
-    "container_plain_to_envelope_reader": ("bytestorage_envelope", "error"),
-    "container_bare_arrow_to_arrow_reader": ("arrow_checksummed", "error"),
-    "container_envelope_trailing_byte_to_envelope_reader": ("bytestorage_envelope", "error"),
-    "container_plain_json_to_orjson_reader": ("orjson_checksummed", "error"),
+    "container_envelope_to_plain_reader": ("plain_msgpack", "not_unwrapped", "d010549e486e806ba50c56f199cc91faac5a1cf796b8f36a6cc57e5fa69b0493"),
+    "container_trailing_byte_to_plain_reader": ("plain_msgpack", "error", "3e5764b880931011c8ca41071521748c7df0d841c93f2a78ffdca2882188f6c1"),
+    "container_plain_to_envelope_reader": ("bytestorage_envelope", "error", "b1d42254e4b144c645aa00b536a2f14fc2f00689a039190854a3fb9583e5c9d7"),
+    "container_bare_arrow_to_arrow_reader": ("arrow_checksummed", "error", "d3fd80caec4d017644d047560abe29b356569ceed943daf0b0a4c56161b885bb"),
+    "container_plain_json_to_orjson_reader": ("orjson_checksummed", "error", "dbeff30d1e42fca9a2f7d3607009347623357c6188c0394bf602a55849faaf2b"),
+    "container_incomplete_tail_to_plain_reader": ("plain_msgpack", "error", "01819ab2f501d800395c22b11d9d4d9e3f918b171e7ecbfd5fee63d95878589a"),
 }
+CONTAINER_OUTCOMES = ("not_unwrapped", "error")
 CONTAINER_FIELDS = frozenset(
     {"name", "reader", "cache_key", "format", "compressed", "aad_hex", "plaintext_hex", "ciphertext_hex", "outcome", "note"}
 )
-# The AAD inputs each reader builds, as (format, compressed, original_type): what its writer's container did. The
-# Arrow reader's flag follows its compression, so it is not fixed (None); its rows hold uncompressed IPC.
-READER_AAD: dict[str, tuple[str, bool | None, str | None]] = {
+# The AAD inputs each reader builds, as (format, compressed, original_type): what its writer's container did. The Arrow
+# rows hold uncompressed IPC, so their flag is False.
+READER_AAD: dict[str, tuple[str, bool, str | None]] = {
     "plain_msgpack": ("msgpack", False, None),
     "bytestorage_envelope": ("msgpack", True, None),
-    "arrow_checksummed": ("arrow", None, "arrow"),
+    "arrow_checksummed": ("arrow", False, "arrow"),
     "orjson_checksummed": ("orjson", False, "orjson"),
 }
 ARROW_MAGIC = b"ARROW1"
@@ -431,6 +509,16 @@ def first_document(data: bytes) -> bytes | None:
     except ValueError:
         return None
     return data[:end]
+
+
+def second_document_complete(data: bytes) -> bytes | None:
+    """The first document, unless a complete second one follows it: a reader that refuses only a second document it can
+    read, and ignores an incomplete one."""
+    first = first_document(data)
+    if first is None:
+        return None
+    rest = data[len(first) :]
+    return first if not rest or first_document(rest) is None else None
 
 
 def _non_json_constant(token: str) -> object:
@@ -471,7 +559,14 @@ WRONG_CONTAINER_READERS: dict[str, tuple[Callable[[bytes], bytes | None], tuple[
         lambda d: envelope_value(d) or one_document(d),
         ("container_envelope_to_plain_reader",),
     ),
-    "a plain-MessagePack reader that ignores bytes after the first document": (first_document, ("container_trailing_byte_to_plain_reader",)),
+    "a plain-MessagePack reader that ignores bytes after the first document": (
+        first_document,
+        ("container_trailing_byte_to_plain_reader", "container_incomplete_tail_to_plain_reader"),
+    ),
+    "a plain-MessagePack reader that refuses only a second complete document": (
+        second_document_complete,
+        ("container_incomplete_tail_to_plain_reader",),
+    ),
     "an envelope reader that falls back to plain MessagePack when the envelope does not parse": (
         lambda d: envelope_value(d) or one_document(d),
         ("container_plain_to_envelope_reader",),
@@ -479,10 +574,6 @@ WRONG_CONTAINER_READERS: dict[str, tuple[Callable[[bytes], bytes | None], tuple[
     "an Arrow reader that accepts Arrow IPC with no checksum prefix": (
         lambda d: d if d.startswith(ARROW_MAGIC) else checksummed_arrow(d),
         ("container_bare_arrow_to_arrow_reader",),
-    ),
-    "an envelope reader that ignores bytes after the envelope": (
-        lambda d: envelope_value(first) if (first := first_document(d)) is not None else None,
-        ("container_envelope_trailing_byte_to_envelope_reader",),
     ),
     "an orjson reader that falls back to plain JSON when the checksum layout does not parse": (
         lambda d: checksummed_json(d) or json_document(d),
@@ -494,13 +585,15 @@ WRONG_CONTAINER_READERS: dict[str, tuple[Callable[[bytes], bytes | None], tuple[
 def verify_decrypted_containers(doc: dict, key: bytes, *, seal: bool) -> int:
     """Return the number of failed post-decryption container checks (spec/encryption.md ENC-2 and ENC-3).
 
-    Each row must be sealed under its reader's four-component AAD (rebuilt, and with `cryptography` decrypted), and a
-    conforming reader of that container must return what `outcome` says: `document`, the plaintext as one MessagePack
-    document, or `error`, nothing. Then each wrong reader must return a value its row's outcome forbids.
+    Each row must be sealed under its reader's AAD (rebuilt, and with `cryptography` decrypted), hold the plaintext its
+    name pins, and a conforming reader of that container must give what `outcome` says: `error`, nothing, or
+    `not_unwrapped`, anything but the value inside the plaintext's envelope (the plaintext as one MessagePack document,
+    or nothing). Then each wrong reader must return a value its row's outcome forbids.
     """
     block = doc.get("decrypted_container")
-    if not isinstance(block, dict) or not isinstance(block.get("vectors"), list):
-        print("FAIL decrypted_container rows missing")
+    vectors = block.get("vectors") if isinstance(block, dict) else None
+    if not isinstance(vectors, list) or not all(isinstance(row, dict) and isinstance(row.get("name"), str) for row in vectors):
+        print("FAIL decrypted_container rows missing, or a row that is not an object with a string name")
         return 1
     failures = 0
     if not isinstance(block.get("note"), str) or not block["note"].strip():
@@ -526,31 +619,36 @@ def verify_decrypted_containers(doc: dict, key: bytes, *, seal: bool) -> int:
             print(f"FAIL {label}: note must be a non-empty string")
             failures += 1
             continue
-        declared = FROZEN_CONTAINER_VECTORS.get(name, (row["reader"], row["outcome"]))
-        if (row["reader"], row["outcome"]) != declared or row["reader"] not in READER_AAD or row["outcome"] not in ("document", "error"):
-            print(f"FAIL {label}: reader must be one of {sorted(READER_AAD)}, outcome document or error, as its frozen name declares")
+        reader, outcome, pin = FROZEN_CONTAINER_VECTORS.get(name, (row["reader"], row["outcome"], None))
+        if (row["reader"], row["outcome"]) != (reader, outcome) or reader not in READER_AAD or outcome not in CONTAINER_OUTCOMES:
+            print(f"FAIL {label}: reader must be one of {sorted(READER_AAD)}, outcome one of {list(CONTAINER_OUTCOMES)}, as its frozen name declares")
             failures += 1
             continue
-        fmt, compressed, original_type = READER_AAD[row["reader"]]
-        if row["format"] != fmt or row.get("original_type") != original_type or compressed not in (None, row["compressed"]):
-            print(f"FAIL {label}: a {row['reader']} reader builds its AAD with format {fmt}, original_type {original_type}"
-                  + ("" if compressed is None else f" and compressed {compressed}"))
+        fmt, compressed, original_type = READER_AAD[reader]
+        if (row["format"], row["compressed"], row.get("original_type")) != (fmt, compressed, original_type):
+            print(f"FAIL {label}: a {reader} reader builds its AAD with format {fmt}, compressed {compressed} and original_type {original_type}")
             failures += 1
             continue
         if verify_sealed_vector(label, row, doc["tenant_id"], [key], seal=seal, original_type=row.get("original_type")) is None:
             failures += 1
             continue
         plaintext = bytes.fromhex(row["plaintext_hex"])
-        got = CONFORMING_READERS[row["reader"]](plaintext)
-        if row["outcome"] == "document" and (row["reader"] != "plain_msgpack" or got != plaintext):
-            print(f"FAIL {label}: a conforming plain-MessagePack reader does not return the plaintext as one document")
+        got = CONFORMING_READERS[reader](plaintext)
+        inner = envelope_value(plaintext)
+        if outcome == "not_unwrapped" and (inner is None or got == inner):
+            print(f"FAIL {label}: holds no envelope whose value a conforming reader declines, so not_unwrapped pins nothing")
             failures += 1
             continue
-        if row["outcome"] == "error" and got is not None:
-            print(f"FAIL {label}: a conforming {row['reader']} reader returns a value from it")
+        if outcome == "error" and got is not None:
+            print(f"FAIL {label}: a conforming {reader} reader returns a value from it")
             failures += 1
             continue
         rows[name] = row
+        # Checked last, and without dropping the row, so the wrong readers still run on an edited plaintext.
+        if pin is not None and hashlib.sha256(plaintext).hexdigest() != pin:
+            print(f"FAIL {label}: plaintext differs from the bytes its frozen name pins")
+            failures += 1
+            continue
         print(f"ok  {label} ({row['reader']}: {row['outcome']})")
     listed: set[str] = set()
     for label, (read, targets) in WRONG_CONTAINER_READERS.items():
@@ -560,8 +658,9 @@ def verify_decrypted_containers(doc: dict, key: bytes, *, seal: bool) -> int:
             if row is None:
                 continue  # the frozen-name or row guards report it
             plaintext = bytes.fromhex(row["plaintext_hex"])
-            allowed = plaintext if row["outcome"] == "document" else None
-            if read(plaintext) == allowed:
+            got = read(plaintext)
+            forbidden = got == envelope_value(plaintext) if row["outcome"] == "not_unwrapped" else got is not None
+            if not forbidden:
                 print(f"FAIL wrong container reader {label!r} returns what {target}'s outcome allows, so the row no longer shows the mistake its note names")
                 failures += 1
     unshown = sorted((set(FROZEN_CONTAINER_VECTORS) | set(rows)) - listed)
@@ -1046,19 +1145,20 @@ def verify_keyring_configurations(keyring: dict | None) -> int:
     """Return the number of failed keyring configuration checks (spec/encryption.md ENC-7 and ENC-9).
 
     Each row's keys must each be a valid 32-byte key once uppercase is read as lowercase, with no key twice in the
-    decrypt-only list. Its verdict must be what a conforming load gives under both readings of rule 1, so no row
-    settles uppercase handling; then each wrong loader must misjudge the rows it lists.
+    decrypt-only list, and only a repeat of the current key in another case may hold uppercase, so a row decides only
+    the keyring rule it targets. Its verdict must be what a conforming load gives under each reading of rule 1, so no
+    row settles uppercase handling; then each wrong loader must misjudge the rows it lists.
     """
     block = keyring.get("configuration") if isinstance(keyring, dict) else None
-    if not isinstance(block, dict) or not isinstance(block.get("vectors"), list):
-        print("FAIL keyring configuration rows missing")
+    vectors = block.get("vectors") if isinstance(block, dict) else None
+    if not isinstance(vectors, list) or not all(isinstance(row, dict) and isinstance(row.get("name"), str) for row in vectors):
+        print("FAIL keyring configuration rows missing, or a row that is not an object with a string name")
         return 1
     failures = 0
     if not isinstance(block.get("note"), str) or not block["note"].strip():
         print("FAIL keyring configuration: note must be a non-empty string")
         failures += 1
-    vectors = block["vectors"]
-    missing = set(FROZEN_KEYRING_CONFIGURATIONS) - {row.get("name") for row in vectors}
+    missing = set(FROZEN_KEYRING_CONFIGURATIONS) - {row["name"] for row in vectors}
     if missing:
         print(f"FAIL frozen keyring configuration rows missing (append-only, never rename): {sorted(missing)}")
         failures += 1
@@ -1091,18 +1191,18 @@ def verify_keyring_configurations(keyring: dict | None) -> int:
             print(f"FAIL {label}: every key must be a valid {KEY_BYTES}-byte key once uppercase is read, so only the keyring rules decide the row")
             failures += 1
             continue
+        if any(read_hex_key(text) is None and (text == current or text.lower() != current) for text in (current, *decrypt_only)):
+            print(f"FAIL {label}: only a repeat of the current key in another case may need the lenient reading of rule 1")
+            failures += 1
+            continue
         if len(set(read[1:])) != len(read) - 1:
             print(f"FAIL {label}: a key appears twice in the decrypt-only list, which the spec leaves open")
             failures += 1
             continue
         rows[name] = row
-        verdicts = {keyring_loads(current, decrypt_only, lenient=lenient) for lenient in READINGS.values()}
-        if len(verdicts) != 1:
-            print(f"FAIL {label}: the two readings of rule 1 load it differently, so the row decides what the spec leaves open")
-            failures += 1
-            continue
-        if ("accept" if verdicts.pop() else "reject") != row["verdict"]:
-            print(f"FAIL {label}: a conforming load does not {row['verdict']} it")
+        wrong = [r for r, lenient in READINGS.items() if ("accept" if keyring_loads(current, decrypt_only, lenient=lenient) else "reject") != row["verdict"]]
+        if wrong:
+            print(f"FAIL {label}: a conforming load that {wrong[0]} does not {row['verdict']} it")
             failures += 1
             continue
         print(f"ok  {label} ({row['verdict']})")

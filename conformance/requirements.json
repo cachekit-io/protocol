@@ -46,7 +46,10 @@
             "python-frame.json:std_alias_write",
             "python-frame.json:pythonic_alias_write",
             "cache-keys.json:object_arrow_serializer",
-            "cache-keys.json:object_class_named_auto"
+            "cache-keys.json:object_class_named_auto",
+            "cache-keys.json:object_standard_serializer",
+            "cache-keys.json:object_orjson_serializer",
+            "cache-keys.json:object_auto_serializer"
           ]
         },
         "KEY-3": {
@@ -132,7 +135,10 @@
             "cache-keys.json:serializer_custom_identity_orjson",
             "cache-keys.json:serializer_custom_identity_non_ascii",
             "cache-keys.json:object_arrow_serializer",
-            "cache-keys.json:object_class_named_auto"
+            "cache-keys.json:object_class_named_auto",
+            "cache-keys.json:object_standard_serializer",
+            "cache-keys.json:object_orjson_serializer",
+            "cache-keys.json:object_auto_serializer"
           ]
         },
         "KEY-7": {
@@ -170,7 +176,10 @@
           "vectors": [
             "cache-keys.json:serializer_custom_identity",
             "cache-keys.json:object_arrow_serializer",
-            "cache-keys.json:object_class_named_auto"
+            "cache-keys.json:object_class_named_auto",
+            "cache-keys.json:object_standard_serializer",
+            "cache-keys.json:object_orjson_serializer",
+            "cache-keys.json:object_auto_serializer"
           ]
         },
         "KEY-10": {
@@ -182,7 +191,8 @@
           "vectors": [
             "cache-keys.json:serializer_type_empty",
             "cache-keys.json:serializer_type_null",
-            "cache-keys.json:serializer_type_integer"
+            "cache-keys.json:serializer_type_integer",
+            "cache-keys.json:serializer_type_truthy_integer"
           ],
           "gap": "The rows give the identity to key generation directly, so a cache that turns an empty or missing serializer into its default before key generation sees it passes them; whether a cache configured that way refuses it is SDK test code."
         },
@@ -212,9 +222,11 @@
             "encryption.json:aad_format_msgpack_sealed_arrow",
             "encryption.json:aad_without_original_type_sealed_with",
             "encryption.json:aad_with_original_type_sealed_without",
-            "encryption.json:aad_key_with_prefix_sealed_without"
+            "encryption.json:aad_key_with_prefix_sealed_without",
+            "encryption.json:aad_compressed_false_sealed_true_five_components",
+            "encryption.json:aad_compressed_true_sealed_false_five_components"
           ],
-          "gap": "Each row presents one alternative, and a reader that builds its AAD inputs from configuration (cachekit-ts, cachekit-rs, interop mode) can present only the rows its configuration produces: the compressed flips, the four-component row and the key with a prefix; only cachekit-py presents the format and original_type rows, through a frame header. No row presents another tenant, which also changes the derived key."
+          "gap": "A reader that builds its AAD inputs from configuration presents only the rows its configuration produces: cachekit-ts the four-component compressed flips (one per compression setting), the four-component row and, through a backend key prefix, the prefixed key; cachekit-rs and interop mode only compressed False, cachekit-rs reaching the prefixed key through a namespace and interop mode, which refuses a key prefix, not at all; only cachekit-py presents the format, original_type and five-component rows, through a frame header. Most rows reuse plaintexts that are no container, so a retry still ends in no value there, and only a test that asserts the authentication failure itself, or reads the five-component rows, whose plaintexts are cachekit-py's own, tells a retrying reader apart. No row presents another tenant, which also changes the derived key."
         },
         "ENC-2": {
           "section": "AAD v0x03 Format",
@@ -227,7 +239,7 @@
             "encryption.json:container_bare_arrow_to_arrow_reader",
             "encryption.json:container_plain_json_to_orjson_reader"
           ],
-          "gap": "The envelopes the rows hold are in the bin encoding, so a plain-MessagePack reader that unwraps only the legacy array-of-integers envelope passes."
+          "gap": "The envelopes the rows hold are in the bin encoding, so a plain-MessagePack reader that unwraps only the legacy array-of-integers envelope passes. The plain-MessagePack rows are sealed under four-component AADs, so they do not reach cachekit-py's reader with integrity checking off, and no row gives an orjson reader with integrity checking off a checksummed payload. No row gives an Arrow or orjson reader plain MessagePack, or an envelope reader JSON, so a reader that falls back to the other family passes."
         },
         "ENC-3": {
           "section": "AAD v0x03 Format",
@@ -236,11 +248,12 @@
             "python-frame.json:ciphertext_plain_msgpack_not_envelope",
             "python-frame.json:ciphertext_plain_msgpack_claims_uncompressed",
             "encryption.json:container_trailing_byte_to_plain_reader",
+            "encryption.json:container_incomplete_tail_to_plain_reader",
             "encryption.json:container_plain_to_envelope_reader",
             "encryption.json:container_bare_arrow_to_arrow_reader",
-            "encryption.json:container_envelope_trailing_byte_to_envelope_reader",
             "encryption.json:container_plain_json_to_orjson_reader"
-          ]
+          ],
+          "gap": "Whether a ByteStorage reader rejects bytes after the envelope is not stated (the Retrieve Flow in spec/wire-format.md has no end-of-input step; cachekit-core ignores them and cachekit-ts refuses them), so no row holds them. No row gives an Arrow or orjson reader plain MessagePack, or an envelope reader JSON, so a reader that falls back to the other family on a parse failure passes."
         },
         "ENC-4": {
           "section": "`format` tokens",

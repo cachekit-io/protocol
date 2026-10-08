@@ -332,6 +332,19 @@
       "integrity_checking": true,
       "serializer_type": 0,
       "error": "a serializer identity that is not a string is an error: one that falls back to a default code for a falsy value, or derives a code from its text (\"0\"), names an entry nothing wrote"
+    },
+    {
+      "name": "serializer_type_truthy_integer",
+      "namespace": "test",
+      "function_module": "__main__",
+      "function_qualname": "get_user",
+      "args": [
+        42
+      ],
+      "kwargs": {},
+      "integrity_checking": true,
+      "serializer_type": 1,
+      "error": "a serializer identity that is not a string is an error, truthy or not: one that refuses only falsy values and derives a code from the text of the rest (\"1\") names an entry nothing wrote"
     }
   ],
   "serializer_object_vectors": [
@@ -362,6 +375,48 @@
       "serializer_class": "auto",
       "defined_by": "test",
       "expected_key": "ns:test:func:__main__.get_user:args:3870b2ea5735ae639ded9450ef117768db676f037bec636503796c5b81095153:1xf932"
+    },
+    {
+      "name": "object_standard_serializer",
+      "namespace": "test",
+      "function_module": "__main__",
+      "function_qualname": "get_user",
+      "args": [
+        42
+      ],
+      "kwargs": {},
+      "integrity_checking": true,
+      "serializer_class": "StandardSerializer",
+      "defined_by": "sdk",
+      "expected_key": "ns:test:func:__main__.get_user:args:3870b2ea5735ae639ded9450ef117768db676f037bec636503796c5b81095153:1x8542"
+    },
+    {
+      "name": "object_orjson_serializer",
+      "namespace": "test",
+      "function_module": "__main__",
+      "function_qualname": "get_user",
+      "args": [
+        42
+      ],
+      "kwargs": {},
+      "integrity_checking": true,
+      "serializer_class": "OrjsonSerializer",
+      "defined_by": "sdk",
+      "expected_key": "ns:test:func:__main__.get_user:args:3870b2ea5735ae639ded9450ef117768db676f037bec636503796c5b81095153:1x8f72"
+    },
+    {
+      "name": "object_auto_serializer",
+      "namespace": "test",
+      "function_module": "__main__",
+      "function_qualname": "get_user",
+      "args": [
+        42
+      ],
+      "kwargs": {},
+      "integrity_checking": true,
+      "serializer_class": "AutoSerializer",
+      "defined_by": "sdk",
+      "expected_key": "ns:test:func:__main__.get_user:args:3870b2ea5735ae639ded9450ef117768db676f037bec636503796c5b81095153:1x4874"
     }
   ]
 }

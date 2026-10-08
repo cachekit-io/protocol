@@ -71,7 +71,7 @@
             "1111111111111111111111111111111111111111111111111111111111111111",
             "2222222222222222222222222222222222222222222222222222222222222222",
             "6161616161616161616161616161616161616161616161616161616161616161",
-            "807f80ffa55ac33c1ee12dd24bb469968778f00f01102332455467768998abba"
+            "3333333333333333333333333333333333333333333333333333333333333333"
           ],
           "verdict": "reject",
           "note": "One current key and four decrypt-only keys, one over the cap, each a valid 32-byte key and none repeated, so nothing but the count can refuse it. A conforming SDK refuses it at load. One with no cap accepts it, and so does one that keeps the first three keys and drops the rest."
@@ -80,11 +80,11 @@
           "name": "keyring_current_key_decrypt_only",
           "current_master_key_hex": "007f80ffa55ac33c1ee12dd24bb469968778f00f01102332455467768998abba",
           "decrypt_only_master_keys_hex": [
-            "1111111111111111111111111111111111111111111111111111111111111111",
-            "007f80ffa55ac33c1ee12dd24bb469968778f00f01102332455467768998abba"
+            "007f80ffa55ac33c1ee12dd24bb469968778f00f01102332455467768998abba",
+            "1111111111111111111111111111111111111111111111111111111111111111"
           ],
           "verdict": "reject",
-          "note": "The current key repeated, as given, in the decrypt-only list. A conforming SDK refuses it at load. One that does not compare the current key with the decrypt-only keys accepts it."
+          "note": "The current key repeated, as given, at the head of the decrypt-only list. A conforming SDK refuses it at load. One that does not compare the current key with the decrypt-only keys accepts it."
         },
         {
           "name": "keyring_current_key_decrypt_only_uppercase",
@@ -197,7 +197,7 @@
       "compressed": false,
       "aad_hex": "030000000e63726f73732d73646b2d7465737400000016746573743a636f6d707265737365643a766563746f72000000076d73677061636b0000000546616c7365",
       "ciphertext_hex": "44cc06e600000000000000000eb8450c4aac2337265323f7f1b03fc3966deaa515f7",
-      "note": "compressed_basic's ciphertext, sealed with compressed True, presented with compressed False, the value a reader configured without compression builds. A reader that retries with the other compressed value, or with every value, decrypts it."
+      "note": "compressed_basic's ciphertext, sealed with compressed True, presented with compressed False, the value a reader configured without compression builds. A reader that retries with the value it was sealed under, the other compressed value, decrypts it."
     },
     {
       "name": "aad_compressed_true_sealed_false",
@@ -218,7 +218,7 @@
       "original_type": "arrow",
       "aad_hex": "030000000e63726f73732d73646b2d7465737400000017746573743a6172726f773a756e636f6d70726573736564000000076d73677061636b0000000546616c7365000000056172726f77",
       "ciphertext_hex": "0a0b0c0d0e0f10110000000066ee6349733c18b89159de7db35910d6b996bdb9150d5f1d",
-      "note": "arrow_uncompressed's ciphertext, sealed with the format token arrow, presented with msgpack and the same original_type. A reader that retries with other registry tokens, or with its own serializer's token after the stored one fails, decrypts it."
+      "note": "arrow_uncompressed's ciphertext, sealed with the format token arrow, presented with msgpack and the same original_type. A reader that retries with the other registry format tokens, its own serializer's among them, decrypts it."
     },
     {
       "name": "aad_without_original_type_sealed_with",
@@ -228,7 +228,7 @@
       "compressed": false,
       "aad_hex": "030000000e63726f73732d73646b2d7465737400000018746573743a6f726967696e616c2d747970653a6e756d7079000000076d73677061636b0000000546616c7365",
       "ciphertext_hex": "0a0b0c0d0e0f101100000003657e765491f9790882c0543d98ab280c5951a1ed",
-      "note": "original_type_numpy's ciphertext, sealed with the fifth component original_type numpy, presented with four components, as a reader that never adds original_type (cachekit-ts, cachekit-rs, interop mode) or a cachekit-py frame header without one presents it. A reader that retries with a type hint decrypts it."
+      "note": "original_type_numpy's ciphertext, sealed with the fifth component original_type numpy, presented with four components, as a reader that never adds original_type (cachekit-ts, cachekit-rs, interop mode) or a cachekit-py frame header without one presents it. A reader that retries with each original_type value cachekit-py emits decrypts it."
     },
     {
       "name": "aad_with_original_type_sealed_without",
@@ -250,10 +250,32 @@
       "aad_hex": "030000000e63726f73732d73646b2d74657374000000116170703a746573743a766563746f723a31000000076d73677061636b0000000546616c7365",
       "ciphertext_hex": "f8f69c70000000000000000087d9ec09f2c2347a4b37d5330ccf50e3c31e69642801bef5",
       "note": "basic_bytes's ciphertext, sealed under the cache_key test:vector:1, presented under app:test:vector:1, the key with a prefix in front. A reader whose cache_key carries a namespace or key prefix and that retries with the key stripped of it decrypts it."
+    },
+    {
+      "name": "aad_compressed_false_sealed_true_five_components",
+      "sealed_as": "standard_serializer_default",
+      "cache_key": "test:standard:default",
+      "format": "msgpack",
+      "compressed": false,
+      "original_type": "msgpack",
+      "aad_hex": "030000000e63726f73732d73646b2d7465737400000015746573743a7374616e646172643a64656661756c74000000076d73677061636b0000000546616c7365000000076d73677061636b",
+      "ciphertext_hex": "0a0b0c0d0e0f1011000000042ed1d29248afcf662d0cf30bf6bc9b4857c1228517788144c0720dff2ed5eef362bda2c356b02d0da6b6653230e63aa5fd436a417d42142c1ce305bad39af86dbf0c88cb4b8f2d8f2c6f29",
+      "note": "standard_serializer_default's ciphertext, cachekit-py's default AAD shape sealed with compressed True, presented with compressed False. Its plaintext is a real ByteStorage envelope, so a reader that retries with the value it was sealed under returns the value rather than failing on a container, and a reader that flips the flag only on five-component AADs, the shape of every cachekit-py entry, decrypts it."
+    },
+    {
+      "name": "aad_compressed_true_sealed_false_five_components",
+      "sealed_as": "standard_serializer_integrity_off",
+      "cache_key": "test:standard:integrity-off",
+      "format": "msgpack",
+      "compressed": true,
+      "original_type": "msgpack",
+      "aad_hex": "030000000e63726f73732d73646b2d746573740000001b746573743a7374616e646172643a696e746567726974792d6f6666000000076d73677061636b0000000454727565000000076d73677061636b",
+      "ciphertext_hex": "0a0b0c0d0e0f101100000005275a8abbe4e2c89ffd42723b89608fe7132ba8aca55b350621e6792789e510f88f9a47783090d2fa823c07bf81984708",
+      "note": "standard_serializer_integrity_off's ciphertext, sealed with compressed False and five components, presented with compressed True. Its plaintext is plain MessagePack, so a reader that retries with the value it was sealed under returns the value; a reader that flips the flag only on five-component AADs decrypts it."
     }
   ],
   "decrypted_container": {
-    "note": "spec/encryption.md \u00a7 AAD v0x03 Format, ENC-2 and ENC-3: after decryption the container is the one the reader is configured for, never one picked by looking at the bytes or tried after another fails, and a parse mismatch hard-fails. Each row is sealed under the main master key and tenant_id with the AAD of the reader it names: plain_msgpack (four components, compressed False; cachekit-ts with compression off, cachekit-rs, interop mode), bytestorage_envelope (four components, compressed True; cachekit-ts with compression on), arrow_checksummed (format and original_type arrow; cachekit-py's ArrowSerializer) or orjson_checksummed (format and original_type orjson, compressed False; cachekit-py's OrjsonSerializer with integrity checking on). Its plaintext is a container that reader is not configured for, or one it must not unwrap. outcome is what a conforming read returns: document, the plaintext decoded as one MessagePack document (a reader whose result type cannot hold that document fails instead), or error, no value (an error, or a miss under the SDK's fail-open policy). Each note names mistakes its row catches; tools/encryption-verify.py checks that each one returns a value its row's outcome forbids.",
+    "note": "spec/encryption.md \u00a7 AAD v0x03 Format, ENC-2 and ENC-3: after decryption the container is the one the reader is configured for, never one picked by looking at the bytes or tried after another fails, and a parse mismatch hard-fails. Each row is sealed under the main master key and tenant_id with the AAD of the reader it names: plain_msgpack (four components, compressed False; cachekit-ts with compression off, cachekit-rs, interop mode), bytestorage_envelope (four components, compressed True; cachekit-ts with compression on), arrow_checksummed (format and original_type arrow, compressed False over uncompressed IPC; cachekit-py's ArrowSerializer) or orjson_checksummed (format and original_type orjson, compressed False; cachekit-py's OrjsonSerializer with integrity checking on). Its plaintext is a container that reader is not configured for, or one it must not unwrap. outcome is what a conforming read returns: error, no value (an error, or a miss under the SDK's fail-open policy), or not_unwrapped, anything but the value inside the plaintext's container: the plaintext decoded as one MessagePack document, or no value. Each note names mistakes its row catches; tools/encryption-verify.py checks that each one returns a value its row's outcome forbids.",
     "vectors": [
       {
         "name": "container_envelope_to_plain_reader",
@@ -264,8 +286,8 @@
         "aad_hex": "030000000e63726f73732d73646b2d7465737400000017746573743a636f6e7461696e65723a656e76656c6f7065000000076d73677061636b0000000546616c7365",
         "plaintext_hex": "94c422f01183a7757365725f69642aa46e616d65a863616368656b6974a6616374697665c398ccdaccf46861cc8e624bccfe20a76d73677061636b",
         "ciphertext_hex": "0a0b0c0d0e0f101100000006e56a19473b4920391a28a7b679f5d6b0116f3849bae902d114d15c5a8ebd0349e90425ec8510ee508708cea821b0a3e17365dd19081b1acf8b3d29c1c2fed074680628976f261f4cf7807e",
-        "outcome": "document",
-        "note": "A valid ByteStorage envelope, python-frame.json's default write payload, whose inner value is the map {user_id: 42, name: cachekit, active: true}, sealed under the AAD a plain-MessagePack reader builds. The reader decodes the plaintext as one MessagePack document, the envelope's 4-element array, and never returns the map inside it. A reader that unwraps a plaintext which parses as an envelope returns the map."
+        "outcome": "not_unwrapped",
+        "note": "A valid ByteStorage envelope, python-frame.json's default write payload, whose inner value is the map {user_id: 42, name: cachekit, active: true}, sealed under the AAD a plain-MessagePack reader builds. The reader must not return the map inside it: it decodes the plaintext as one MessagePack document, the envelope's 4-element array, or returns no value. A reader that unwraps a plaintext which parses as an envelope returns the map."
       },
       {
         "name": "container_trailing_byte_to_plain_reader",
@@ -277,7 +299,7 @@
         "plaintext_hex": "83a7757365725f69642aa46e616d65a863616368656b6974a6616374697665c300",
         "ciphertext_hex": "0a0b0c0d0e0f1011000000074f914fea1f2bd5819f8b6a438d8f5db1f2ca1124c95f6b22d004bba6746fcae2decc8b88bdaec55db1e1522132f3dc16ea",
         "outcome": "error",
-        "note": "The same map's plain MessagePack followed by one 00 byte, sealed under the AAD a plain-MessagePack reader builds: one complete document and a byte after it, a parse mismatch, so the read returns no value. A reader that ignores bytes after the first document returns the map."
+        "note": "The same map's plain MessagePack followed by one 00 byte, sealed under the AAD a plain-MessagePack reader builds: one complete document and a second one after it, a parse mismatch, so the read returns no value. A reader that ignores bytes after the first document returns the map."
       },
       {
         "name": "container_plain_to_envelope_reader",
@@ -305,18 +327,6 @@
         "note": "python-frame.json's arrow_compression_off_write payload without its 8-byte xxHash3-64 checksum: a bare Arrow IPC file, sealed under the AAD cachekit-py's ArrowSerializer builds for that write. The arrow container is [checksum][Arrow IPC file], so the read returns no value. A reader that accepts Arrow IPC with no checksum prefix, as cachekit-py 0.22.0 does after a decrypt, returns the table."
       },
       {
-        "name": "container_envelope_trailing_byte_to_envelope_reader",
-        "reader": "bytestorage_envelope",
-        "cache_key": "test:container:envelope-trailing-byte",
-        "format": "msgpack",
-        "compressed": true,
-        "aad_hex": "030000000e63726f73732d73646b2d7465737400000025746573743a636f6e7461696e65723a656e76656c6f70652d747261696c696e672d62797465000000076d73677061636b0000000454727565",
-        "plaintext_hex": "94c422f01183a7757365725f69642aa46e616d65a863616368656b6974a6616374697665c398ccdaccf46861cc8e624bccfe20a76d73677061636b00",
-        "ciphertext_hex": "0a0b0c0d0e0f10110000000ab3c8f2d96beeca466e1c8f31a63277f7635dec55e7b4ae9e212634f957f8c80773d0349f845dc5adeadcb5045dd24ee226d665d7029102b7c6942251321fb16970b2b5926f3de245838d9067",
-        "outcome": "error",
-        "note": "The valid ByteStorage envelope followed by one 00 byte, sealed under the AAD an envelope reader builds: the envelope must end the plaintext, so the read returns no value. A reader that ignores bytes after the envelope returns the map."
-      },
-      {
         "name": "container_plain_json_to_orjson_reader",
         "reader": "orjson_checksummed",
         "cache_key": "test:container:plain-json",
@@ -328,6 +338,18 @@
         "ciphertext_hex": "0a0b0c0d0e0f10110000000b2c0dfe92f72ad368c94c23d95795be94330d48224efe0e88f727911d2a1ad35f6d7aefba374f80b8763ca5fc17cf0713609e41f10329a94e9321505af0f1",
         "outcome": "error",
         "note": "python-frame.json's forged_plaintext_orjson payload without its 8-byte xxHash3-64 checksum: plain JSON, sealed under the AAD cachekit-py's OrjsonSerializer builds. A reader with integrity checking on reads [checksum][JSON], so the read returns no value. A reader that falls back to plain JSON when the checksum layout does not parse returns the map."
+      },
+      {
+        "name": "container_incomplete_tail_to_plain_reader",
+        "reader": "plain_msgpack",
+        "cache_key": "test:container:incomplete-tail",
+        "format": "msgpack",
+        "compressed": false,
+        "aad_hex": "030000000e63726f73732d73646b2d746573740000001e746573743a636f6e7461696e65723a696e636f6d706c6574652d7461696c000000076d73677061636b0000000546616c7365",
+        "plaintext_hex": "83a7757365725f69642aa46e616d65a863616368656b6974a6616374697665c391",
+        "ciphertext_hex": "0a0b0c0d0e0f10110000000ca5a3638312b74ca8ae833903725b25b5c51b4dd342e2fe30aeab575a97162a53e075d41a94da0f6b5c96739ce4ddedb29c",
+        "outcome": "error",
+        "note": "The map's plain MessagePack followed by 91, the header of a one-element array with no element: an incomplete second document, so the read returns no value. A reader that ignores bytes after the first document returns the map, and so does one that refuses only a second complete document, as container_trailing_byte_to_plain_reader's 00 is."
       }
     ]
   },
