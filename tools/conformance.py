@@ -543,9 +543,13 @@ def blank(match: re.Match[str]) -> str:
 
 
 def link_tail(text: str, start: int) -> int:
-    """Where an inline link's destination and title, opening at the ( at `start`, end (just past the closing )), or
-    -1 where there is none, as cmark-gfm's handle_close_bracket() reads them. Space here is only a space or a line
-    break: layout() rejects the other white space.
+    """Where an inline link's destination and title, opening at the ( at `start`, end (at the closing )), as
+    cmark-gfm's handle_close_bracket() reads them, or -1 where it reads none.
+
+    Read leniently only where that can refuse more, never less: a destination in <…> is refused whatever
+    follows, since it holds a <, so its end is not looked for (this returns the offset past that <), and the
+    renderer's limit of 32 open parentheses is not modelled. Space here is a space or a line break: layout()
+    rejects the other white space.
     """
 
     def space(i: int) -> int:
@@ -555,37 +559,17 @@ def link_tail(text: str, start: int) -> int:
 
     i = space(start + 1)
     if text.startswith("<", i):
-        # <…>: no line break and no other <; a backslash takes the character after it, whatever it is.
+        return i + 1
+    # The destination runs to a space or an unmatched ); an escaped parenthesis does not count.
+    depth = 0
+    while i < len(text) and text[i] not in " \n" and (text[i] != ")" or depth):
+        if text[i] == "\\" and text[i + 1 : i + 2] in PUNCT:
+            i += 1
+        else:
+            depth += {"(": 1, ")": -1}.get(text[i], 0)
         i += 1
-        while i < len(text) and text[i] != ">":
-            if text[i] in "\n<":
-                return -1
-            i += 2 if text[i] == "\\" else 1
-        i += 1
-    else:
-        # Up to a space or an unmatched ), with at most 32 ( open; an escaped parenthesis does not count.
-        first, depth = i, 0
-        while i < len(text):
-            if text[i] == "\\" and i + 1 < len(text) and text[i + 1] in PUNCT:
-                i += 2
-            elif text[i] == "(":
-                depth += 1
-                i += 1
-                if depth > 32:
-                    return -1
-            elif text[i] == ")" and depth:
-                depth -= 1
-                i += 1
-            elif text[i] == ")" or text[i] in " \n":
-                if i == first and text[i] != ")":
-                    return -1
-                break
-            else:
-                i += 1
-    if i >= len(text):
-        return -1
     end = space(i)
-    if end > i and text[end : end + 1] in ("\"", "'", "("):
+    if text[end : end + 1] in ("\"", "'", "("):
         # A title takes the longest match: it may close at any closer with a backslash before it, but runs past no
         # other closer, and a parenthesized title past no ( without a backslash before it.
         closer = ")" if text[end] == "(" else text[end]
@@ -598,7 +582,7 @@ def link_tail(text: str, start: int) -> int:
                 if text[j - 1] != "\\":
                     break
         end = space(title)
-    return end + 1 if text[end : end + 1] == ")" else -1
+    return end if text[end : end + 1] == ")" else -1
 
 
 def inline(text: str, line: int) -> str:
@@ -637,7 +621,7 @@ def inline(text: str, line: int) -> str:
         start, end = m.span()
         if m.lastgroup == "note":
             refuse(start, NOTE)
-        if m.lastgroup == "link" and (tail := link_tail(text, end - 1)) > 0 and re.search("[`<]", text[end:tail]):
+        if m.lastgroup == "link" and re.search("[`<]", text[end : max(link_tail(text, end - 1), end)]):
             refuse(start, LINK)
         if m.lastgroup == "url" and re.search(r"[`\\]", URL_REST.match(text, end).group(0)):
             refuse(start, URL)
