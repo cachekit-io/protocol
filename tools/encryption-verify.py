@@ -23,9 +23,8 @@ Stdlib-only checks (always run):
   - Post-decryption containers (spec/encryption.md, ENC-2 and ENC-3): each row is sealed
     under the four-component AAD of the reader it names, a conforming reader of that
     container returns what its outcome says, and each mistake a note names is modelled
-    in WRONG_CONTAINER_READERS and returns a value its row's outcome forbids. The
-    MessagePack, envelope and LZ4 decoders are the stdlib ones of interop-reference.py,
-    wire-format-reference.py and interop-v2-reference.py.
+    in WRONG_CONTAINER_READERS and returns a value its row's outcome forbids, read with
+    the same stdlib decoders.
   - Keyring configurations (spec/encryption.md § Key Rotation, ENC-7 and ENC-9): each
     accept row loads, and each reject row is refused, under both readings of what
     intent-presets.md rule 1 leaves open, and no row holds a key twice in its
@@ -37,6 +36,11 @@ Stdlib-only checks (always run):
     that does not retry with an alternative AAD input refuses every row.
   - No vector table outside the ones verified here: tools/conformance.py indexes
     every list under a key ending in "vectors".
+  - Writer-shape vectors (spec/encryption.md, ENC-10) keep the AAD shape a writer emits,
+    and their plaintext is the container their compressed flag claims: a ByteStorage
+    envelope under True, one MessagePack document that is no envelope under False,
+    read with the stdlib decoders of interop-reference.py, wire-format-reference.py and
+    interop-v2-reference.py.
   - The vector count never drops below the frozen floor — vectors are
     ground truth and may be added, never removed.
 
@@ -90,6 +94,13 @@ FROZEN_VECTOR_NAMES = frozenset(
         "standard_serializer_integrity_off",
     }
 )
+
+# Vectors that pin the AAD shape a writer emits over that writer's own plaintext (spec/encryption.md, ENC-10):
+# cachekit-py's StandardSerializer with integrity checking on and off, as (format, compressed, original_type).
+WRITER_SHAPES = {
+    "standard_serializer_default": ("msgpack", True, "msgpack"),
+    "standard_serializer_integrity_off": ("msgpack", False, "msgpack"),
+}
 
 # format registry per spec/encryption.md — vectors must not invent tokens.
 FORMAT_REGISTRY = frozenset({"msgpack", "orjson", "arrow"})
@@ -250,6 +261,50 @@ def aad_v3(tenant_id: str, cache_key: str, *, fmt: str, compressed: bool, origin
     return bytes(aad)
 
 
+@functools.cache
+def _load_tool(filename: str) -> ModuleType:
+    """A sibling stdlib-only reference tool, loaded as a module (its filename is hyphenated)."""
+    path = Path(__file__).resolve().parent / filename
+    spec = importlib.util.spec_from_file_location(path.stem.replace("-", "_"), path)
+    if spec is None or spec.loader is None:
+        raise ImportError(f"cannot load {path}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def one_document(data: bytes) -> bytes | None:
+    """`data` if it is exactly one MessagePack document, else None: what a plain-MessagePack reader returns."""
+    try:
+        _load_tool("interop-reference.py").decode_value(data)
+    except ValueError:
+        return None
+    return data
+
+
+def envelope_value(data: bytes) -> bytes | None:
+    """The bytes a ByteStorage envelope holds (LZ4-decompressed, checksum unchecked), or None if `data` is not one."""
+    try:
+        compressed, _, size, _, _ = _load_tool("wire-format-reference.py").decode_envelope(data)
+        return _load_tool("interop-v2-reference.py").lz4_block_decompress(compressed, size)
+    except ValueError:
+        return None
+
+
+def writer_shape_failure(vec: dict) -> str | None:
+    """Why a WRITER_SHAPES vector no longer pins its writer's shape over that writer's container; None when it does."""
+    fmt, compressed, original_type = WRITER_SHAPES[vec["name"]]
+    if (vec["format"], vec["compressed"], vec.get("original_type")) != (fmt, compressed, original_type):
+        return f"must keep the AAD shape ({fmt}, {compressed}, {original_type}) its writer emits"
+    plaintext = bytes.fromhex(vec["plaintext_hex"])
+    envelope = envelope_value(plaintext) is not None
+    if compressed and not envelope:
+        return "claims compressed True, but its plaintext is no ByteStorage envelope"
+    if not compressed and (envelope or one_document(plaintext) is None):
+        return "claims compressed False, but its plaintext is not one plain MessagePack document"
+    return None
+
+
 def verify_sealed_vector(
     label: str, vec: dict, tenant_id: str, keys: list[bytes], *, seal: bool, original_type: str | None = None
 ) -> tuple[bytes, int | None] | None:
@@ -345,18 +400,6 @@ def verify_aad_rejects(doc: dict, key: bytes, *, seal: bool) -> int:
     return failures
 
 
-@functools.cache
-def _load_tool(filename: str) -> ModuleType:
-    """A sibling stdlib-only reference tool, loaded as a module (its filename is hyphenated)."""
-    path = Path(__file__).resolve().parent / filename
-    spec = importlib.util.spec_from_file_location(path.stem.replace("-", "_"), path)
-    if spec is None or spec.loader is None:
-        raise ImportError(f"cannot load {path}")
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
-
-
 # Post-decryption containers (spec/encryption.md § AAD v0x03 Format, ENC-2 and ENC-3). Each row names the reader whose
 # AAD sealed it and what a conforming read returns. Names are frozen and a row has exactly these fields.
 FROZEN_CONTAINER_VECTORS = {
@@ -378,15 +421,6 @@ READER_AAD: dict[str, tuple[str, bool | None, str | None]] = {
 ARROW_MAGIC = b"ARROW1"
 
 
-def one_document(data: bytes) -> bytes | None:
-    """`data` if it is exactly one MessagePack document, else None: what a plain-MessagePack reader returns."""
-    try:
-        _load_tool("interop-reference.py").decode_value(data)
-    except ValueError:
-        return None
-    return data
-
-
 def first_document(data: bytes) -> bytes | None:
     """The bytes of the first MessagePack document in `data`, whatever follows it, or None if none is complete."""
     try:
@@ -394,15 +428,6 @@ def first_document(data: bytes) -> bytes | None:
     except ValueError:
         return None
     return data[:end]
-
-
-def envelope_value(data: bytes) -> bytes | None:
-    """The bytes a ByteStorage envelope holds (LZ4-decompressed, checksum unchecked), or None if `data` is not one."""
-    try:
-        compressed, _, size, _, _ = _load_tool("wire-format-reference.py").decode_envelope(data)
-        return _load_tool("interop-v2-reference.py").lz4_block_decompress(compressed, size)
-    except ValueError:
-        return None
 
 
 def checksummed_arrow(data: bytes) -> bytes | None:
@@ -1205,6 +1230,10 @@ def verify(doc: dict, *, require_seal: bool) -> int:
     for vec in doc["vectors"]:
         name = vec["name"]
         if verify_sealed_vector(name, vec, doc["tenant_id"], [key], seal=seal, original_type=vec.get("original_type")) is None:
+            failures += 1
+            continue
+        if name in WRITER_SHAPES and (why := writer_shape_failure(vec)):
+            print(f"FAIL {name}: {why}")
             failures += 1
             continue
         print(f"ok  {name}")
