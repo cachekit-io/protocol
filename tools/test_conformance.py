@@ -1253,19 +1253,17 @@ CASES: list[Case] = [
     ("backtick in an email autolink", append(SPEC, "\na <b`c@d.e> MUST `x`\n"), 1, "this MUST has no id"),
     # GitHub takes a link's destination and title whole, shows a footnote reference without a definition as its raw
     # text, and links a bare address up to the next space or <. The checker refuses each rather than mirror it.
-    ("backtick in a link title", append(SPEC, '\na [b](/u "`") MUST `x`\n'), 1, "in a link's destination, or a link title"),
-    ("backtick in a link destination", append(SPEC, "\na [b](/u`) MUST `x`\n"), 1, "in a link's destination, or a link title"),
+    ("backtick in a link destination", append(SPEC, "\na [b](/u`) MUST `x`\n"), 1, "before the first ), as in a link title"),
     ("footnote reference", append(SPEC, "\nSee [^a `MUST` b] here.\n"), 1, "a footnote reference"),
     # Spelled as an entity, a footnote reference makes GitHub drop the rest of the page.
     ("footnote reference spelled as an entity", append(SPEC, "\nSee [&#94;a] here.\n"), 1, "a footnote reference"),
     ("backtick in a bare https:// address", append(SPEC, "\na https://x.y/`z MUST `x`\n"), 1, "in a bare www., http://"),
-    ("backtick in a bare www. address", append(SPEC, "\na www.x.y/`z MUST `x`\n"), 1, "in a bare www., http://"),
     # Backticks in link text are read as anywhere else, as the spec files use them.
     ("inline code in link text and a plain destination", append(SPEC, "\nSee [`MUST`](https://x.y/) here.\n"), 0, OK),
     # Up to its first ), a link with no backtick, <, backslash, parenthesis or quote cannot hold one past there either;
     # any of them, or a title, is refused rather than read.
-    ("link title", append(SPEC, '\nSee [b](/u "t") here.\n'), 1, "in a link's destination, or a link title"),
-    ("parenthesis in a link destination", append(SPEC, "\nSee [b](/u_(x)) here.\n"), 1, "in a link's destination"),
+    ("link title", append(SPEC, '\nSee [b](/u "t") here.\n'), 1, "before the first ), as in a link title"),
+    ("parenthesis in a link destination", append(SPEC, "\nSee [b](/u_(x)) here.\n"), 1, "after a link's ]("),
     ("text in parentheses after a link", append(SPEC, "\nSee [b](/u) (or [c](/v)) here.\n"), 0, OK),
     # A code span that opens first hides a tag inside it.
     ("tag inside a code span", append(SPEC, "\nUse `<span title='x'>MUST</span>` as markup.\n"), 0, OK),
@@ -1914,7 +1912,8 @@ REFUSED = [
     "a [b](<u `>) MUST `x`",
     "a [b](u()`) MUST `x`",
     "a [b](u\\)`) MUST `x`",
-    'a [b](u "<!--") MUST -->',
+    "a [b](/u '`') MUST `x`",
+    "a [b](u (x\\)`)) MUST `y`",
     "See [^a `MUST` b] here.",
     "a ![^b `MUST`]",
     "a [\\^b `MUST` c]",

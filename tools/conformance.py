@@ -38,14 +38,14 @@ bare www., http://, https:// or ftp:// address). Link text is read like any othe
 NOT is one keyword only where a reader sees one phrase: both words on one line, or across a
 line break inside one paragraph or heading, with nothing a reader sees between them. So an id
 after a NOT in another block, or past a literal >, never marks the MUST before it. MUST and
-NOT on two lines of an HTML block, or across a hard line break, are an error wherever the id sits: GitHub may show the two lines apart (a <pre> keeps the break,
-a <div> does not, and elements are not tracked). An HTML block is raw HTML, so only its
-comments are hidden, each as far as GitHub's HTML sanitizer ends it, at its first --> or
---!>. A keyword inside a code block, or inside an HTML comment that spans lines of an HTML
-block, is an error (a comment on one line is hidden like an inline one), unless the block is
-a fence that opens at column 0, outside every container, with <!-- not-a-requirement --> on
-the line before it: if a block were misread, an error fails closed where skipping would hide
-text.
+NOT on two lines of an HTML block, or across a hard line break, are an error wherever the id
+sits: GitHub may show the two lines apart (a <pre> keeps the break, a <div> does not, and
+elements are not tracked). An HTML block is raw HTML, so only its comments are hidden, each as
+far as GitHub's HTML sanitizer ends it, at its first --> or --!>. A keyword inside a code
+block, or inside an HTML comment that spans lines of an HTML block, is an error (a comment on
+one line is hidden like an inline one), unless the block is a fence that opens at column 0,
+outside every container, with <!-- not-a-requirement --> on the line before it: if a block were
+misread, an error fails closed where skipping would hide text.
 
 **What this does NOT catch.** It checks that a mapping exists and that it names real vectors
 and tests. It cannot check that they exercise the requirement: whether a plausible wrong
@@ -212,17 +212,17 @@ INLINE = re.compile(
 )
 # The rest of an extended autolink, past its www. or scheme: GitHub's renderer runs it to the next space or <.
 URL_REST = re.compile(r"[^ \n<]*")
-# A link's destination and title, read up to the first ) past its ](: up to there, with no backtick, <, backslash,
-# parenthesis or quote, the destination can only end at that ) or at a space with nothing but space after it, and no
-# title can open, so the renderer's link ends there too, holding none of them. Anything else is refused. The scan
-# stops at the next ( at the latest, so repeated ]( stay linear.
+# A link's destination and title, read up to the first ) past its ](. With no backtick, <, backslash, parenthesis or
+# quote up to there, nothing can nest and no title can open, so a link that forms ends at that ), holding none of
+# them; where none forms, the text is read as it stands. Anything else is refused, which fails closed. The scan stops
+# at the next ( at the latest, so repeated ]( stay linear.
 LINK_TAIL = re.compile(r"[^)`<\\(\"']*[`<\\(\"']")
 # Why inline() refuses each construct it does not mirror: a backtick or < inside one, or a backslash that ends a bare
 # address before a <, could pair with or open markup past it, so the checker would hide text GitHub shows.
 LINK = (
-    "a backtick, <, backslash, parenthesis or quote in a link's destination, or a link title; percent-encode the "
-    "character and drop the title (GitHub's renderer takes the destination and title whole, which this check does not "
-    "model)"
+    "a backtick, <, backslash, parenthesis or quote after a link's ]( and before the first ), as in a link title; "
+    "percent-encode the character and drop the title (GitHub's renderer takes a link's destination and title whole, "
+    "which this check does not model)"
 )
 NOTE = (
     "a footnote reference, or a [ that GitHub may read as one ([^, [\\^, or [ before any &); write the note in the "
@@ -555,13 +555,11 @@ def inline(text: str, line: int) -> str:
     own comment, sometimes longer, still holds every backtick in it. At the first opener that closes nothing
     (INLINE's stop), the rest of `text` is read as it stands: GitHub may hide part of it, but its reading
     there depends on renderer state this check does not keep, and reading more can only fail closed.
-    Nothing else is blanked: a keyword inside a tag, which GitHub does not show, is still read. A footnote
-    reference, a link title, a link destination that holds a backtick, <, backslash, parenthesis or quote, and
-    a bare address that holds a backtick or backslash are errors: GitHub takes each whole, so a backtick inside
-    opens no code span. A raw <pre>
-    tag is an error, and so is any <pre past a stop: GitHub closes the paragraph before the element and
-    keeps the line breaks inside it, so MUST and NOT on two of its lines would read as one phrase here and
-    show on two lines there.
+    Nothing else is blanked: a keyword inside a tag, which GitHub does not show, is still read. What could
+    hide one inside a link's destination or title, a footnote reference or a bare address is an error (LINK,
+    NOTE, URL): GitHub takes each whole, so a backtick inside opens no code span. A raw <pre> tag is an error,
+    and so is any <pre past a stop: GitHub closes the paragraph before the element and keeps the line breaks
+    inside it, so MUST and NOT on two of its lines would read as one phrase here and show on two lines there.
     """
 
     def refuse(at: int, what: str) -> None:
