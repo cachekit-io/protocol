@@ -338,11 +338,26 @@ for (const vec of doc.error_vectors) {
     }
     continue;
   }
+  // The frame parser must reject every vector but those its rejected_by sends to the serializer-name
+  // check, so a parser loosened at one of its own checks is not covered by the name check on a
+  // nameless header.
+  let parsed;
   try {
-    requireSerializerName(parseFrame(frame).header);
-    fail(vec.name, "expected rejection, parsed successfully");
+    parsed = parseFrame(frame);
   } catch {
-    ok(vec.name, "rejected");
+    if (vec.rejected_by === "serializer_name") fail(vec.name, "rejected by the frame parser, not the serializer-name check");
+    else ok(vec.name, "rejected");
+    continue;
+  }
+  if (vec.rejected_by !== "serializer_name") {
+    fail(vec.name, `expected rejection by the ${vec.rejected_by} check, parsed successfully`);
+    continue;
+  }
+  try {
+    requireSerializerName(parsed.header);
+    fail(vec.name, "expected rejection by the serializer-name check, parsed successfully");
+  } catch {
+    ok(vec.name, "rejected by the serializer-name check");
   }
 }
 
