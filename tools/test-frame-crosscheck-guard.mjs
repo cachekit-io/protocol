@@ -50,12 +50,13 @@ function buildAbsurdVector() {
     0xce, ...size32, // uint32 original_size = ABSURD_SIZE
     0xa7, ...format, // fixstr "msgpack"
   ];
-  const header = [..."{}"].map((c) => c.charCodeAt(0));
+  // A header that records a serializer name, so the frame reaches the envelope: the cross-check refuses a nameless one.
+  const header = [...'{"s":"default"}'].map((c) => c.charCodeAt(0));
   const frame = [0x43, 0x4b, 3, 0, 0, 0, header.length, ...header, ...envelope];
   return {
     name: "mutation_absurd_original_size",
     frame_hex: frame.map((b) => b.toString(16).padStart(2, "0")).join(""),
-    expected_header: {},
+    expected_header: { s: "default" },
     payload_envelope: {
       envelope_encoding: "bin",
       compressed_data_hex: "204142",

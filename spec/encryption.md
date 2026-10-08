@@ -335,9 +335,10 @@ function create_aad(tenant_id, cache_key, format, compressed, original_type=null
     return aad
 ```
 
-Reference AAD vectors — covering `compressed=False`, the `arrow` and `orjson`
+Reference AAD vectors — covering both `compressed` tokens, the `arrow` and `orjson`
 tokens, four-component AADs (the cachekit-ts / cachekit-rs shape) and five-component
-`original_type` AADs (the cachekit-py shape) — are published in
+`original_type` AADs (the cachekit-py shape, its `StandardSerializer`'s with integrity
+checking on and off among them) — are published in
 [`test-vectors/encryption.json`](../test-vectors/encryption.json) and verified in CI
 by `tools/encryption-verify.py`.
 

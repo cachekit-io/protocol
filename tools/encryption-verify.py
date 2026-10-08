@@ -68,6 +68,8 @@ FROZEN_VECTOR_NAMES = frozenset(
         "arrow_compressed",
         "orjson_uncompressed",
         "original_type_numpy",
+        "standard_serializer_default",
+        "standard_serializer_integrity_off",
     }
 )
 

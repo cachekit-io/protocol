@@ -1,6 +1,6 @@
 {
   "version": "1.4.0",
-  "generator": "extracted from cachekit-rs v0.5.1 + cachekit-ts v0.1.0 (Python ground truth); arrow/orjson/original_type vectors generated with cryptography/OpenSSL (fixed nonces) matching real cachekit-py serializer metadata, verified by tools/encryption-verify.py; master_key_input rows hand-written from one key, the sealed rows sealed with the stdlib HKDF + cryptography AES-GCM (fixed nonce)",
+  "generator": "extracted from cachekit-rs v0.5.1 + cachekit-ts v0.1.0 (Python ground truth); arrow/orjson/original_type and standard_serializer vectors generated with cryptography/OpenSSL (fixed nonces) matching real cachekit-py serializer metadata (the standard_serializer plaintexts are cachekit-py 0.22.0's own: python-frame.json's default and integrity-off payloads), verified by tools/encryption-verify.py; master_key_input rows hand-written from one key, the sealed rows sealed with the stdlib HKDF + cryptography AES-GCM (fixed nonce)",
   "algorithm": "AES-256-GCM",
   "key_derivation": "HKDF-SHA256 with cachekit_v1_ salt prefix",
   "nonce_size": 12,
@@ -118,6 +118,26 @@
       "original_type": "numpy",
       "aad_hex": "030000000e63726f73732d73646b2d7465737400000018746573743a6f726967696e616c2d747970653a6e756d7079000000076d73677061636b0000000546616c7365000000056e756d7079",
       "ciphertext_hex": "0a0b0c0d0e0f101100000003657e765491f9790882c0543d98ab280c5951a1ed"
+    },
+    {
+      "name": "standard_serializer_default",
+      "plaintext_hex": "94c422f01183a7757365725f69642aa46e616d65a863616368656b6974a6616374697665c398ccdaccf46861cc8e624bccfe20a76d73677061636b",
+      "cache_key": "test:standard:default",
+      "format": "msgpack",
+      "compressed": true,
+      "original_type": "msgpack",
+      "aad_hex": "030000000e63726f73732d73646b2d7465737400000015746573743a7374616e646172643a64656661756c74000000076d73677061636b0000000454727565000000076d73677061636b",
+      "ciphertext_hex": "0a0b0c0d0e0f1011000000042ed1d29248afcf662d0cf30bf6bc9b4857c1228517788144c0720dff2ed5eef362bda2c356b02d0da6b6653230e63aa5fd436a417d42142c1ce305bad39af86dbf0c88cb4b8f2d8f2c6f29"
+    },
+    {
+      "name": "standard_serializer_integrity_off",
+      "plaintext_hex": "83a7757365725f69642aa46e616d65a863616368656b6974a6616374697665c3",
+      "cache_key": "test:standard:integrity-off",
+      "format": "msgpack",
+      "compressed": false,
+      "original_type": "msgpack",
+      "aad_hex": "030000000e63726f73732d73646b2d746573740000001b746573743a7374616e646172643a696e746567726974792d6f6666000000076d73677061636b0000000546616c7365000000076d73677061636b",
+      "ciphertext_hex": "0a0b0c0d0e0f101100000005275a8abbe4e2c89ffd42723b89608fe7132ba8aca55b350621e6792789e510f88f9a47783090d2fa823c07bf81984708"
     }
   ],
   "default_tenant": {
