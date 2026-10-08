@@ -81,20 +81,20 @@ VECTORS_PATH = Path(__file__).resolve().parent.parent / "test-vectors" / "encryp
 TOKEN_TRUE = b"True"
 TOKEN_FALSE = b"False"
 
-# Vectors are append-only ground truth: published names may never disappear.
-# Removal or rename (even with a same-count replacement) must go red in CI.
-FROZEN_VECTOR_NAMES = frozenset(
-    {
-        "basic_bytes",
-        "special_cache_key",
-        "compressed_basic",
-        "arrow_uncompressed",
-        "arrow_compressed",
-        "orjson_uncompressed",
-        "original_type_numpy",
-        "standard_serializer_default",
-        "standard_serializer_integrity_off",
-    }
+# Vectors are append-only ground truth: a published row may never be removed, renamed or moved. Removal or rename
+# (even with a same-count replacement) and reordering must go red in CI, because consumers index rows by position as
+# well as by name (cachekit-ts and cachekit-rs read vectors[0] and accept_vectors[0]). Each frozen tuple below is in
+# file order, and frozen_order_failure holds every table to it.
+FROZEN_VECTOR_NAMES = (
+    "basic_bytes",
+    "special_cache_key",
+    "compressed_basic",
+    "arrow_uncompressed",
+    "arrow_compressed",
+    "orjson_uncompressed",
+    "original_type_numpy",
+    "standard_serializer_default",
+    "standard_serializer_integrity_off",
 )
 
 # Vectors that pin the AAD shape a writer emits over that writer's own plaintext (spec/encryption.md, ENC-10):
@@ -116,30 +116,26 @@ KEYRING_ORDER = ("k2", "k1")
 # Default-tenant conformance (spec/intent-presets.md § Master Key Input rule 5): the
 # tenant MUST be the literal "default" and the vector names are frozen like the rest.
 DEFAULT_TENANT_ID = "default"
-FROZEN_DEFAULT_TENANT_VECTOR_NAMES = frozenset({"default_tenant_interop"})
+FROZEN_DEFAULT_TENANT_VECTOR_NAMES = ("default_tenant_interop",)
 
 # Master key input (spec/intent-presets.md § Master Key Input): hex keys an entry point must accept or refuse, and raw
 # keys a raw-bytes entry point must refuse. Names are frozen per table, and each table's rows have exactly its fields.
 FROZEN_MASTER_KEY_INPUT_VECTORS = {
-    "accept_vectors": frozenset({"master_key_every_hex_digit", "master_key_first_byte_80"}),
-    "reject_vectors": frozenset(
-        {
-            "master_key_odd_65_digits",
-            "master_key_odd_63_digits",
-            "master_key_non_hex_digit",
-            "master_key_trailing_non_hex",
-            "master_key_plus_sign",
-            "master_key_31_bytes",
-            "master_key_24_bytes",
-            "master_key_16_bytes",
-            "master_key_31_bytes_and_crlf",
-            "master_key_31_bytes_with_spaces",
-            "master_key_0x_and_31_bytes",
-        }
+    "accept_vectors": ("master_key_every_hex_digit", "master_key_first_byte_80"),
+    "reject_vectors": (
+        "master_key_odd_65_digits",
+        "master_key_odd_63_digits",
+        "master_key_non_hex_digit",
+        "master_key_trailing_non_hex",
+        "master_key_plus_sign",
+        "master_key_31_bytes",
+        "master_key_24_bytes",
+        "master_key_16_bytes",
+        "master_key_31_bytes_and_crlf",
+        "master_key_31_bytes_with_spaces",
+        "master_key_0x_and_31_bytes",
     ),
-    "raw_reject_vectors": frozenset(
-        {"raw_key_31_bytes", "raw_key_24_bytes", "raw_key_16_bytes", "raw_key_33_bytes", "raw_key_ascii_hex_string"}
-    ),
+    "raw_reject_vectors": ("raw_key_31_bytes", "raw_key_24_bytes", "raw_key_16_bytes", "raw_key_33_bytes", "raw_key_ascii_hex_string"),
 }
 MASTER_KEY_INPUT_FIELDS = {
     "accept_vectors": frozenset(
@@ -247,6 +243,17 @@ VECTOR_TABLES = frozenset(
     | {"default_tenant.vectors"}
     | {f"master_key_input.{t}" for t in FROZEN_MASTER_KEY_INPUT_VECTORS}
 )
+
+
+def frozen_order_failure(table: str, rows: object, frozen: tuple[str, ...]) -> str | None:
+    """A FAIL line when `rows` do not open with the frozen rows in their frozen order, else None."""
+    names = [row.get("name") if isinstance(row, dict) else None for row in rows] if isinstance(rows, list) else []
+    if names[: len(frozen)] != list(frozen):
+        return (
+            f"FAIL frozen {table} rows missing or moved (append-only: never remove, rename or move a row): "
+            f"want {list(frozen)} first, got {names[: len(frozen)]}"
+        )
+    return None
 
 
 def hkdf_sha256(ikm: bytes, salt: bytes, info: bytes, length: int = 32) -> bytes:
@@ -703,6 +710,9 @@ def verify_keyring(keyring: dict | None, *, seal: bool) -> int:
     if missing:
         print(f"FAIL frozen keyring vectors missing: {sorted(missing)}")
         failures += 1
+    if moved := frozen_order_failure("keyring.vectors", vectors, tuple(FROZEN_KEYRING_VECTORS)):
+        print(moved)
+        failures += 1
     if not seal:
         print("note: keyring decrypt checks require cryptography — AAD, metadata and fingerprint selection only")
 
@@ -765,9 +775,12 @@ def verify_default_tenant(block: dict | None, master_key: bytes, *, seal: bool) 
         print(f"FAIL default_tenant: derived-key fingerprint mismatch (derived {key_fingerprint(key)})")
         return 1
     vectors = block.get("vectors", [])
-    missing = FROZEN_DEFAULT_TENANT_VECTOR_NAMES - {vec.get("name") for vec in vectors}
+    missing = set(FROZEN_DEFAULT_TENANT_VECTOR_NAMES) - {vec.get("name") for vec in vectors}
     if missing:
         print(f"FAIL frozen default_tenant vectors missing: {sorted(missing)}")
+        failures += 1
+    if moved := frozen_order_failure("default_tenant.vectors", vectors, FROZEN_DEFAULT_TENANT_VECTOR_NAMES):
+        print(moved)
         failures += 1
     for vec in vectors:
         name = vec["name"]
@@ -857,6 +870,14 @@ def padded_twos_complement(text: str) -> bytes | None:
         return int(text, 16).to_bytes(KEY_BYTES, "big", signed=True)
     except OverflowError:
         return None
+
+
+def java_padded(text: str) -> bytes | None:
+    """Java's new BigInteger(text, 16).toByteArray() left-padded to 32 bytes behind a strict 64-character hex check: a key
+    whose first byte is below 80 comes back right, one whose first byte is 80 or above as 33 bytes (a 00 sign byte)."""
+    if len(text) != 2 * KEY_BYTES or read_hex_key(text) is None:
+        return None
+    return twos_complement(text).rjust(KEY_BYTES, b"\0")
 
 
 def digits_swapped(text: str) -> bytes | None:
@@ -959,6 +980,14 @@ WRONG_HEX_ENTRY_POINTS: dict[str, tuple[Callable[[str], bytes | None], tuple[str
         padded_twos_complement,
         (FIRST_BYTE_80_ROW,),
     ),
+    "Java's BigInteger.toByteArray() left-padded to 32 bytes, then a check that the key is exactly 32 bytes": (
+        lambda t: behind(EXACTLY_32, java_padded(t)),
+        (FIRST_BYTE_80_ROW,),
+    ),
+    "Java's BigInteger.toByteArray() left-padded to 32 bytes, then a check for 32 bytes or more": (
+        lambda t: behind(AT_LEAST_32, java_padded(t)),
+        (FIRST_BYTE_80_ROW,),
+    ),
     "bytes reversed (a little-endian integer)": (lambda t: behind(AT_LEAST_32, bytes.fromhex(t)[::-1]), (ACCEPT_ROW,)),
     "the two digits of each byte swapped": (lambda t: behind(AT_LEAST_32, digits_swapped(t)), (ACCEPT_ROW,)),
     "a letter read as ord(c) - ord('0')": (lambda t: behind(AT_LEAST_32, digits_only_decoder(t)), (ACCEPT_ROW,)),
@@ -1048,9 +1077,9 @@ def verify_wrong_entry_points(rows: dict[str, tuple[str, dict]]) -> int:
     frozen-name guard reports it.
     """
     failures = 0
-    accept_rows = FROZEN_MASTER_KEY_INPUT_VECTORS["accept_vectors"]
-    raw_rows = FROZEN_MASTER_KEY_INPUT_VECTORS["raw_reject_vectors"]
-    hex_rows = accept_rows | FROZEN_MASTER_KEY_INPUT_VECTORS["reject_vectors"]
+    accept_rows = set(FROZEN_MASTER_KEY_INPUT_VECTORS["accept_vectors"])
+    raw_rows = set(FROZEN_MASTER_KEY_INPUT_VECTORS["raw_reject_vectors"])
+    hex_rows = accept_rows | set(FROZEN_MASTER_KEY_INPUT_VECTORS["reject_vectors"])
     listed: set[str] = set()
     for entry_points, kind in ((WRONG_HEX_ENTRY_POINTS, hex_rows), (WRONG_RAW_ENTRY_POINTS, raw_rows | accept_rows)):
         for label, (entry_point, targets) in entry_points.items():
@@ -1247,9 +1276,12 @@ def verify_master_key_input(block: dict | None, default_tenant: dict | None, mai
     rows: dict[str, tuple[str, dict]] = {}
     seen: set[str] = set()
     for table, frozen in FROZEN_MASTER_KEY_INPUT_VECTORS.items():
-        missing = frozen - {row.get("name") for row in block.get(table, [])}
+        missing = set(frozen) - {row.get("name") for row in block.get(table, [])}
         if missing:
             print(f"FAIL frozen master_key_input {table} missing (append-only, never rename or move): {sorted(missing)}")
+            failures += 1
+        if moved := frozen_order_failure(f"master_key_input.{table}", block.get(table, []), frozen):
+            print(moved)
             failures += 1
         for row in block.get(table, []):
             name = row.get("name")
@@ -1334,10 +1366,13 @@ def verify(doc: dict, *, require_seal: bool) -> int:
         print(f"FAIL unknown vector table(s) {unknown}: tools/conformance.py would index rows this verifier skips")
         return 1
 
-    missing = FROZEN_VECTOR_NAMES - {v["name"] for v in doc["vectors"]}
+    missing = set(FROZEN_VECTOR_NAMES) - {v["name"] for v in doc["vectors"]}
     if missing:
         print(f"FAIL frozen vectors missing (append-only file — never remove/rename): {sorted(missing)}")
         return 1
+    if moved := frozen_order_failure("vectors", doc["vectors"], FROZEN_VECTOR_NAMES):
+        print(moved)
+        failures += 1
 
     key = derive_encryption_key(bytes.fromhex(doc["master_key_hex"]), doc["tenant_id"])
     if key_fingerprint(key) != doc["derived_key_fingerprint_hex"]:

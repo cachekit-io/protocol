@@ -30,20 +30,22 @@ first takes its whole extent, so a backtick inside an HTML tag, an autolink, a c
 escape opens no code span. Inline code and inline comments are skipped, so a code span may
 cross a line break but never a block or cell boundary. After a run of backticks that closes
 nothing or is too long to open a code span, or a <! or <? that is not a closed comment, the
-rest of the block is read as it stands: GitHub may hide part of it, which fails closed. Links,
-footnote references and GFM's extended autolinks (a bare www. or http:// address) are read as
-plain text. MUST NOT is one keyword only where a reader sees one phrase: both words on one
-line, or across a line break inside one paragraph or heading, with nothing a reader sees
-between them. So an id after a NOT in another block, or past a literal >, never marks the
-MUST before it. MUST and NOT on two lines of an HTML block, or across a hard line break, are
-an error wherever the id sits: GitHub may show the two lines apart (a <pre> keeps the break,
-a <div> does not, and elements are not tracked). An HTML block is raw HTML, so only its
-comments are hidden, each as far as GitHub's HTML sanitizer ends it, at its first --> or
---!>. A keyword inside a code block, or inside an HTML comment that spans lines of an HTML
-block, is an error (a comment on one line is hidden like an inline one), unless the block is
-a fence that opens at column 0, outside every container, with <!-- not-a-requirement --> on
-the line before it: if a block were misread, an error fails closed where skipping would hide
-text.
+rest of the block is read as it stands: GitHub may hide part of it, which fails closed. Three
+constructs are refused rather than modelled, because GitHub takes them whole: a link title, or
+a backtick, <, backslash, parenthesis or quote in a link's destination; any footnote reference
+([^, [\\^, or a [ before any &); and a backtick or backslash in GFM's extended autolinks (a
+bare www., http://, https:// or ftp:// address). Link text is read like any other text. MUST
+NOT is one keyword only where a reader sees one phrase: both words on one line, or across a
+line break inside one paragraph or heading, with nothing a reader sees between them. So an id
+after a NOT in another block, or past a literal >, never marks the MUST before it. MUST and
+NOT on two lines of an HTML block, or across a hard line break, are an error wherever the id
+sits: GitHub may show the two lines apart (a <pre> keeps the break, a <div> does not, and
+elements are not tracked). An HTML block is raw HTML, so only its comments are hidden, each as
+far as GitHub's HTML sanitizer ends it, at its first --> or --!>. A keyword inside a code
+block, or inside an HTML comment that spans lines of an HTML block, is an error (a comment on
+one line is hidden like an inline one), unless the block is a fence that opens at column 0,
+outside every container, with <!-- not-a-requirement --> on the line before it: if a block were
+misread, an error fails closed where skipping would hide text.
 
 **What this does NOT catch.** It checks that a mapping exists and that it names real vectors
 and tests. It cannot check that they exercise the requirement: whether a plausible wrong
@@ -55,8 +57,8 @@ each one through every entry point a requirement names or assert the error it re
 and `next` going down; it cannot tell an existing id moved onto a different rule.
 
 Fails closed: an unreadable or malformed file, a duplicate JSON key, a duplicate vector name,
-a tab, vertical tab, form feed or lone carriage return in a spec file (only spaces and line
-feeds are modelled), a footnote definition, or a paragraph that opens like a link reference
+a tab, vertical tab, form feed, lone carriage return or NUL in a spec file (only spaces and line
+feeds are modelled), a footnote definition or reference, or a paragraph that opens like a link reference
 definition (GitHub moves or hides their text, which is not modelled either), a raw <pre> tag
 inside a paragraph, heading or table cell (GitHub keeps the line breaks inside it), a code
 fence open at the end of the file, an HTML block that leaves a comment open, an index that
@@ -197,9 +199,40 @@ INLINE = re.compile(
             r"(?P<stop>`+|<[!?])",
             OPEN_TAG,
             CLOSING_TAG,
+            # Three constructs GitHub reads that the checker refuses rather than mirrors (see inline()). An inline
+            # link's destination and title open at ](. A footnote reference opens at a [ whose text starts with ^,
+            # escaped or as an entity. A GFM extended autolink opens at www., or at http://, https:// or ftp:// in
+            # any case, and runs to the next space or <.
+            r"(?P<link>\]\()",
+            r"(?P<note>\[(?:\\?\^|&))",
+            r"(?P<url>(?i:https?|ftp)://|www\.)",
         )
     ),
     re.DOTALL,
+)
+# The rest of an extended autolink, past its www. or scheme: GitHub's renderer runs it to the next space or <.
+URL_REST = re.compile(r"[^ \n<]*")
+# A link's destination and title, read up to the first ) past its ](. With no backtick, <, backslash, parenthesis or
+# quote up to there, nothing can nest and no title can open, so a link that forms ends at that ), holding none of
+# them; where none forms, the text is read as it stands. Anything else is refused, which fails closed. The scan stops
+# at the next ( at the latest, so repeated ]( stay linear.
+LINK_TAIL = re.compile(r"[^)`<\\(\"']*[`<\\(\"']")
+# Why inline() refuses each construct it does not mirror: a backtick or < inside one, or a backslash that ends a bare
+# address before a <, could pair with or open markup past it, so the checker would hide text GitHub shows.
+LINK = (
+    "a backtick, <, backslash, parenthesis or quote after a link's ]( and before the first ), as in a link title; "
+    "percent-encode the character and drop the title (GitHub's renderer takes a link's destination and title whole, "
+    "which this check does not model)"
+)
+NOTE = (
+    "a footnote reference, or a [ that GitHub may read as one ([^, [\\^, or [ before any &); write the note in the "
+    "text, or escape the bracket as \\[ (GitHub shows a reference without a definition as its raw text, inline code "
+    "included)"
+)
+URL = (
+    "a backtick or backslash in a bare www., http://, https:// or ftp:// address; put the address in <…> or a link "
+    "(GitHub links it up to the next space or <, so a backtick in it opens no code span and a backslash at its end "
+    "escapes nothing)"
 )
 # A comment as GitHub's HTML sanitizer reads it, in an HTML block or again inside the renderer's own longer inline
 # comment: <!--> and <!---> are whole, and any other ends at the first --> or --!> past its <!--. It hides that.
@@ -346,6 +379,11 @@ def layout(lines: list[str]) -> list[Leaf]:
             raise Defect(
                 f"line {i + 1}: a carriage return that does not end a CRLF line; GitHub ends a line there, "
                 "and this check reads only LF and CRLF line endings"
+            )
+        if "\x00" in line:
+            raise Defect(
+                f"line {i + 1}: a NUL byte; remove it (CommonMark reads it as U+FFFD and GitHub may not render "
+                "the file at all, which this check does not model)"
             )
         if "\v" in line or "\f" in line:
             raise Defect(
@@ -517,27 +555,41 @@ def inline(text: str, line: int) -> str:
     own comment, sometimes longer, still holds every backtick in it. At the first opener that closes nothing
     (INLINE's stop), the rest of `text` is read as it stands: GitHub may hide part of it, but its reading
     there depends on renderer state this check does not keep, and reading more can only fail closed.
-    Nothing else is blanked: a keyword inside a tag, which GitHub does not show, is still read. A raw <pre>
-    tag is an error, and so is any <pre past a stop: GitHub closes the paragraph before the element and
-    keeps the line breaks inside it, so MUST and NOT on two of its lines would read as one phrase here and
-    show on two lines there.
+    Nothing else is blanked: a keyword inside a tag, which GitHub does not show, is still read. What could
+    hide one inside a link's destination or title, a footnote reference or a bare address is an error (LINK,
+    NOTE, URL): GitHub takes each whole, so a backtick inside opens no code span. A raw <pre> tag is an error,
+    and so is any <pre past a stop: GitHub closes the paragraph before the element and keeps the line breaks
+    inside it, so MUST and NOT on two of its lines would read as one phrase here and show on two lines there.
     """
+
+    def refuse(at: int, what: str) -> None:
+        raise Defect(f"line {line + text.count(chr(10), 0, at)}: {what}")
 
     def no_pre(start: int) -> None:
         if pre := PRE_TAG.search(text, start):
-            raise Defect(
-                f"line {line + text.count(chr(10), 0, pre.start())}: a raw <pre> tag inside a paragraph, heading or "
-                "table cell; start the <pre> on a line of its own (GitHub keeps the line breaks inside it, which this "
-                "check models only in an HTML block)"
+            refuse(
+                pre.start(),
+                "a raw <pre> tag inside a paragraph, heading or table cell; start the <pre> on a line of its own (GitHub "
+                "keeps the line breaks inside it, which this check models only in an HTML block)",
             )
 
     out: list[str] = []
     pos = 0
+    checked = 0  # where the last bare address checked ends: one that starts inside it is part of it
     for m in INLINE.finditer(text):
         if m.lastgroup == "stop":
             no_pre(m.start())
             break
         start, end = m.span()
+        if m.lastgroup == "note":
+            refuse(start, NOTE)
+        if m.lastgroup == "link" and LINK_TAIL.match(text, end):
+            refuse(start, LINK)
+        if m.lastgroup == "url" and start >= checked:
+            address = URL_REST.match(text, end)
+            checked = address.end()
+            if re.search(r"[`\\]", address.group(0)):
+                refuse(start, URL)
         if PRE_TAG.match(m.group(0)):
             no_pre(start)
         if m.lastgroup == "code":

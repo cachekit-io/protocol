@@ -653,6 +653,17 @@ def reheader(doc: dict, name: str, change) -> None:
     vec["expected_header"] = json.loads(raw)
 
 
+def swap_payloads(doc: dict, a: str, b: str) -> None:
+    """Swap two envelope vectors' payloads (frame bytes after the header, expected payload, envelope fields and value),
+    each keeping its own header: every vector stays self-consistent, so only a pin on what each holds can fail."""
+    vectors = {v["name"]: v for v in doc["frame_vectors"]}
+    va, vb = vectors[a], vectors[b]
+    prefix_a, prefix_b = pfr._frame_prefix_hex(va), pfr._frame_prefix_hex(vb)
+    for field in ("expected_payload_hex", "payload_envelope", "value_json"):
+        va[field], vb[field] = vb[field], va[field]
+    va["frame_hex"], vb["frame_hex"] = prefix_a + va["expected_payload_hex"], prefix_b + vb["expected_payload_hex"]
+
+
 def claim_lines(out: str) -> list[str]:
     return [line for line in out.splitlines() if line.startswith("FAIL")]
 
@@ -685,8 +696,17 @@ for label, mutate, want in (
         "the std write replaced by the pythonic write",
         lambda d: as_vector(d, "std_alias_write", "pythonic_alias_write"),
         [
-            "FAIL std_alias_write: same payload as pythonic_alias_write, so the alias writes cannot show which serializer wrote them",
+            f"FAIL std_alias_write: its envelope must hold {pfr.ALIAS_WRITES['std_alias_write']}, the MessagePack its canonical "
+            "serializer writes",
             "FAIL std_alias_write: must record the serializer name 'default' and compressed true",
+        ],
+    ),
+    (
+        "the alias writes' payloads swapped under their headers",
+        lambda d: swap_payloads(d, "std_alias_write", "pythonic_alias_write"),
+        [
+            f"FAIL {name}: its envelope must hold {inner}, the MessagePack its canonical serializer writes"
+            for name, inner in pfr.ALIAS_WRITES.items()
         ],
     ),
     (
@@ -726,7 +746,36 @@ def zero_ciphertext(doc: dict) -> None:
 
 
 
+def reheader_encrypted(doc: dict, name: str, change) -> None:
+    """Rewrite an encrypted-read vector's header with `change`, keeping its frame, HDR_LEN and expected_header in step."""
+    vec = next(v for v in doc["encrypted_read_vectors"] if v["name"] == name)
+    header, payload = pfr.parse_frame(bytes.fromhex(vec["frame_hex"]))
+    raw = json.dumps(change(header)).encode()
+    vec["frame_hex"] = (pfr.MAGIC + bytes([pfr.FRAME_VERSION]) + len(raw).to_bytes(4, "big") + raw + payload).hex()
+    vec["expected_header"] = json.loads(raw)
+
+
+def repayload_encrypted(doc: dict, name: str, payload_hex: str) -> None:
+    """Give an encrypted-read vector another payload, its frame and declaration in step."""
+    vec = next(v for v in doc["encrypted_read_vectors"] if v["name"] == name)
+    vec["frame_hex"] = vec["frame_hex"][: len(vec["frame_hex"]) - len(vec["expected_payload_hex"])] + payload_hex
+    vec["expected_payload_hex"] = payload_hex
+
+
 for label, mutate, names in (
+    ("an encrypted name frame recording default",
+     lambda d: reheader_encrypted(d, "ciphertext_serializer_name_auto", lambda h: {**h, "s": "default"}),
+     {"ciphertext_serializer_name_auto"}),
+    ("the nameless encrypted frame recording a name",
+     lambda d: reheader_encrypted(d, "ciphertext_serializer_name_missing", lambda h: {"s": "auto", **h}),
+     {"ciphertext_serializer_name_missing"}),
+    ("an encrypted name frame written for another tenant",
+     lambda d: reheader_encrypted(d, "ciphertext_serializer_name_auto",
+                                  lambda h: {**h, "m": {**h["m"], "tenant_id": "00000000-0000-4000-8000-00000000000b"}}),
+     {"ciphertext_serializer_name_auto"}),
+    ("the encrypted name frames carrying two writes",
+     lambda d: repayload_encrypted(d, "ciphertext_serializer_name_auto", "00" * 64),
+     {"ciphertext_serializer_name_auto"}),
     ("a forged frame declared as ciphertext",
      lambda d: d["encrypted_read_vectors"][0].update(header_claims="ciphertext"), {"forged_plaintext_encrypted_false"}),
     ("an outcome other than fail_closed",
