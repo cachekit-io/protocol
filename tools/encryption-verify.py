@@ -407,6 +407,8 @@ FROZEN_CONTAINER_VECTORS = {
     "container_trailing_byte_to_plain_reader": ("plain_msgpack", "error"),
     "container_plain_to_envelope_reader": ("bytestorage_envelope", "error"),
     "container_bare_arrow_to_arrow_reader": ("arrow_checksummed", "error"),
+    "container_envelope_trailing_byte_to_envelope_reader": ("bytestorage_envelope", "error"),
+    "container_plain_json_to_orjson_reader": ("orjson_checksummed", "error"),
 }
 CONTAINER_FIELDS = frozenset(
     {"name", "reader", "cache_key", "format", "compressed", "aad_hex", "plaintext_hex", "ciphertext_hex", "outcome", "note"}
@@ -417,6 +419,7 @@ READER_AAD: dict[str, tuple[str, bool | None, str | None]] = {
     "plain_msgpack": ("msgpack", False, None),
     "bytestorage_envelope": ("msgpack", True, None),
     "arrow_checksummed": ("arrow", None, "arrow"),
+    "orjson_checksummed": ("orjson", False, "orjson"),
 }
 ARROW_MAGIC = b"ARROW1"
 
@@ -430,6 +433,25 @@ def first_document(data: bytes) -> bytes | None:
     return data[:end]
 
 
+def _non_json_constant(token: str) -> object:
+    """json.loads accepts NaN and Infinity, which RFC 8259 does not."""
+    raise ValueError(f"not RFC 8259 JSON: {token}")
+
+
+def json_document(data: bytes) -> bytes | None:
+    """`data` if it is one RFC 8259 JSON document, else None."""
+    try:
+        json.loads(data.decode("utf-8"), parse_constant=_non_json_constant)
+    except ValueError:
+        return None
+    return data
+
+
+def checksummed_json(data: bytes) -> bytes | None:
+    """The JSON after an 8-byte checksum (unchecked: xxHash3-64 is not stdlib), or None without that layout."""
+    return json_document(data[8:]) if len(data) > 8 else None
+
+
 def checksummed_arrow(data: bytes) -> bytes | None:
     """The Arrow IPC file after an 8-byte checksum (unchecked: xxHash3-64 is not stdlib), or None without that layout."""
     return data[8:] if data[8 : 8 + len(ARROW_MAGIC)] == ARROW_MAGIC else None
@@ -439,6 +461,7 @@ CONFORMING_READERS: dict[str, Callable[[bytes], bytes | None]] = {
     "plain_msgpack": one_document,
     "bytestorage_envelope": envelope_value,
     "arrow_checksummed": checksummed_arrow,
+    "orjson_checksummed": checksummed_json,
 }
 
 # Plausible wrong readers, one per mistake a container note names: each returns the bytes of the value it would return,
@@ -456,6 +479,14 @@ WRONG_CONTAINER_READERS: dict[str, tuple[Callable[[bytes], bytes | None], tuple[
     "an Arrow reader that accepts Arrow IPC with no checksum prefix": (
         lambda d: d if d.startswith(ARROW_MAGIC) else checksummed_arrow(d),
         ("container_bare_arrow_to_arrow_reader",),
+    ),
+    "an envelope reader that ignores bytes after the envelope": (
+        lambda d: envelope_value(first) if (first := first_document(d)) is not None else None,
+        ("container_envelope_trailing_byte_to_envelope_reader",),
+    ),
+    "an orjson reader that falls back to plain JSON when the checksum layout does not parse": (
+        lambda d: checksummed_json(d) or json_document(d),
+        ("container_plain_json_to_orjson_reader",),
     ),
 }
 

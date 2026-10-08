@@ -301,6 +301,14 @@ STDLIB_CASES: dict[str, Case] = {
         lambda d: (dc(d, "container_bare_arrow_to_arrow_reader").pop("original_type"), reseal("container_bare_arrow_to_arrow_reader")(d)),
         "a arrow_checksummed reader builds its AAD with format arrow, original_type arrow",
     ),
+    "envelope-trailing row without its trailing byte": (
+        lambda d: reseal("container_envelope_trailing_byte_to_envelope_reader", dc(d, "container_envelope_trailing_byte_to_envelope_reader")["plaintext_hex"][:-2])(d),
+        "container_envelope_trailing_byte_to_envelope_reader: a conforming bytestorage_envelope reader returns a value from it",
+    ),
+    "plain-JSON row holding the checksummed JSON instead": (
+        lambda d: reseal("container_plain_json_to_orjson_reader", "0102030405060708" + dc(d, "container_plain_json_to_orjson_reader")["plaintext_hex"])(d),
+        "container_plain_json_to_orjson_reader: a conforming orjson_checksummed reader returns a value from it",
+    ),
     "container row naming a reader no SDK has": (
         lambda d: dc(d, "container_plain_to_envelope_reader").__setitem__("reader", "arrow"),
         "as its frozen name declares",
