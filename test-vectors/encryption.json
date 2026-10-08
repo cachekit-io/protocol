@@ -252,6 +252,47 @@
       "note": "basic_bytes's ciphertext, sealed under the cache_key test:vector:1, presented under app:test:vector:1, the key with a prefix in front. A reader whose cache_key carries a namespace or key prefix and that retries with the key stripped of it decrypts it."
     }
   ],
+  "decrypted_container": {
+    "note": "spec/encryption.md \u00a7 AAD v0x03 Format, ENC-2 and ENC-3: after decryption the container is the one the reader is configured for, never one picked by looking at the bytes or tried after another fails, and a parse mismatch hard-fails. Each row is sealed under the main master key and tenant_id with the four-component AAD of the reader it names: plain_msgpack (compressed False; cachekit-ts with compression off, cachekit-rs, interop mode) or bytestorage_envelope (compressed True; cachekit-ts with compression on). Its plaintext is a container that reader is not configured for, or one it must not unwrap. outcome is what a conforming read returns: document, the plaintext decoded as one MessagePack document (a reader whose result type cannot hold that document fails instead), or error, no value (an error, or a miss under the SDK's fail-open policy). Each note names mistakes its row catches; tools/encryption-verify.py checks that each one returns a value its row's outcome forbids.",
+    "vectors": [
+      {
+        "name": "container_envelope_to_plain_reader",
+        "reader": "plain_msgpack",
+        "cache_key": "test:container:envelope",
+        "format": "msgpack",
+        "compressed": false,
+        "aad_hex": "030000000e63726f73732d73646b2d7465737400000017746573743a636f6e7461696e65723a656e76656c6f7065000000076d73677061636b0000000546616c7365",
+        "plaintext_hex": "94c422f01183a7757365725f69642aa46e616d65a863616368656b6974a6616374697665c398ccdaccf46861cc8e624bccfe20a76d73677061636b",
+        "ciphertext_hex": "0a0b0c0d0e0f101100000006e56a19473b4920391a28a7b679f5d6b0116f3849bae902d114d15c5a8ebd0349e90425ec8510ee508708cea821b0a3e17365dd19081b1acf8b3d29c1c2fed074680628976f261f4cf7807e",
+        "outcome": "document",
+        "note": "A valid ByteStorage envelope, python-frame.json's default write payload, whose inner value is the map {user_id: 42, name: cachekit, active: true}, sealed under the AAD a plain-MessagePack reader builds. The reader decodes the plaintext as one MessagePack document, the envelope's 4-element array, and never returns the map inside it. A reader that unwraps a plaintext which parses as an envelope returns the map."
+      },
+      {
+        "name": "container_trailing_byte_to_plain_reader",
+        "reader": "plain_msgpack",
+        "cache_key": "test:container:trailing-byte",
+        "format": "msgpack",
+        "compressed": false,
+        "aad_hex": "030000000e63726f73732d73646b2d746573740000001c746573743a636f6e7461696e65723a747261696c696e672d62797465000000076d73677061636b0000000546616c7365",
+        "plaintext_hex": "83a7757365725f69642aa46e616d65a863616368656b6974a6616374697665c300",
+        "ciphertext_hex": "0a0b0c0d0e0f1011000000074f914fea1f2bd5819f8b6a438d8f5db1f2ca1124c95f6b22d004bba6746fcae2decc8b88bdaec55db1e1522132f3dc16ea",
+        "outcome": "error",
+        "note": "The same map's plain MessagePack followed by one 00 byte, sealed under the AAD a plain-MessagePack reader builds: one complete document and a byte after it, a parse mismatch, so the read returns no value. A reader that ignores bytes after the first document returns the map."
+      },
+      {
+        "name": "container_plain_to_envelope_reader",
+        "reader": "bytestorage_envelope",
+        "cache_key": "test:container:plain",
+        "format": "msgpack",
+        "compressed": true,
+        "aad_hex": "030000000e63726f73732d73646b2d7465737400000014746573743a636f6e7461696e65723a706c61696e000000076d73677061636b0000000454727565",
+        "plaintext_hex": "83a7757365725f69642aa46e616d65a863616368656b6974a6616374697665c3",
+        "ciphertext_hex": "0a0b0c0d0e0f101100000008b1cc384b53cab414c9b6b60e18cb5f20bfcbf47555f53150a3a5b7c21d5de70e1cac21d16031b17794fa32510187df1a",
+        "outcome": "error",
+        "note": "The same map's plain MessagePack, sealed under the AAD an envelope reader builds. It is not a ByteStorage envelope, so the read returns no value. A reader that falls back to plain MessagePack when the envelope does not parse returns the map."
+      }
+    ]
+  },
   "default_tenant": {
     "note": "spec/intent-presets.md \u00a7 Master Key Input rule 5: with no caller-supplied tenant every SDK MUST derive keys and build AAD with the literal \"default\". Same master key as the main set; sealed with the stdlib HKDF + cryptography AES-GCM reference (fixed nonce), verified by tools/encryption-verify.py. The cache_key is interop-mode.json key_vectors[single_int].expected_key and the plaintext is value_vectors[issue_example_object] \u2014 the vector is directly loadable as an interop-mode entry.",
     "tenant_id": "default",

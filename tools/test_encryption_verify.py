@@ -88,6 +88,31 @@ def present(**inputs: object) -> Callable[[dict], None]:
     return mutate
 
 
+def dc(doc: dict, name: str) -> dict:
+    return next(r for r in doc["decrypted_container"]["vectors"] if r["name"] == name)
+
+
+def reseal(name: str, plaintext_hex: str | None = None, **fields: object) -> Callable[[dict], None]:
+    """A container row with another plaintext or other AAD inputs, its AAD rebuilt and, when `cryptography` imports, its
+    ciphertext sealed again under its own nonce, so only the guard a case targets can fail it."""
+
+    def mutate(doc: dict) -> None:
+        row = dc(doc, name)
+        row.update(fields)
+        if plaintext_hex is not None:
+            row["plaintext_hex"] = plaintext_hex
+        aad = ev.aad_v3(doc["tenant_id"], row["cache_key"], fmt=row["format"], compressed=row["compressed"])
+        row["aad_hex"] = aad.hex()
+        if HAVE_SEAL:
+            from cryptography.hazmat.primitives.ciphers.aead import AESGCM  # noqa: PLC0415
+
+            key = ev.derive_encryption_key(bytes.fromhex(doc["master_key_hex"]), doc["tenant_id"])
+            nonce = bytes.fromhex(row["ciphertext_hex"][:24])
+            row["ciphertext_hex"] = (nonce + AESGCM(key).encrypt(nonce, bytes.fromhex(row["plaintext_hex"]), aad)).hex()
+
+    return mutate
+
+
 def kc(doc: dict, name: str) -> dict:
     return next(r for r in doc["keyring"]["configuration"]["vectors"] if r["name"] == name)
 
@@ -169,6 +194,9 @@ READING_CASES = {
     "a 0X prefix": "0X" + H,
 }
 
+# The value's plain MessagePack, the plaintext of two container rows.
+PLAIN = "83a7757365725f69642aa46e616d65a863616368656b6974a6616374697665c3"
+
 # The sealed bytes and the AAD that binds them; swapping these between vectors leaves each vector's identity in place.
 PAYLOAD_FIELDS = ("cache_key", "aad_hex", "ciphertext_hex", "plaintext_hex")
 
@@ -221,6 +249,47 @@ STDLIB_CASES: dict[str, Case] = {
         "frozen aad_reject_vectors missing",
     ),
     "aad reject row duplicated": (lambda d: d["aad_reject_vectors"].append(copy.deepcopy(ar(d))), "duplicate name"),
+    # encryption.md ENC-2 and ENC-3 — containers after decryption. The plaintexts are the rows' own: the envelope, the
+    # map's plain MessagePack (PLAIN) and that with a trailing byte.
+    "decrypted_container block deleted": (lambda d: d.pop("decrypted_container"), "decrypted_container rows missing"),
+    "envelope row holding plain MessagePack instead": (
+        lambda d: reseal("container_envelope_to_plain_reader", PLAIN)(d),
+        "unwraps a plaintext which parses as a ByteStorage envelope' returns what container_envelope_to_plain_reader's outcome allows",
+    ),
+    "trailing-byte row without its trailing byte": (
+        lambda d: reseal("container_trailing_byte_to_plain_reader", PLAIN)(d),
+        "container_trailing_byte_to_plain_reader: a conforming plain_msgpack reader returns a value from it",
+    ),
+    "plain row holding a valid envelope instead": (
+        lambda d: reseal("container_plain_to_envelope_reader", dc(d, "container_envelope_to_plain_reader")["plaintext_hex"])(d),
+        "container_plain_to_envelope_reader: a conforming bytestorage_envelope reader returns a value from it",
+    ),
+    "plain-reader row sealed with compressed True": (
+        reseal("container_trailing_byte_to_plain_reader", compressed=True),
+        "a plain_msgpack reader builds its AAD with compressed False",
+    ),
+    "container row naming a reader no SDK has": (
+        lambda d: dc(d, "container_plain_to_envelope_reader").__setitem__("reader", "arrow"),
+        "as its frozen name declares",
+    ),
+    "container row whose aad_hex is not rebuilt": (
+        lambda d: dc(d, "container_plain_to_envelope_reader").__setitem__("cache_key", "test:container:other"),
+        "AAD mismatch",
+    ),
+    "frozen container row deleted": (
+        lambda d: d["decrypted_container"]["vectors"].remove(dc(d, "container_plain_to_envelope_reader")),
+        "frozen decrypted_container rows missing",
+    ),
+    "container row with an unknown field": (
+        lambda d: dc(d, "container_plain_to_envelope_reader").__setitem__("original_type", "msgpack"),
+        "decrypted_container container_plain_to_envelope_reader: fields",
+    ),
+    "container row added with no wrong reader to show its mistake": (
+        lambda d: d["decrypted_container"]["vectors"].append(
+            {**copy.deepcopy(dc(d, "container_trailing_byte_to_plain_reader")), "name": "container_another_row"}
+        ),
+        "no wrong container reader shows why these rows exist: ['container_another_row']",
+    ),
     # encryption.md ENC-7 and ENC-9 — keyring configurations an SDK accepts or refuses at load.
     "keyring configuration block deleted": (lambda d: d["keyring"].pop("configuration"), "keyring configuration rows missing"),
     "four-key row cut to three keys": (
