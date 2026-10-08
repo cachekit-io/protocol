@@ -1463,7 +1463,15 @@ CASES: list[Case] = [
     ),
     ("id retired properly", commit_base(lambda _: None), 0, "no id dropped or un-retired since HEAD"),
     ("retired id brought back", commit_base(retire("IOP-36")), 1, "IOP-36 was retired at HEAD; a retired id stays retired"),
-    ("base without an index", lambda _: None, 0, "does not exist at"),
+    # A base from before the index also predates fixture revisions that SDKs vendor today, which --base would count
+    # as unpublished once a branch moves the working tree past them. The case is about the missing index, so no SDK
+    # vendors anything in it.
+    (
+        "base without an index",
+        both(sdks(lambda d: [sdk["fixtures"].clear() for sdk in d.values()]), report),
+        0,
+        "does not exist at",
+    ),
     ("base that does not exist", lambda _: None, 1, "--base no-such-ref: not a commit in this repository"),
 ]
 
