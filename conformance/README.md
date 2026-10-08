@@ -90,13 +90,13 @@ comment, inline or in an HTML block, ends where GitHub shows it ending: at its f
 comment, `check` reads the rest of the paragraph or table cell as plain text, so a keyword in
 inline code there needs an id even where GitHub would hide it: close or escape (`` \` ``) the
 stray backtick. GitHub takes a link's destination and title, a footnote reference and a bare
-`www.` or `http://` address whole, so a backtick inside one opens no code span; `check` does
-not model them, and refuses what could hide a keyword instead. A backtick or `<` in a link's
-destination or title is an error (percent-encode it), and so is a backtick or backslash in a
-bare address (put it in `<…>` or a link). Backticks in link text, as in ``[`x`](url)``, are
-read like any other. A table starts where a header row is followed by a delimiter row with the same number of
-cells (a one-column table needs no pipe), and its body runs to the first blank line or the
-first line that starts another block, such as a heading, a list item or an HTML block. An HTML
+`www.`, `http://`, `https://` or `ftp://` address whole, so a backtick inside one opens no code
+span; `check` does not model them, and refuses what could hide a keyword instead. A link title
+is an error, and so is a backtick, `<`, backslash, parenthesis or quote in a link's destination
+(percent-encode it). A backtick or backslash in a bare address is an error too (put the address
+in `<…>` or a link). Backticks in link text, as in ``[`x`](url)``, are read like any other. A
+table starts where a header row is followed by a delimiter row with the same number of cells
+(a one-column table needs no pipe), and its body runs to the first blank line or the first line that starts another block, such as a heading, a list item or an HTML block. An HTML
 block (a line that opens with a block tag such as `<div>` or `<details>`, up to the next blank
 line) is raw HTML: a keyword in it shows even between backticks, and only its comments are
 hidden.
@@ -124,8 +124,8 @@ A footnote definition (`[^1]: …`) is an error, and so is a paragraph that open
 bracketed label and a colon (`[label]: …`), which GitHub reads as a link reference definition.
 GitHub moves a footnote, with the lines that continue it, to the end of the page, or drops it
 when nothing cites it, and it shows no part of a definition; `check` models neither. A footnote
-reference (`[^1]`) is an error too, and so is a `[` before an escaped `^` or an entity
-(`[\^`, `[&`), which GitHub may read as one: with no definition, GitHub shows a reference as
+reference (`[^1]`) is an error too, and so is a `[` before an escaped `^` or any `&` (`[\^`,
+`[&`), which GitHub may read as one when the `&` starts an entity for `^`: with no definition, GitHub shows a reference as
 its raw text, inline code included. Put a note in the text, use inline links, and escape a
 bracket that is text (`\[label]: …`).
 

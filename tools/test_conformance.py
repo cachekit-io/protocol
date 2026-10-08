@@ -1253,15 +1253,20 @@ CASES: list[Case] = [
     ("backtick in an email autolink", append(SPEC, "\na <b`c@d.e> MUST `x`\n"), 1, "this MUST has no id"),
     # GitHub takes a link's destination and title whole, shows a footnote reference without a definition as its raw
     # text, and links a bare address up to the next space or <. The checker refuses each rather than mirror it.
-    ("backtick in a link title", append(SPEC, '\na [b](/u "`") MUST `x`\n'), 1, "in a link's destination or title"),
-    ("backtick in a link destination", append(SPEC, "\na [b](/u`) MUST `x`\n"), 1, "in a link's destination or title"),
+    ("backtick in a link title", append(SPEC, '\na [b](/u "`") MUST `x`\n'), 1, "in a link's destination, or a link title"),
+    ("backtick in a link destination", append(SPEC, "\na [b](/u`) MUST `x`\n"), 1, "in a link's destination, or a link title"),
     ("footnote reference", append(SPEC, "\nSee [^a `MUST` b] here.\n"), 1, "a footnote reference"),
     # Spelled as an entity, a footnote reference makes GitHub drop the rest of the page.
     ("footnote reference spelled as an entity", append(SPEC, "\nSee [&#94;a] here.\n"), 1, "a footnote reference"),
-    ("backtick in a bare https:// address", append(SPEC, "\na https://x.y/`z MUST `x`\n"), 1, "in a bare www. or http://"),
-    ("backtick in a bare www. address", append(SPEC, "\na www.x.y/`z MUST `x`\n"), 1, "in a bare www. or http://"),
+    ("backtick in a bare https:// address", append(SPEC, "\na https://x.y/`z MUST `x`\n"), 1, "in a bare www., http://"),
+    ("backtick in a bare www. address", append(SPEC, "\na www.x.y/`z MUST `x`\n"), 1, "in a bare www., http://"),
     # Backticks in link text are read as anywhere else, as the spec files use them.
     ("inline code in link text and a plain destination", append(SPEC, "\nSee [`MUST`](https://x.y/) here.\n"), 0, OK),
+    # Up to its first ), a link with no backtick, <, backslash, parenthesis or quote cannot hold one past there either;
+    # any of them, or a title, is refused rather than read.
+    ("link title", append(SPEC, '\nSee [b](/u "t") here.\n'), 1, "in a link's destination, or a link title"),
+    ("parenthesis in a link destination", append(SPEC, "\nSee [b](/u_(x)) here.\n"), 1, "in a link's destination"),
+    ("text in parentheses after a link", append(SPEC, "\nSee [b](/u) (or [c](/v)) here.\n"), 0, OK),
     # A code span that opens first hides a tag inside it.
     ("tag inside a code span", append(SPEC, "\nUse `<span title='x'>MUST</span>` as markup.\n"), 0, OK),
     # A tag may span lines; the blockquote's > on the second line is not part of it.
@@ -1892,15 +1897,8 @@ INLINE_LINES: list[tuple[str, bool]] = [
     ("a <!X `> MUST `y`", True),
     ("a <![cdata[ ` ]]> MUST `y`", True),
     ("a `c` d `MUST` e ``", False),
-    # where GitHub reads no link, footnote reference or bare address, a backtick opens a code span as anywhere else:
-    # a title must be the last thing before the ), and it ends at its first closer with no backslash before it
-    ('a [b](/u "`" y) MUST `x`', False),
+    # where GitHub reads no link, footnote reference or bare address, a backtick opens a code span as anywhere else
     ('a [b] (/u "`") MUST `x`', False),
-    ('a [b](u "x" "`") MUST `y`', False),
-    ('a [b](u "x"`") MUST `y`', False),
-    ('a [b](u "x" `) MUST `y`', False),
-    ("a [b](u (x(`)) MUST `y`", False),
-    ("a [b](u\n`) MUST `x`", False),
     ("a MUST [b](", True),
     ("a https://x.y/ `MUST`", False),
     ("a https://x.y/<`MUST`", False),
@@ -1913,16 +1911,10 @@ INLINE_LINES: list[tuple[str, bool]] = [
 REFUSED = [
     'a [b](/u "`") MUST `x`',
     "a [b](/u`) MUST `x`",
-    'a [b](/u\n"`") MUST `x`',
     "a [b](<u `>) MUST `x`",
-    'a [b](u "x\\"`") MUST `y`',
-    "a [b](u (x\\)`)) MUST `y`",
-    "a [b](u(`)) MUST `y`",
     "a [b](u()`) MUST `x`",
     "a [b](u\\)`) MUST `x`",
-    "a [b](u 'x\\'`') MUST `y`",
     'a [b](u "<!--") MUST -->',
-    "a [b](<!-- x>) MUST -->",
     "See [^a `MUST` b] here.",
     "a ![^b `MUST`]",
     "a [\\^b `MUST` c]",
