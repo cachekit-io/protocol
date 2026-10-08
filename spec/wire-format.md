@@ -905,15 +905,18 @@ release emitting `bin`) — Arrow-envelope frames with compression on and off
 (structural checks), and must-reject error vectors — including a CK frame fed to a
 strict interop reader.
 
-Other writes of the same value pin the serializer name a frame records
-([Cache Key Format → Serializer Codes](cache-key-format.md#serializer-codes)):
-AutoSerializer's (`s: auto`), a `StandardSerializer()` instance's
-(`s: StandardSerializer`), and writes under the aliases `std` and `pythonic`, which equal
-the `default` and `auto` writes byte for byte. The AutoSerializer and instance writes
-carry the default write's payload and metadata under another name, so a reader
-configured with `default` that skipped the name check would return the value; `verify`
-holds them to that. A write with integrity checking off pins the plain MessagePack
-container under `compressed: false`.
+Other frames pin the serializer name a frame records
+([Cache Key Format → Serializer Codes](cache-key-format.md#serializer-codes)).
+AutoSerializer's write of the same value (`s: auto`), a `StandardSerializer()`
+instance's (`s: StandardSerializer`) and a constructed frame that records the alias
+`std` as given all carry the default write's payload and metadata under another name,
+so a reader configured with `default` that skipped the name check, or resolved the
+recorded name through its alias table, would return the value; `verify` holds them to
+that. Writes under the aliases `std` and `pythonic` hold a map with a tuple, which
+StandardSerializer writes as an array and AutoSerializer marks, so their bytes show
+which serializer wrote them; `generate` proves each equals its canonical name's write.
+A write with integrity checking off pins the plain MessagePack container under
+`compressed: false`, and `verify` holds each write to the name and flag it records.
 
 Each CK error vector names, in `rejected_by`, the check that rejects it: `magic`, the
 7-byte `prefix_length`, `version`, `header_length`, or `serializer_name` for a frame
@@ -926,11 +929,12 @@ The `encrypted_read_vectors` group holds frames that a cache configured for encr
 header's) fails closed on: a plaintext payload under a header that adds
 `"encrypted": false`, a plaintext `orjson` write, two ciphertexts that do not
 authenticate under the reader's key and AAD, one sealed under another master key and
-one for another tenant, and one that does authenticate but holds plain MessagePack
-where the reader's configured container is a ByteStorage envelope
+one for another tenant, and two that do authenticate but hold plain MessagePack
+where the reader's configured container is a ByteStorage envelope, one with a header
+and AAD claiming `compressed: true` and one claiming `false`
 ([Encryption → AAD v0x03](encryption.md#additional-authenticated-data-aad): the
-container after decryption is the configured one). `header_claims` records what each
-header claims. `generate` proves against the real
+container after decryption is the configured one, never one the stored flag picks).
+`header_claims` records what each header claims. `generate` proves against the real
 cachekit-py that each read fails closed under both tamper policies. The stdlib verifier
 cannot run that read, so it pins the vector set and each frame's sha256 to what
 `generate` proved, and checks the frames' structure.

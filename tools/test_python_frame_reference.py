@@ -40,14 +40,14 @@ COMMITTED = pfr._load_fixture()
 
 FAILURES = 0
 
-# Vectors whose claims (NAME_CHECK_PAIRS, ALIAS_WRITES) are measured against the default write, the bin twin. A case
-# that mutates the twin also fails those claims; the cases that are about another check leave their lines out.
-CLAIM_VECTORS = set(pfr.NAME_CHECK_PAIRS) | set(pfr.ALIAS_WRITES)
+def fails_outside_claims(out: str, doc: dict) -> list[str]:
+    """The FAIL lines of `out` other than the frame claims' (NAME_CHECK_PAIRS, ALIAS_WRITES, WRITE_CLAIMS) on `doc`.
 
-
-def fails_outside_claims(out: str) -> list[str]:
-    """The FAIL lines of `out`, without those of the vectors the frame claims measure against the default write."""
-    return [line for line in out.splitlines() if line.startswith("FAIL") and line.split()[1].rstrip(":") not in CLAIM_VECTORS]
+    The claims measure other vectors against the default write, the bin twin, so a case that mutates the twin also
+    fails them; the cases that are about another check leave those lines out.
+    """
+    claims = {f"FAIL {line}" for line in pfr._frame_claim_failures({v["name"]: v for v in doc["frame_vectors"]})}
+    return [line for line in out.splitlines() if line.startswith("FAIL") and line not in claims]
 
 
 def check(name: str, cond: bool) -> None:
@@ -148,7 +148,7 @@ for field, mutate in MUTATIONS.items():
     check(f"mutate {field}: verify exits 1", rc == 1)
     check(f"mutate {field}: twin gate names the field", len(twin_lines) == 1 and field in twin_lines[0])
     if field in ONLY_TWIN_GATE:
-        check(f"mutate {field}: twin gate is the ONLY check that fires", fails_outside_claims(out) == twin_lines)
+        check(f"mutate {field}: twin gate is the ONLY check that fires", fails_outside_claims(out, doc) == twin_lines)
 
 # --- value_json compares type-strictly: Python's True == 1 must not pass the twin claim ---
 doc, _ = mutated(lambda t: t["value_json"].__setitem__("active", 1))
@@ -192,7 +192,7 @@ for bad_size in (32.0, True):
     rc, out = run_verify(doc)
     drift = "payload_envelope field(s) disagree with the envelope bytes: original_size"
     # The encoding-coverage floor also fires once both twins fail; that is expected.
-    vector_fails = [line for line in fails_outside_claims(out) if "envelope-encoding coverage" not in line]
+    vector_fails = [line for line in fails_outside_claims(out, doc) if "envelope-encoding coverage" not in line]
     check(
         f"original_size {bad_size!r} on both twins: verify exits 1, FAILing both vectors on the drift check only",
         rc == 1 and vector_fails == [f"FAIL {v['name']}: {drift}" for v in pair],
@@ -232,7 +232,7 @@ for label, (rewrite, got) in S_CASES.items():
     want = [f"FAIL {v['name']}: {S_FAIL}, got {got!r}" for v in pair]
     check(
         f"{label} on both twins: verify exits 1, FAILing both vectors on the s check only",
-        rc == 1 and fails_outside_claims(out) == want,
+        rc == 1 and fails_outside_claims(out, doc) == want,
     )
 
 # --- expected_header compares type-strictly: 0 must not vouch for a header carrying false ---
@@ -374,7 +374,7 @@ for bad in (["not", "an", "object"], "not an object"):
 doc = copy.deepcopy(COMMITTED)
 next(v for v in doc["frame_vectors"] if v["name"] == "raw_payload_frame")["payload_envelope"] = None
 rc, out = run_verify(doc)
-fail_lines = [line for line in out.splitlines() if line.startswith("FAIL")]
+fail_lines = fails_outside_claims(out, doc)
 check(
     "null payload_envelope on a non-twin vector: verify exits 1, and its FAIL line is the only one",
     rc == 1 and fail_lines == ["FAIL raw_payload_frame: payload_envelope must be an object, got NoneType"],
@@ -485,11 +485,8 @@ check("duplicate legacy name: failure names duplicates", "duplicate frame vector
 # The header-reorder mutation is a byte-level prefix change that every OTHER
 # verify check waves through; with twin_of gone it must verify green, and both
 # encodings are still observed, so the coverage floor holds without the claim.
-# generate rebuilds every write together, so the write under the std alias moves with the default write.
 doc, twin = mutated(reorder_header_keys)
 del twin["twin_of"]
-std_write = next(v for v in doc["frame_vectors"] if v["name"] == "std_alias_write")
-std_write["frame_hex"] = twin["frame_hex"]
 rc, out = run_verify(doc)
 check("evolution exit (twin_of dropped): diverged pair verifies green (coverage floor included)", rc == 0)
 
@@ -637,7 +634,8 @@ check(
 )
 
 
-# --- frame claims: name-check pairs carry the default write's payload, alias writes equal the canonical write ---
+# --- frame claims: name-check pairs carry the default write's payload under another name, the alias writes hold
+# payloads that tell the serializers apart, and each write records its name and compressed flag ---
 def as_vector(doc: dict, name: str, source: str) -> None:
     """Replace vector `name` with a copy of `source` under the same name: self-consistent, so only a claim can fail."""
     vectors = doc["frame_vectors"]
@@ -646,46 +644,70 @@ def as_vector(doc: dict, name: str, source: str) -> None:
     vectors[i].pop("twin_of", None)
 
 
+def reheader(doc: dict, name: str, change) -> None:
+    """Rewrite vector `name`'s header with `change`, keeping its frame, HDR_LEN and expected_header in step."""
+    vec = next(v for v in doc["frame_vectors"] if v["name"] == name)
+    header, payload = pfr.parse_frame(bytes.fromhex(vec["frame_hex"]))
+    raw = json.dumps(change(header)).encode()
+    vec["frame_hex"] = (pfr.MAGIC + bytes([pfr.FRAME_VERSION]) + len(raw).to_bytes(4, "big") + raw + payload).hex()
+    vec["expected_header"] = json.loads(raw)
+
+
 def claim_lines(out: str) -> list[str]:
     return [line for line in out.splitlines() if line.startswith("FAIL")]
 
 
 DEFAULT_WRITE = pfr.DEFAULT_WRITE
+OVER = f"over {DEFAULT_WRITE}'s payload"
 for label, mutate, want in (
     (
         "the AutoSerializer write over the integrity-off write's payload and metadata",
-        lambda d: (
-            as_vector(d, "auto_serializer_write", "integrity_checking_off_write"),
-            next(v for v in d["frame_vectors"] if v["name"] == "auto_serializer_write").update(
-                frame_hex=(
-                    pfr.MAGIC + bytes([pfr.FRAME_VERSION])
-                    + len(h := json.dumps({**(hd := pfr.parse_frame(bytes.fromhex(next(v for v in d["frame_vectors"] if v["name"] == "integrity_checking_off_write")["frame_hex"])))[0], "s": "auto"}).encode()).to_bytes(4, "big")
-                    + h + hd[1]
-                ).hex(),
-                expected_header=json.loads(h),
-            ),
-        ),
+        lambda d: (as_vector(d, "auto_serializer_write", "integrity_checking_off_write"), reheader(d, "auto_serializer_write", lambda h: {**h, "s": "auto"})),
         [
             f"FAIL auto_serializer_write: metadata differs from {DEFAULT_WRITE}'s, so a reader that skips the name check may not decode it",
-            "FAIL pythonic_alias_write: differs from auto_serializer_write, which a write under the alias must equal byte for byte",
+            "FAIL auto_serializer_write: must record the serializer name 'auto' and compressed true",
         ],
     ),
     (
         "the instance write recording default",
         lambda d: as_vector(d, "standard_serializer_instance_write", DEFAULT_WRITE),
-        ["FAIL standard_serializer_instance_write: must record the serializer name 'StandardSerializer'"],
+        [
+            f"FAIL standard_serializer_instance_write: must record the serializer name 'StandardSerializer' {OVER}",
+            "FAIL standard_serializer_instance_write: must record the serializer name 'StandardSerializer' and compressed true",
+        ],
     ),
     (
-        "the std write replaced by the AutoSerializer write",
-        lambda d: as_vector(d, "std_alias_write", "auto_serializer_write"),
-        [f"FAIL std_alias_write: differs from {DEFAULT_WRITE}, which a write under the alias must equal byte for byte"],
+        "the alias-as-given frame recording default",
+        lambda d: reheader(d, "std_recorded_as_given_frame", lambda h: {**h, "s": "default"}),
+        [f"FAIL std_recorded_as_given_frame: must record the serializer name 'std' {OVER}"],
+    ),
+    (
+        "the std write replaced by the pythonic write",
+        lambda d: as_vector(d, "std_alias_write", "pythonic_alias_write"),
+        [
+            "FAIL std_alias_write: same payload as pythonic_alias_write, so the alias writes cannot show which serializer wrote them",
+            "FAIL std_alias_write: must record the serializer name 'default' and compressed true",
+        ],
+    ),
+    (
+        "the integrity-off write claiming compressed true",
+        lambda d: reheader(d, "integrity_checking_off_write", lambda h: {**h, "m": {**h["m"], "compressed": True}}),
+        [
+            "FAIL integrity_checking_off_write: must record the serializer name 'default' and compressed false",
+            "FAIL integrity_checking_off_write: a plain MessagePack payload records compressed false, not True",
+        ],
+    ),
+    (
+        "the uncompressed Arrow write recorded as arrow",
+        lambda d: reheader(d, "arrow_compression_off_write", lambda h: {**h, "s": "arrow"}),
+        ["FAIL arrow_compression_off_write: must record the serializer name 'ArrowSerializer' and compressed false"],
     ),
     (
         "the AutoSerializer write dropped",
         lambda d: d["frame_vectors"].remove(next(v for v in d["frame_vectors"] if v["name"] == "auto_serializer_write")),
         [
             f"FAIL auto_serializer_write: the name-check pair needs both auto_serializer_write and {DEFAULT_WRITE}",
-            "FAIL pythonic_alias_write: the alias write needs both pythonic_alias_write and auto_serializer_write",
+            "FAIL auto_serializer_write: missing",
         ],
     ),
 ):

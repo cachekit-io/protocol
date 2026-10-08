@@ -45,7 +45,8 @@
             "cache-keys.json:serializer_custom_identity_non_ascii",
             "python-frame.json:std_alias_write",
             "python-frame.json:pythonic_alias_write"
-          ]
+          ],
+          "gap": "The key vectors give the identity as a string, so a reducer that keys an instance of a built-in serializer under that serializer's table code, while its frame records the class name, passes (KEY-6, KEY-9)."
         },
         "KEY-3": {
           "section": "Serializer Codes",
@@ -86,9 +87,10 @@
             "python-frame.json:standard_serializer_instance_write",
             "python-frame.json:std_alias_write",
             "python-frame.json:pythonic_alias_write",
-            "python-frame.json:arrow_compression_off_write"
+            "python-frame.json:arrow_compression_off_write",
+            "python-frame.json:std_recorded_as_given_frame"
           ],
-          "gap": "A test exercises the check by planting a frame under another configuration's reader: auto_serializer_write and standard_serializer_instance_write carry the default write's payload, so a default-configured reader that skips the check returns the value, and a reader configured with a StandardSerializer() instance must read standard_serializer_instance_write, which one that compares its key identity (<custom>:StandardSerializer) instead of the recorded name misses. A reader that decodes the payload before it compares names reaches the same outcome on every frame, so no vector shows the order."
+          "gap": "A test exercises the check by planting a frame under another configuration's reader: auto_serializer_write, standard_serializer_instance_write and std_recorded_as_given_frame carry the default write's payload, so a default-configured reader that skips the check, or resolves the recorded name through its alias table before it compares, returns the value, and a reader configured with a StandardSerializer() instance must read standard_serializer_instance_write, which one that compares its key identity (<custom>:StandardSerializer) instead of the recorded name misses. A reader that decodes the payload before it compares names reaches the same outcome on every frame, so no vector shows the order, and none records a name that differs from the reader's only in case."
         },
         "KEY-5": {
           "section": "Serializer Codes",
@@ -98,6 +100,8 @@
           ],
           "vectors": [
             "python-frame.json:forged_plaintext_orjson",
+            "python-frame.json:default_saas_write_msgpack_bytestorage_bin",
+            "python-frame.json:std_recorded_as_given_frame",
             "python-frame.json:auto_serializer_write",
             "python-frame.json:standard_serializer_instance_write",
             "python-frame.json:serializer_name_missing",
@@ -106,7 +110,7 @@
           "tests": [
             "tools/python-frame-reference.py:_require_serializer_name"
           ],
-          "gap": "The vectors show which frames a reader must reject; that the rejection reaches the caller as a miss, not as an error, is what a test asserts when it reads them through its SDK's cache rather than its frame parser."
+          "gap": "A reader configured with auto or a StandardSerializer() instance must miss on the default write, whose payload it decodes, which is the reverse pair a test plants. The vectors show which frames a reader must reject; that the rejection reaches the caller as a miss, not as an error, is what a test asserts when it reads them through its SDK's cache rather than its frame parser. No frame records a name that differs from the reader's only in case."
         },
         "KEY-6": {
           "section": "Serializer Codes",
@@ -200,17 +204,19 @@
           "section": "AAD v0x03 Format",
           "binds": "sdk",
           "vectors": [
-            "python-frame.json:ciphertext_plain_msgpack_not_envelope"
+            "python-frame.json:ciphertext_plain_msgpack_not_envelope",
+            "python-frame.json:ciphertext_plain_msgpack_claims_uncompressed"
           ],
-          "gap": "Only cachekit-py's reader configured for a ByteStorage envelope has a vector: ciphertext_plain_msgpack_not_envelope decrypts under its own AAD to plain MessagePack, which a reader that falls back to plain MessagePack, or picks the container by sniffing, returns as the value. No vector gives a plain-MessagePack reader (cachekit-ts with compression off, cachekit-rs, interop mode, cachekit-py with integrity checking off) a valid ByteStorage envelope, which a sniffing reader unwraps, or gives cachekit-py's Arrow reader bare Arrow IPC with no checksum."
+          "gap": "Only cachekit-py's reader configured for a ByteStorage envelope has vectors: ciphertext_plain_msgpack_not_envelope and ciphertext_plain_msgpack_claims_uncompressed decrypt under its own AAD to plain MessagePack, which a reader that falls back to plain MessagePack, picks the container by sniffing, or takes it from the stored compressed flag returns as the value. No vector gives a plain-MessagePack reader (cachekit-ts with compression off, cachekit-rs, interop mode, cachekit-py with integrity checking off) a valid ByteStorage envelope, which a sniffing reader unwraps, gives cachekit-py's Arrow reader bare Arrow IPC with no checksum, or gives its OrjsonSerializer reader JSON with no checksum."
         },
         "ENC-3": {
           "section": "AAD v0x03 Format",
           "binds": "sdk",
           "vectors": [
-            "python-frame.json:ciphertext_plain_msgpack_not_envelope"
+            "python-frame.json:ciphertext_plain_msgpack_not_envelope",
+            "python-frame.json:ciphertext_plain_msgpack_claims_uncompressed"
           ],
-          "gap": "Only cachekit-py's ByteStorage reader has a vector, ciphertext_plain_msgpack_not_envelope, whose plain MessagePack its envelope parse refuses, so a reader that falls back to another container on that failure returns the value. No vector decrypts to bytes a plain-MessagePack reader cannot parse, so one that ignores bytes after the first document passes."
+          "gap": "Only cachekit-py's ByteStorage reader has vectors, whose plain MessagePack its envelope parse refuses, so a reader that falls back to another container on that failure returns the value. No vector decrypts to bytes a plain-MessagePack reader cannot parse, so one that ignores bytes after the first document passes, and none holds an envelope with bytes after it, which a ByteStorage reader that ignores them returns."
         },
         "ENC-4": {
           "section": "`format` tokens",
@@ -234,7 +240,7 @@
             "python-frame.json:integrity_checking_off_write",
             "python-frame.json:arrow_compression_off_write"
           ],
-          "gap": "Only cachekit-py's writes, as plaintext and encrypted frames, and the interop AAD are pinned against the token a writer emits: no vector holds an auto-mode cachekit-ts or cachekit-rs write, and encryption.json takes the token as an input, so such a writer that emits an off-registry token passes; no SDK can seal with a fixed nonce, so only a test that decrypts what its write path stores under the aad_hex of the encryption.json vector with its shape catches it."
+          "gap": "Only cachekit-py's default, AutoSerializer, Arrow and OrjsonSerializer writes on plaintext frames, its default writes on encrypted frames, and the interop AAD are pinned against the token a writer emits: no frame holds an AutoSerializer numpy, Series or DataFrame write, no vector holds an auto-mode cachekit-ts or cachekit-rs write, and encryption.json takes the token as an input, so such a writer that emits an off-registry token passes; no SDK can seal with a fixed nonce, so only a test that decrypts what its write path stores under the aad_hex of the encryption.json vector with its shape catches it."
         },
         "ENC-6": {
           "section": "`compressed` tokens",
@@ -290,9 +296,11 @@
             "encryption.json:standard_serializer_default",
             "encryption.json:standard_serializer_integrity_off",
             "python-frame.json:integrity_checking_off_write",
-            "python-frame.json:arrow_compression_off_write"
+            "python-frame.json:arrow_compression_off_write",
+            "python-frame.json:auto_serializer_write",
+            "python-frame.json:forged_plaintext_orjson"
           ],
-          "gap": "cachekit-py's StandardSerializer writes with integrity checking on and off, and its Arrow writes with compression on and off, are pinned against the compressed flag they record, so a writer that records one flag whatever its container did fails one of each pair; the interop write is pinned against its container. The Arrow frames check frame structure, not IPC bytes, so an Arrow writer whose IPC body compression disagrees with the flag it records passes. No vector holds a cachekit-ts write, with compression on or off, or a cachekit-rs write: no SDK can seal with a fixed nonce, so only a test that decrypts what its write path stores under the aad_hex of the vector with its shape (compressed_basic, basic_bytes) catches a flag that disagrees with its container."
+          "gap": "cachekit-py's StandardSerializer writes with integrity checking on and off, and its Arrow writes with compression on and off, are pinned against the compressed flag they record, so a writer that records one flag whatever its container did fails one of each pair; the interop write is pinned against its container. The Arrow frames check frame structure, not IPC bytes, so an Arrow writer whose IPC body compression disagrees with the flag it records passes. No frame holds an AutoSerializer numpy, Series or DataFrame write, whose flag reaches an AAD only through an encryption wrapper built around AutoSerializer by hand, since cachekit-py's cache refuses AutoSerializer under encryption. No vector holds a cachekit-ts write, with compression on or off, or a cachekit-rs write: no SDK can seal with a fixed nonce, so only a test that decrypts what its write path stores under the aad_hex of the vector with its shape (compressed_basic, basic_bytes) catches a flag that disagrees with its container."
         }
       },
       "retired": {}

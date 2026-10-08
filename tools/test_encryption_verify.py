@@ -67,6 +67,29 @@ def dt(doc: dict) -> dict:
     return next(v for v in doc["default_tenant"]["vectors"] if v["name"] == "default_tenant_interop")
 
 
+def shape_vector(doc: dict, name: str) -> dict:
+    return next(v for v in doc["vectors"] if v["name"] == name)
+
+
+def reshape(name: str, **fields: object) -> Callable[[dict], None]:
+    """A vector with other fields, its AAD rebuilt and, when `cryptography` imports, its ciphertext sealed again under
+    its own nonce, so only the guard a case targets can fail it."""
+
+    def mutate(doc: dict) -> None:
+        vec = shape_vector(doc, name)
+        vec.update(fields)
+        aad = ev.aad_v3(doc["tenant_id"], vec["cache_key"], fmt=vec["format"], compressed=vec["compressed"], original_type=vec.get("original_type"))
+        vec["aad_hex"] = aad.hex()
+        if HAVE_SEAL:
+            from cryptography.hazmat.primitives.ciphers.aead import AESGCM  # noqa: PLC0415
+
+            key = ev.derive_encryption_key(bytes.fromhex(doc["master_key_hex"]), doc["tenant_id"])
+            nonce = bytes.fromhex(vec["ciphertext_hex"][:24])
+            vec["ciphertext_hex"] = (nonce + AESGCM(key).encrypt(nonce, bytes.fromhex(vec["plaintext_hex"]), aad)).hex()
+
+    return mutate
+
+
 def master_fingerprint(doc: dict, key_id: str) -> str:
     entry = next(e for e in doc["keyring"]["entries"] if e["id"] == key_id)
     return ev.key_fingerprint(bytes.fromhex(entry["master_key_hex"]))
@@ -173,6 +196,20 @@ STDLIB_CASES: dict[str, Case] = {
     "aad corrupted": lambda d: k1(d).__setitem__("aad_hex", "03" + k1(d)["aad_hex"][2:].replace("6b", "6c", 1)),
     "cache_key substituted": lambda d: k1(d).__setitem__("cache_key", "keyring:attacker:entry"),
     "frozen keyring vector renamed": lambda d: k1(d).__setitem__("name", "renamed"),
+    # encryption.md ENC-10 — writer-shape vectors keep their shape over their writer's own container. Each is sealed again,
+    # so only the shape guard rejects it.
+    "writer-shape vector resealed as compressed False": (
+        reshape("standard_serializer_default", compressed=False),
+        "must keep the AAD shape (msgpack, True, msgpack)",
+    ),
+    "writer-shape vector over plain MessagePack under compressed True": (
+        lambda d: reshape("standard_serializer_default", plaintext_hex=shape_vector(d, "standard_serializer_integrity_off")["plaintext_hex"])(d),
+        "claims compressed True, but its plaintext is no ByteStorage envelope",
+    ),
+    "writer-shape vector over an envelope under compressed False": (
+        lambda d: reshape("standard_serializer_integrity_off", plaintext_hex=shape_vector(d, "standard_serializer_default")["plaintext_hex"])(d),
+        "claims compressed False, but its plaintext is not one plain MessagePack document",
+    ),
     # intent-presets.md rule 5 — the default-tenant block is ground truth for "no tenant configured".
     "default_tenant block deleted": lambda d: d.pop("default_tenant"),
     "default_tenant is not the literal": lambda d: d["default_tenant"].__setitem__("tenant_id", "cross-sdk-test"),
