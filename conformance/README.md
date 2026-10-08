@@ -89,14 +89,18 @@ comment, inline or in an HTML block, ends where GitHub shows it ending: at its f
 `--!>`. After a run of backticks that closes nothing, or a `<!` or `<?` that is not a closed
 comment, `check` reads the rest of the paragraph or table cell as plain text, so a keyword in
 inline code there needs an id even where GitHub would hide it: close or escape (`` \` ``) the
-stray backtick. `check` reads a link's destination and title, a footnote reference and a bare
-`www.` or `http://` address as plain text, where GitHub does not, so keep backticks out of
-them. A table starts where a header row is followed by a delimiter row with the same number of
-cells (a one-column table needs no pipe), and its body runs to the first blank line or the
-first line that starts another block, such as a heading, a list item or an HTML block. An HTML
-block (a line that opens with a block tag such as `<div>` or `<details>`, up to the next blank
-line) is raw HTML: a keyword in it shows even between backticks, and only its comments are
-hidden.
+stray backtick. GitHub takes a link's destination and title, a footnote reference and a bare
+`www.`, `http://`, `https://` or `ftp://` address whole, so a backtick inside one opens no code
+span; `check` does not model them, and refuses what could hide a keyword instead. A backtick,
+`<`, backslash, parenthesis or quote after a link's `](` and before the first `)` is an error,
+so a link title is one (percent-encode the character). A backtick or backslash in a bare
+address is an error too (put the address in `<…>` or a link). Backticks in link text, as in
+``[`x`](url)``, are read like any other. A table starts where a header row is followed by a
+delimiter row with the same number of cells (a one-column table needs no pipe), and its body
+runs to the first blank line or the first line that starts another block, such as a heading, a
+list item or an HTML block. An HTML block (a line that opens with a block tag such as `<div>`
+or `<details>`, up to the next blank line) is raw HTML: a keyword in it shows even between
+backticks, and only its comments are hidden.
 
 A keyword inside a code block, or inside an HTML comment that spans lines of an HTML block, is
 an error, so that a block the checker misreads fails instead of hiding text:
@@ -113,14 +117,18 @@ an error, so that a block the checker misreads fails instead of hiding text:
 Only spaces count as indentation or make a line blank (a line of non-breaking spaces is text).
 A tab, a vertical tab, a form feed or a carriage return that does not end a CRLF line is an
 error anywhere in a spec file, because GitHub reads each differently in different places. So
+is a NUL byte, which CommonMark reads as U+FFFD and GitHub may not render at all. So
 is a code fence still open at the end of the file, or an HTML block that leaves a comment open:
 either would turn the rest of the file into code or hide it.
 
 A footnote definition (`[^1]: …`) is an error, and so is a paragraph that opens with a
 bracketed label and a colon (`[label]: …`), which GitHub reads as a link reference definition.
 GitHub moves a footnote, with the lines that continue it, to the end of the page, or drops it
-when nothing cites it, and it shows no part of a definition; `check` models neither. Put a
-note in the text, use inline links, and escape a bracket that is text (`\[label]: …`).
+when nothing cites it, and it shows no part of a definition; `check` models neither. A footnote
+reference (`[^1]`) is an error too, and so is a `[` before an escaped `^` or any `&` (`[\^`,
+`[&`), which GitHub may read as one when the `&` starts an entity for `^`: with no definition,
+GitHub shows a reference as its raw text, inline code included. Put a note in the text, use
+inline links, and escape a bracket that is text (`\[label]: …`).
 
 ## The index
 
