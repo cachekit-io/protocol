@@ -274,6 +274,9 @@ def writer_shape_failure(vec: dict) -> str | None:
     envelope = envelope_value(plaintext) is not None
     if compressed and not envelope:
         return "claims compressed True, but its plaintext is no ByteStorage envelope"
+    # ENC-10: the AAD's format is the format the serializer produced, which the envelope records.
+    if envelope and (recorded := _load_tool("wire-format-reference.py").decode_envelope(plaintext)[3]) != fmt:
+        return f"its plaintext's envelope records format {recorded!r}, not the AAD's {fmt!r}"
     if not compressed and (envelope or one_document(plaintext) is None):
         return "claims compressed False, but its plaintext is not one plain MessagePack document"
     return None
