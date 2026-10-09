@@ -124,6 +124,13 @@ def set_decrypt_only(name: str, change: Callable[[list[str]], list[str]]) -> Cal
     return lambda d: kc(d, name).__setitem__("decrypt_only_master_keys_hex", change(kc(d, name)["decrypt_only_master_keys_hex"]))
 
 
+def with_envelope_format(plaintext_hex: str, fmt: str) -> str:
+    """A ByteStorage envelope's hex with its format field replaced, everything else kept."""
+    wire = ev._load_tool("wire-format-reference.py")  # noqa: SLF001 -- the verifier's own loader
+    data, checksum, size, _, encoding = wire.decode_envelope(bytes.fromhex(plaintext_hex))
+    return wire.encode_envelope(data, checksum, size, fmt, encoding=encoding).hex()
+
+
 def shape_vector(doc: dict, name: str) -> dict:
     return next(v for v in doc["vectors"] if v["name"] == name)
 
@@ -563,6 +570,11 @@ STDLIB_CASES: dict[str, Case] = {
     "writer-shape vector over two documents under compressed False": (
         lambda d: reshape("standard_serializer_integrity_off", plaintext_hex=shape_vector(d, "standard_serializer_integrity_off")["plaintext_hex"] + "00")(d),
         "claims compressed False, but its plaintext is not one plain MessagePack document",
+    ),
+    # The same envelope with its format field saying orjson: still a valid envelope, so only the format check refuses it.
+    "writer-shape vector over an envelope that records another format": (
+        lambda d: reshape("standard_serializer_default", plaintext_hex=with_envelope_format(shape_vector(d, "standard_serializer_default")["plaintext_hex"], "orjson"))(d),
+        "its plaintext's envelope records format 'orjson', not the AAD's 'msgpack'",
     ),
     # Append-only means a published row never moves either: consumers read rows by position (accept_vectors[0]).
     "accept rows reversed": (
