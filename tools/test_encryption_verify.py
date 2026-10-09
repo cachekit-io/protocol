@@ -211,6 +211,10 @@ STDLIB_CASES: dict[str, Case] = {
         lambda d: reshape("standard_serializer_integrity_off", plaintext_hex=shape_vector(d, "standard_serializer_default")["plaintext_hex"])(d),
         "claims compressed False, but its plaintext is not one plain MessagePack document",
     ),
+    "writer-shape vector over two documents under compressed False": (
+        lambda d: reshape("standard_serializer_integrity_off", plaintext_hex=shape_vector(d, "standard_serializer_integrity_off")["plaintext_hex"] + "00")(d),
+        "claims compressed False, but its plaintext is not one plain MessagePack document",
+    ),
     # Append-only means a published row never moves either: consumers read rows by position (accept_vectors[0]).
     "accept rows reversed": (
         lambda d: d["master_key_input"]["accept_vectors"].reverse(),

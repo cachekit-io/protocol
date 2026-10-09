@@ -2,7 +2,8 @@
 // Mutation tests for guards in frame-crosscheck.mjs: the lz4BlockDecompress
 // validate-before-allocate guard, the value check on a frame whose payload is
 // plain MessagePack (no envelope), the serializer-name check on frame vectors,
-// and the hold of each error vector to the check its rejected_by names.
+// and the hold of each error vector to the frame parser or to the
+// serializer-name check, as its rejected_by says.
 // Zero dependencies. Run: node tools/test-frame-crosscheck-guard.mjs
 //
 // Evidence convention (LAB-903 / test_check_version_floors.py): a baseline
@@ -172,10 +173,11 @@ try {
     `expected exit 0, got exit ${loose.code}:\n${loose.out}`
   );
 
-  // Cases 5-7 — one fixture mutation each, which the tool must refuse with the
+  // Cases 5-8 — one fixture mutation each, which the tool must refuse with the
   // named guard's message: a frame vector that records no serializer name; a
   // serializer_name error vector the frame parser already rejects; a parseable
-  // error vector whose rejected_by names a parser check.
+  // error vector whose rejected_by names a parser check; a serializer_name error
+  // vector that parses and records a name.
   for (const [label, mutate, vector, message] of [
     [
       "a frame vector that records no serializer name",
@@ -194,6 +196,12 @@ try {
       (d) => (d.error_vectors.find((v) => v.name === "serializer_name_missing").rejected_by = "magic"),
       "serializer_name_missing",
       "expected rejection by the magic check, parsed successfully",
+    ],
+    [
+      "a serializer_name error vector that records a name",
+      (d) => reheader(d.error_vectors.find((v) => v.name === "serializer_name_missing"), (h) => ({ ...h, s: "default" })),
+      "serializer_name_missing",
+      "expected rejection by the serializer-name check, parsed successfully",
     ],
   ]) {
     const mutated = JSON.parse(readFileSync(FIXTURE, "utf-8"));
