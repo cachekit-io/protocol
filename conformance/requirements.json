@@ -44,9 +44,13 @@
             "cache-keys.json:serializer_custom_identity_orjson",
             "cache-keys.json:serializer_custom_identity_non_ascii",
             "python-frame.json:std_alias_write",
-            "python-frame.json:pythonic_alias_write"
-          ],
-          "gap": "The key vectors give the identity as a string, so a reducer that keys an instance of a built-in serializer under that serializer's table code, while its frame records the class name, passes (KEY-6, KEY-9)."
+            "python-frame.json:pythonic_alias_write",
+            "cache-keys.json:object_arrow_serializer",
+            "cache-keys.json:object_class_named_auto",
+            "cache-keys.json:object_standard_serializer",
+            "cache-keys.json:object_orjson_serializer",
+            "cache-keys.json:object_auto_serializer"
+          ]
         },
         "KEY-3": {
           "section": "Serializer Codes",
@@ -132,9 +136,13 @@
             "cache-keys.json:serializer_derived_spec_example",
             "cache-keys.json:serializer_derived_leading_zero",
             "cache-keys.json:serializer_custom_identity_orjson",
-            "cache-keys.json:serializer_custom_identity_non_ascii"
-          ],
-          "gap": "The vectors pass the identity as a string, so no vector runs the reduction of a serializer object to its identity, where an object address or a per-process hash would enter."
+            "cache-keys.json:serializer_custom_identity_non_ascii",
+            "cache-keys.json:object_arrow_serializer",
+            "cache-keys.json:object_class_named_auto",
+            "cache-keys.json:object_standard_serializer",
+            "cache-keys.json:object_orjson_serializer",
+            "cache-keys.json:object_auto_serializer"
+          ]
         },
         "KEY-7": {
           "section": "Serializer Codes",
@@ -169,9 +177,13 @@
             "cachekit-py"
           ],
           "vectors": [
-            "cache-keys.json:serializer_custom_identity"
-          ],
-          "gap": "The vector names the reduced identity as a string, so it pins the code of cachekit-py's marked identity, not the reduction: a reducer that drops the marker, so that a user class named auto takes AutoSerializer's code, passes unless a test drives the vector from a serializer object."
+            "cache-keys.json:serializer_custom_identity",
+            "cache-keys.json:object_arrow_serializer",
+            "cache-keys.json:object_class_named_auto",
+            "cache-keys.json:object_standard_serializer",
+            "cache-keys.json:object_orjson_serializer",
+            "cache-keys.json:object_auto_serializer"
+          ]
         },
         "KEY-10": {
           "section": "Serializer Codes",
@@ -179,7 +191,13 @@
           "sdks": [
             "cachekit-py"
           ],
-          "gap": "cache-keys.json holds no reject vector, so a key generator that maps an empty or non-string identity to a fallback code passes every vector."
+          "vectors": [
+            "cache-keys.json:serializer_type_empty",
+            "cache-keys.json:serializer_type_null",
+            "cache-keys.json:serializer_type_integer",
+            "cache-keys.json:serializer_type_truthy_integer"
+          ],
+          "gap": "The rows give the identity to key generation directly, so a cache that turns an empty or missing serializer into its default before key generation sees it passes them; whether a cache configured that way refuses it is SDK test code."
         },
         "KEY-11": {
           "section": "Serializer Codes",
@@ -201,25 +219,46 @@
         "ENC-1": {
           "section": "AAD v0x03 Format",
           "binds": "sdk",
-          "gap": "Every sealed vector outside the draft interop-v2 profile carries the metadata and key it was sealed under, so a reader that retries with another format or compressed value, with or without original_type, or with its key stripped of a namespace or prefix, decrypts each one at its first attempt; interop-v2.json's crypto_reject_vectors present a ciphertext under the other compressed value, but no SDK implements that draft profile, and no vector presents another format, original_type or key form."
+          "vectors": [
+            "encryption.json:aad_compressed_false_sealed_true",
+            "encryption.json:aad_compressed_true_sealed_false",
+            "encryption.json:aad_format_msgpack_sealed_arrow",
+            "encryption.json:aad_without_original_type_sealed_with",
+            "encryption.json:aad_with_original_type_sealed_without",
+            "encryption.json:aad_key_with_prefix_sealed_without",
+            "encryption.json:aad_compressed_false_sealed_true_five_components",
+            "encryption.json:aad_compressed_true_sealed_false_five_components",
+            "encryption.json:aad_without_original_type_sealed_with_msgpack",
+            "encryption.json:aad_format_arrow_sealed_msgpack"
+          ],
+          "gap": "After a retry, aad_without_original_type_sealed_with, aad_compressed_false_sealed_true_five_components, aad_without_original_type_sealed_with_msgpack and aad_format_arrow_sealed_msgpack decrypt to a container the reader that presents them reads, so the retry returns a value. aad_compressed_false_sealed_true, aad_compressed_true_sealed_false, aad_format_msgpack_sealed_arrow and aad_compressed_true_sealed_false_five_components decrypt to bytes that reader cannot read, so a retry still ends with no value and only a test that asserts the authentication failure itself, not just an empty read, tells it apart. aad_with_original_type_sealed_without and aad_key_with_prefix_sealed_without decrypt to one MessagePack document with bytes after it, which only an interop reader must refuse (ENC-3's gap), so a test asserts the authentication failure there too. A reader that builds its AAD inputs from configuration presents only the rows its configuration produces: cachekit-ts the four-component rows, the compressed flips one per compression setting, and the prefixed key through a backend key prefix; cachekit-rs and interop mode only the four-component rows with compressed False, cachekit-rs reaching the prefixed key through a namespace and interop mode, which refuses a key prefix, not at all; cachekit-py, which takes the inputs from its frame header, presents every row. A reader that retries only with AADs no row was sealed under passes, such as one that retries with one original_type value swapped for another, original_type msgpack added to a four-component compressed-False AAD, original_type dropped from a compressed-True AAD, the format changed to or from orjson, a key prefix or namespace added, another tenant, or an empty or pre-0x03 AAD."
         },
         "ENC-2": {
           "section": "AAD v0x03 Format",
           "binds": "sdk",
           "vectors": [
             "python-frame.json:ciphertext_plain_msgpack_not_envelope",
-            "python-frame.json:ciphertext_plain_msgpack_claims_uncompressed"
+            "python-frame.json:ciphertext_plain_msgpack_claims_uncompressed",
+            "encryption.json:container_envelope_to_plain_reader",
+            "encryption.json:container_plain_to_envelope_reader",
+            "encryption.json:container_bare_arrow_to_arrow_reader",
+            "encryption.json:container_plain_json_to_orjson_reader"
           ],
-          "gap": "Only cachekit-py's reader configured for a ByteStorage envelope has vectors: ciphertext_plain_msgpack_not_envelope and ciphertext_plain_msgpack_claims_uncompressed decrypt under its own AAD to plain MessagePack, which a reader that falls back to plain MessagePack, picks the container by sniffing, or takes it from the stored compressed flag returns as the value. No vector gives a plain-MessagePack reader (cachekit-ts with compression off, cachekit-rs, interop mode, cachekit-py with integrity checking off) a valid ByteStorage envelope, which a sniffing reader unwraps, gives cachekit-py's Arrow reader bare Arrow IPC with no checksum, or gives its OrjsonSerializer reader JSON with no checksum."
+          "gap": "The envelopes the rows hold are in the bin encoding, so a plain-MessagePack reader that unwraps only the legacy array-of-integers envelope passes. The plain-MessagePack rows are sealed under four-component AADs, so they do not reach cachekit-py's reader with integrity checking off, and no row gives an orjson reader with integrity checking off a checksummed payload. No row gives an Arrow or orjson reader plain MessagePack, or an envelope reader JSON, so a reader that falls back to the other family passes."
         },
         "ENC-3": {
           "section": "AAD v0x03 Format",
           "binds": "sdk",
           "vectors": [
             "python-frame.json:ciphertext_plain_msgpack_not_envelope",
-            "python-frame.json:ciphertext_plain_msgpack_claims_uncompressed"
+            "python-frame.json:ciphertext_plain_msgpack_claims_uncompressed",
+            "encryption.json:container_trailing_byte_to_interop_reader",
+            "encryption.json:container_incomplete_tail_to_interop_reader",
+            "encryption.json:container_plain_to_envelope_reader",
+            "encryption.json:container_bare_arrow_to_arrow_reader",
+            "encryption.json:container_plain_json_to_orjson_reader"
           ],
-          "gap": "Only cachekit-py's ByteStorage reader has vectors, whose plain MessagePack its envelope parse refuses, so a reader that falls back to another container on that failure returns the value. No vector decrypts to bytes a plain-MessagePack reader cannot parse, so one that ignores bytes after the first document passes, and none holds an envelope with bytes after it, which a ByteStorage reader that ignores them returns."
+          "gap": "Only interop readers are held to bytes after the document, since spec/interop-mode.md obliges them to consume exactly one: whether a reader of an auto-mode container, plain MessagePack (cachekit-ts with compression off, cachekit-rs) or a ByteStorage envelope, rejects bytes after its document or envelope is not stated, so no row asks it of them (cachekit-core ignores bytes after an envelope, and cachekit-ts refuses them). No row gives an Arrow or orjson reader plain MessagePack, or an envelope reader JSON, so a reader that falls back to the other family on a parse failure passes."
         },
         "ENC-4": {
           "section": "`format` tokens",
@@ -275,7 +314,11 @@
         "ENC-7": {
           "section": "Key Rotation (Keyring)",
           "binds": "sdk",
-          "gap": "No vector carries a keyring configuration to reject: the keyring vectors use one current and one decrypt-only key, so an SDK that truncates a fourth decrypt-only key, or rejects it only on first use, passes them."
+          "vectors": [
+            "encryption.json:keyring_three_decrypt_only_keys",
+            "encryption.json:keyring_four_decrypt_only_keys"
+          ],
+          "gap": "The rows give a configuration, not where it enters: whether a test loads each one through every way its SDK takes decrypt-only keys (CACHEKIT_PREVIOUS_MASTER_KEYS, the programmatic keyring, each constructor that reads them) is SDK test code."
         },
         "ENC-8": {
           "section": "Key Rotation (Keyring)",
@@ -285,7 +328,11 @@
         "ENC-9": {
           "section": "Key Rotation (Keyring)",
           "binds": "sdk",
-          "gap": "No vector carries a keyring configuration to reject, so an SDK that accepts its current key in the decrypt-only list passes every keyring vector."
+          "vectors": [
+            "encryption.json:keyring_current_key_decrypt_only",
+            "encryption.json:keyring_current_key_decrypt_only_uppercase"
+          ],
+          "gap": "As ENC-7, and no row repeats the current key with white space or a 0x prefix, which rule 1 leaves open, so a string comparison that folds case but keeps those passes."
         },
         "ENC-10": {
           "section": "Encryption Flow",
@@ -1164,8 +1211,11 @@
           "binds": "sdk",
           "vectors": [
             "interop-mode.json:reader_trailing_byte",
-            "python-frame.json:ck_frame_fed_to_interop_reader"
-          ]
+            "python-frame.json:ck_frame_fed_to_interop_reader",
+            "encryption.json:container_trailing_byte_to_interop_reader",
+            "encryption.json:container_incomplete_tail_to_interop_reader"
+          ],
+          "gap": "Both post-decryption rows end in exactly one byte after the document, so an end-of-input check that tolerates one stray byte after a decrypt passes them; only ck_frame_fed_to_interop_reader, a plaintext read, has more."
         },
         "IOP-20": {
           "section": "Interop Value Format",
@@ -1175,8 +1225,11 @@
           ],
           "vectors": [
             "interop-mode.json:reader_trailing_byte",
-            "python-frame.json:ck_frame_fed_to_interop_reader"
-          ]
+            "python-frame.json:ck_frame_fed_to_interop_reader",
+            "encryption.json:container_trailing_byte_to_interop_reader",
+            "encryption.json:container_incomplete_tail_to_interop_reader"
+          ],
+          "gap": "Both post-decryption rows end in exactly one byte after the document, so an end-of-input check that tolerates one stray byte after a decrypt passes them; only ck_frame_fed_to_interop_reader, a plaintext read, has more."
         },
         "IOP-21": {
           "section": "SDK Implementation Requirements",

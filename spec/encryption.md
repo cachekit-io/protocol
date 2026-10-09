@@ -340,7 +340,11 @@ tokens, four-component AADs (the cachekit-ts / cachekit-rs shape) and five-compo
 `original_type` AADs (the cachekit-py shape, its `StandardSerializer`'s with integrity
 checking on and off among them) — are published in
 [`test-vectors/encryption.json`](../test-vectors/encryption.json) and verified in CI
-by `tools/encryption-verify.py`.
+by `tools/encryption-verify.py`. The same file holds `aad_reject_vectors`, published
+ciphertexts presented under one other AAD input, which a reader that never retries
+refuses; `decrypted_container`, plaintexts sealed under a reader's own AAD in a
+container it is not configured for; and `keyring.configuration`, keyring
+configurations an SDK accepts or refuses at load.
 
 ---
 
