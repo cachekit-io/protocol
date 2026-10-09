@@ -646,7 +646,8 @@ def _verify_encrypted_reads(doc: dict) -> int:
         meta = header.get("m") if isinstance(header, dict) else None
         if name in ENCRYPTED_NAME_FRAMES:
             want = ENCRYPTED_NAME_FRAMES[name]
-            if (want is None) != ("s" not in header) or ser != want:
+            has_name = isinstance(header, dict) and "s" in header
+            if (want is None) != (not has_name) or ser != want:
                 why.append("must record no serializer name" if want is None else f"must record the serializer name {want!r}")
             if not isinstance(meta, dict) or meta.get("tenant_id") != ENCRYPTED_READER["tenant_id"]:
                 why.append("must be a write of the encrypted reader's own tenant")

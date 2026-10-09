@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Mutation tests for encryption-verify.py's keyring, default-tenant and master key input guards.
+"""Mutation tests for encryption-verify.py's guards: the vectors table, the keyring, the default tenant, master key
+input, and the models of wrong implementations each table's notes name.
 
 Same doctrine as test_wire_format_reference.py: a conformance gate is proven by
 poisoning the fixture and watching it go red, not by reading it. Every case below
@@ -276,7 +277,7 @@ STDLIB_CASES: dict[str, Case] = {
     # Deleted, not renamed: a renamed row is also a row no wrong entry point lists, which the next case's guard catches.
     "frozen master_key_input row deleted": (
         lambda d: d["master_key_input"]["raw_reject_vectors"].remove(mk(d, "raw_key_31_bytes")),
-        "frozen master_key_input raw_reject_vectors missing",
+        "frozen master_key_input.raw_reject_vectors rows missing or moved",
     ),
     "row added with no wrong entry point to show its mistake": (
         lambda d: d["master_key_input"]["reject_vectors"].append(

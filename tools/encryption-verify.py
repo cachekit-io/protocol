@@ -94,7 +94,6 @@ FORMAT_REGISTRY = frozenset({"msgpack", "orjson", "arrow"})
 # Keyring conformance vectors: frozen name -> the entry that sealed it. The
 # conformance keyring is current=k2 with decrypt-only k1 (KEYRING_ORDER).
 FROZEN_KEYRING_VECTORS = {"encrypted_with_k1": "k1", "encrypted_with_k2": "k2"}
-FROZEN_KEYRING_VECTOR_NAMES = frozenset(FROZEN_KEYRING_VECTORS)
 KEYRING_ORDER = ("k2", "k1")
 
 # Default-tenant conformance (spec/intent-presets.md § Master Key Input rule 5): the
@@ -338,10 +337,6 @@ def verify_keyring(keyring: dict | None, *, seal: bool) -> int:
     derived_fingerprints = {key_fingerprint(derived): key_id for key_id, derived in derived_keys.items()}
 
     vectors = keyring.get("vectors", [])
-    missing = FROZEN_KEYRING_VECTOR_NAMES - {vec.get("name") for vec in vectors}
-    if missing:
-        print(f"FAIL frozen keyring vectors missing: {sorted(missing)}")
-        failures += 1
     if moved := frozen_order_failure("keyring.vectors", vectors, tuple(FROZEN_KEYRING_VECTORS)):
         print(moved)
         failures += 1
@@ -407,10 +402,6 @@ def verify_default_tenant(block: dict | None, master_key: bytes, *, seal: bool) 
         print(f"FAIL default_tenant: derived-key fingerprint mismatch (derived {key_fingerprint(key)})")
         return 1
     vectors = block.get("vectors", [])
-    missing = set(FROZEN_DEFAULT_TENANT_VECTOR_NAMES) - {vec.get("name") for vec in vectors}
-    if missing:
-        print(f"FAIL frozen default_tenant vectors missing: {sorted(missing)}")
-        failures += 1
     if moved := frozen_order_failure("default_tenant.vectors", vectors, FROZEN_DEFAULT_TENANT_VECTOR_NAMES):
         print(moved)
         failures += 1
@@ -774,10 +765,6 @@ def verify_master_key_input(block: dict | None, default_tenant: dict | None, mai
     rows: dict[str, tuple[str, dict]] = {}
     seen: set[str] = set()
     for table, frozen in FROZEN_MASTER_KEY_INPUT_VECTORS.items():
-        missing = set(frozen) - {row.get("name") for row in block.get(table, [])}
-        if missing:
-            print(f"FAIL frozen master_key_input {table} missing (append-only, never rename or move): {sorted(missing)}")
-            failures += 1
         if moved := frozen_order_failure(f"master_key_input.{table}", block.get(table, []), frozen):
             print(moved)
             failures += 1
