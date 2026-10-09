@@ -741,6 +741,32 @@ for label, mutate, want in (
         ],
     ),
     (
+        "the default write dropped",
+        lambda d: d["frame_vectors"].remove(next(v for v in d["frame_vectors"] if v["name"] == DEFAULT_WRITE)),
+        [
+            *(f"FAIL {name}: the name-check pair needs both {name} and {DEFAULT_WRITE}" for name in pfr.NAME_CHECK_PAIRS),
+            f"FAIL {DEFAULT_WRITE}: missing",
+        ],
+    ),
+    (
+        "a name-check frame whose header is a number",
+        lambda d: reheader(d, "frame_vectors", "std_recorded_as_given_frame", lambda h: 7),
+        [
+            "FAIL std_recorded_as_given_frame: frame header must record the serializer name as a non-empty string in 's', got None",
+            f"FAIL std_recorded_as_given_frame: must record the serializer name 'std' {OVER}",
+            "FAIL std_recorded_as_given_frame: a ByteStorage envelope payload records compressed true, not None",
+        ],
+    ),
+    (
+        "an alias write whose envelope is not an object",
+        lambda d: next(v for v in d["frame_vectors"] if v["name"] == "std_alias_write").__setitem__("payload_envelope", "x"),
+        [
+            "FAIL std_alias_write: payload_envelope must be an object, got str",
+            f"FAIL std_alias_write: its envelope must hold {pfr.ALIAS_WRITES['std_alias_write']}, the MessagePack its canonical "
+            "serializer writes",
+        ],
+    ),
+    (
         "the AutoSerializer write dropped",
         lambda d: d["frame_vectors"].remove(next(v for v in d["frame_vectors"] if v["name"] == "auto_serializer_write")),
         [
@@ -804,13 +830,26 @@ for label, mutate, want in (
      {f"FAIL {NAME_AUTO}: {OWN_TENANT}", f"FAIL {NAME_MISSING}: {OWN_TENANT}"}),
     ("the encrypted name frames carrying two writes",
      lambda d: repayload_encrypted(d, NAME_AUTO, "00" * 64), {ONE_WRITE}),
-    ("an encrypted name frame whose header is JSON null",
-     lambda d: reheader(d, "encrypted_read_vectors", NAME_AUTO, lambda h: None),
-     {f"FAIL {NAME_AUTO}: must record the serializer name 'auto'", f"FAIL {NAME_AUTO}: {OWN_TENANT}",
-      f"FAIL {NAME_AUTO}: header claims plaintext, vector declares 'ciphertext'", ONE_WRITE}),
-    ("another encrypted-read frame recording no serializer name",
-     lambda d: reheader(d, "encrypted_read_vectors", "ciphertext_other_tenant", lambda h: {k: v for k, v in h.items() if k != "s"}),
-     {"FAIL ciphertext_other_tenant: no serializer name in 's'"}),
+    ("the nameless encrypted frame recording a null name",
+     lambda d: reheader(d, "encrypted_read_vectors", NAME_MISSING, lambda h: {**h, "s": None}),
+     {f"FAIL {NAME_MISSING}: must record no serializer name"}),
+    *(
+        (f"an encrypted name frame whose header is JSON {json.dumps(header)}",
+         lambda d, header=header: reheader(d, "encrypted_read_vectors", NAME_AUTO, lambda h: header),
+         {f"FAIL {NAME_AUTO}: must record the serializer name 'auto'", f"FAIL {NAME_AUTO}: {OWN_TENANT}",
+          f"FAIL {NAME_AUTO}: header claims plaintext, vector declares 'ciphertext'", ONE_WRITE})
+        for header in (None, 7, "x", [1], True)
+    ),
+    *(
+        (f"another encrypted-read frame recording {label}",
+         lambda d, change=change: reheader(d, "encrypted_read_vectors", "ciphertext_other_tenant", change),
+         {"FAIL ciphertext_other_tenant: no serializer name in 's'"})
+        for label, change in (
+            ("no serializer name", lambda h: {k: v for k, v in h.items() if k != "s"}),
+            ("an empty serializer name", lambda h: {**h, "s": ""}),
+            ("a number as its serializer name", lambda h: {**h, "s": 5}),
+        )
+    ),
 ):
     doc = copy.deepcopy(COMMITTED)
     mutate(doc)

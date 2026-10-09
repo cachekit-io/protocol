@@ -664,7 +664,11 @@ def _verify_encrypted_reads(doc: dict) -> int:
         if not why:
             print(f"ok   {name} (header claims {claims}; an encrypted reader fails closed)")
     pair = [v for v in vectors if v["name"] in ENCRYPTED_NAME_FRAMES]
-    carried = {(json.dumps((v.get("expected_header") or {}).get("m"), sort_keys=True), v.get("expected_payload_hex")) for v in pair}
+    carried = set()
+    for v in pair:
+        declared = v.get("expected_header")
+        meta = declared.get("m") if isinstance(declared, dict) else None
+        carried.add((json.dumps(meta, sort_keys=True), v.get("expected_payload_hex")))
     if len(pair) == len(ENCRYPTED_NAME_FRAMES) and len(carried) != 1:
         first, second = ENCRYPTED_NAME_FRAMES
         print(f"FAIL {first}: must carry {second}'s write under the same metadata, so the two differ only in the name")
