@@ -178,32 +178,33 @@ ROW_CHARACTERS = frozenset(string.printable)
 # differ from its own in one component. A reader that retries with the input it was sealed under decrypts a row; a
 # reader that never retries fails authentication. Names are frozen in file order, each with the vector whose
 # ciphertext it carries, the input it changes, the value it presents (None: the component is absent), the container of
-# the reader that presents it, and whether that reader, once a retry has decrypted the row, reads a value from the
-# plaintext; where it does not, only a test that asserts the authentication failure tells a retry apart. A row has
-# exactly these fields, original_type optional.
-FROZEN_AAD_REJECT_VECTORS: dict[str, tuple[str, str, object, str, bool]] = {
-    "aad_compressed_false_sealed_true": ("compressed_basic", "compressed", False, "plain_msgpack", False),
-    "aad_compressed_true_sealed_false": ("basic_bytes", "compressed", True, "bytestorage_envelope", False),
-    "aad_format_msgpack_sealed_arrow": ("arrow_uncompressed", "format", "msgpack", "arrow_checksummed", False),
-    "aad_without_original_type_sealed_with": ("original_type_numpy", "original_type", None, "plain_msgpack", True),
-    "aad_with_original_type_sealed_without": ("basic_bytes", "original_type", "msgpack", "plain_msgpack", False),
-    "aad_key_with_prefix_sealed_without": ("basic_bytes", "cache_key", "app:test:vector:1", "plain_msgpack", False),
-    "aad_compressed_false_sealed_true_five_components": ("standard_serializer_default", "compressed", False, "plain_msgpack", True),
+# the reader that presents it, and what that reader reads once a retry has decrypted the row (retry_outcome): "value",
+# "none", or "unstated" when only a reader that ignores bytes after the document reads a value. Where it reads none, or
+# the outcome is unstated, only a test that asserts the authentication failure tells a retry apart. A row has exactly
+# these fields, original_type optional.
+FROZEN_AAD_REJECT_VECTORS: dict[str, tuple[str, str, object, str, str]] = {
+    "aad_compressed_false_sealed_true": ("compressed_basic", "compressed", False, "plain_msgpack", "none"),
+    "aad_compressed_true_sealed_false": ("basic_bytes", "compressed", True, "bytestorage_envelope", "none"),
+    "aad_format_msgpack_sealed_arrow": ("arrow_uncompressed", "format", "msgpack", "arrow_checksummed", "none"),
+    "aad_without_original_type_sealed_with": ("original_type_numpy", "original_type", None, "plain_msgpack", "value"),
+    "aad_with_original_type_sealed_without": ("basic_bytes", "original_type", "msgpack", "plain_msgpack", "unstated"),
+    "aad_key_with_prefix_sealed_without": ("basic_bytes", "cache_key", "app:test:vector:1", "plain_msgpack", "unstated"),
+    "aad_compressed_false_sealed_true_five_components": ("standard_serializer_default", "compressed", False, "plain_msgpack", "value"),
     "aad_compressed_true_sealed_false_five_components": (
         "standard_serializer_integrity_off",
         "compressed",
         True,
         "bytestorage_envelope",
-        False,
+        "none",
     ),
     "aad_without_original_type_sealed_with_msgpack": (
         "standard_serializer_default",
         "original_type",
         None,
         "bytestorage_envelope",
-        True,
+        "value",
     ),
-    "aad_format_arrow_sealed_msgpack": ("standard_serializer_default", "format", "arrow", "bytestorage_envelope", True),
+    "aad_format_arrow_sealed_msgpack": ("standard_serializer_default", "format", "arrow", "bytestorage_envelope", "value"),
 }
 AAD_REJECT_FIELDS = frozenset({"name", "sealed_as", "cache_key", "format", "compressed", "aad_hex", "ciphertext_hex", "note"})
 AAD_INPUTS = ("cache_key", "format", "compressed", "original_type")
@@ -425,10 +426,6 @@ def verify_aad_rejects(doc: dict, key: bytes, *, seal: bool) -> int:
         print("FAIL aad_reject_vectors missing, or a row that is not an object with a string name")
         return 1
     failures = 0
-    missing = set(FROZEN_AAD_REJECT_VECTORS) - {row["name"] for row in rows}
-    if missing:
-        print(f"FAIL frozen aad_reject_vectors missing (append-only, never rename): {sorted(missing)}")
-        failures += 1
     if moved := frozen_order_failure("aad_reject_vectors", rows, tuple(FROZEN_AAD_REJECT_VECTORS)):
         print(moved)
         failures += 1
@@ -474,18 +471,15 @@ def verify_aad_rejects(doc: dict, key: bytes, *, seal: bool) -> int:
             print(f"FAIL {label}: differs from {row['sealed_as']} in {differs or 'no'} AAD input(s); a row presents exactly one alternative")
             failures += 1
             continue
-        sealed_as, component, presented, container, retry_value = FROZEN_AAD_REJECT_VECTORS.get(
+        sealed_as, component, presented, container, retry = FROZEN_AAD_REJECT_VECTORS.get(
             name, (row["sealed_as"], differs[0], row.get(differs[0]), None, None)
         )
         if row["sealed_as"] != sealed_as or differs != [component] or row.get(component) != presented:
             print(f"FAIL {label}: must carry {sealed_as}'s ciphertext and present {component} {presented!r}, as its frozen name declares")
             failures += 1
             continue
-        if container is not None and (CONFORMING_READERS[container](bytes.fromhex(base["plaintext_hex"])) is not None) != retry_value:
-            print(
-                f"FAIL {label}: a {container} reader that retried {'would not' if retry_value else 'would'} read a value from "
-                f"{sealed_as}'s plaintext, against what its frozen name declares"
-            )
+        if container is not None and (got := retry_outcome(container, bytes.fromhex(base["plaintext_hex"]))) != retry:
+            print(f"FAIL {label}: a {container} reader that retried reads {got!r} from {sealed_as}'s plaintext, not {retry!r} as its frozen name declares")
             failures += 1
             continue
         if seal and decrypt_with_keyring([key], bytes.fromhex(row["ciphertext_hex"]), aad) is not None:
@@ -523,10 +517,10 @@ def verify_aad_rejects(doc: dict, key: bytes, *, seal: bool) -> int:
 
 
 # Post-decryption containers (spec/encryption.md § AAD v0x03 Format, ENC-2 and ENC-3). Each row names the reader whose
-# AAD sealed it and what a conforming read returns. Names are frozen and a row has exactly these fields.
-# Each row's plaintext is pinned by its sha256: the bytes its note names (python-frame.json's and interop-mode.json's),
-# which no structural check here can tell from a lookalike (an Arrow IPC file, an envelope with a valid checksum). Names
-# are frozen in file order.
+# AAD sealed it and what a conforming read returns, and has exactly these fields. Names are frozen in file order, each
+# with its reader, its outcome and the sha256 of its plaintext: the bytes its note names (python-frame.json's and
+# interop-mode.json's), which no structural check here can tell from a lookalike (an Arrow IPC file, an envelope with a
+# valid checksum).
 FROZEN_CONTAINER_VECTORS = {
     "container_envelope_to_plain_reader": ("plain_msgpack", "not_unwrapped", "d010549e486e806ba50c56f199cc91faac5a1cf796b8f36a6cc57e5fa69b0493"),
     "container_trailing_byte_to_interop_reader": ("interop", "error", "8c280077d054f1c13e0ae440a9195e19d650ba2ac7bde15e879f4b542b499287"),
@@ -606,6 +600,24 @@ CONFORMING_READERS: dict[str, Callable[[bytes], bytes | None]] = {
     "orjson_checksummed": checksummed_json,
 }
 
+# The same readers when they ignore bytes after the first document. Only an interop reader must refuse those bytes
+# (spec/interop-mode.md); for the auto-mode containers it is not stated (ENC-3's gap), so a fact that turns on them is
+# recorded as unstated, never decided by a row.
+TOLERANT_READERS: dict[str, Callable[[bytes], bytes | None]] = {
+    **CONFORMING_READERS,
+    "plain_msgpack": first_document,
+    "bytestorage_envelope": lambda d: envelope_value(first) if (first := first_document(d)) is not None else None,
+}
+
+
+def retry_outcome(container: str, plaintext: bytes) -> str:
+    """What a `container` reader reads from `plaintext`: "value" under both readings, "none" under both, "unstated"
+    when only the reading that ignores bytes after the document returns a value."""
+    if CONFORMING_READERS[container](plaintext) is not None:
+        return "value"
+    return "unstated" if TOLERANT_READERS[container](plaintext) is not None else "none"
+
+
 # Plausible wrong readers, one per mistake a container note names: each returns the bytes of the value it would return,
 # or None for none, and must return a value its row's outcome forbids; it lists a row only if that row's note names it.
 WRONG_CONTAINER_READERS: dict[str, tuple[Callable[[bytes], bytes | None], tuple[str, ...]]] = {
@@ -653,10 +665,6 @@ def verify_decrypted_containers(doc: dict, key: bytes, *, seal: bool) -> int:
     failures = 0
     if not isinstance(block.get("note"), str) or not block["note"].strip():
         print("FAIL decrypted_container: note must be a non-empty string")
-        failures += 1
-    missing = set(FROZEN_CONTAINER_VECTORS) - {row.get("name") for row in block["vectors"]}
-    if missing:
-        print(f"FAIL frozen decrypted_container rows missing (append-only, never rename): {sorted(missing)}")
         failures += 1
     if moved := frozen_order_failure("decrypted_container.vectors", vectors, tuple(FROZEN_CONTAINER_VECTORS)):
         print(moved)
@@ -1246,10 +1254,6 @@ def verify_keyring_configurations(keyring: dict | None) -> int:
     failures = 0
     if not isinstance(block.get("note"), str) or not block["note"].strip():
         print("FAIL keyring configuration: note must be a non-empty string")
-        failures += 1
-    missing = set(FROZEN_KEYRING_CONFIGURATIONS) - {row["name"] for row in vectors}
-    if missing:
-        print(f"FAIL frozen keyring configuration rows missing (append-only, never rename): {sorted(missing)}")
         failures += 1
     if moved := frozen_order_failure("keyring.configuration.vectors", vectors, tuple(FROZEN_KEYRING_CONFIGURATIONS)):
         print(moved)

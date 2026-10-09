@@ -240,7 +240,7 @@
       "original_type": "msgpack",
       "aad_hex": "030000000e63726f73732d73646b2d746573740000000d746573743a766563746f723a31000000076d73677061636b0000000546616c7365000000076d73677061636b",
       "ciphertext_hex": "f8f69c70000000000000000087d9ec09f2c2347a4b37d5330ccf50e3c31e69642801bef5",
-      "note": "basic_bytes's ciphertext, sealed with four components, presented with the fifth component original_type msgpack, as cachekit-py's StandardSerializer with integrity checking off builds it. A reader that retries without original_type after a five-component attempt fails, to read entries cachekit-ts, cachekit-rs or interop mode wrote, decrypts it, to bytes that are not one MessagePack document, so a plain-MessagePack reader that refuses bytes after the first document still ends with no value and only a test that asserts the authentication failure itself tells the retry apart."
+      "note": "basic_bytes's ciphertext, sealed with four components, presented with the fifth component original_type msgpack, as cachekit-py's StandardSerializer with integrity checking off builds it. A reader that retries without original_type after a five-component attempt fails, to read entries cachekit-ts, cachekit-rs or interop mode wrote, decrypts it, to 01 and seven more bytes: one MessagePack document with bytes after it. A plain-MessagePack reader that refuses those bytes still ends with no value, and one that ignores them returns 1. Only an interop reader must refuse them (spec/interop-mode.md), so a test tells a retry apart only by asserting the authentication failure itself."
     },
     {
       "name": "aad_key_with_prefix_sealed_without",
@@ -250,7 +250,7 @@
       "compressed": false,
       "aad_hex": "030000000e63726f73732d73646b2d74657374000000116170703a746573743a766563746f723a31000000076d73677061636b0000000546616c7365",
       "ciphertext_hex": "f8f69c70000000000000000087d9ec09f2c2347a4b37d5330ccf50e3c31e69642801bef5",
-      "note": "basic_bytes's ciphertext, sealed under the cache_key test:vector:1, presented under app:test:vector:1, the key with a prefix in front. A reader whose cache_key carries a namespace or key prefix and that retries with the key stripped of it decrypts it, to bytes that are not one MessagePack document, so a plain-MessagePack reader that refuses bytes after the first document still ends with no value and only a test that asserts the authentication failure itself tells the retry apart."
+      "note": "basic_bytes's ciphertext, sealed under the cache_key test:vector:1, presented under app:test:vector:1, the key with a prefix in front. A reader whose cache_key carries a namespace or key prefix and that retries with the key stripped of it decrypts it, to 01 and seven more bytes: one MessagePack document with bytes after it. A plain-MessagePack reader that refuses those bytes still ends with no value, and one that ignores them returns 1. Only an interop reader must refuse them (spec/interop-mode.md), so a test tells a retry apart only by asserting the authentication failure itself."
     },
     {
       "name": "aad_compressed_false_sealed_true_five_components",

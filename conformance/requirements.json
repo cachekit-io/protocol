@@ -231,7 +231,7 @@
             "encryption.json:aad_without_original_type_sealed_with_msgpack",
             "encryption.json:aad_format_arrow_sealed_msgpack"
           ],
-          "gap": "Most rows decrypt after a retry to bytes the reader that presents them does not read, so a retrying reader still ends with no value there, and only a test that asserts the authentication failure itself, not just an empty read, tells it apart; aad_without_original_type_sealed_with, aad_compressed_false_sealed_true_five_components, aad_without_original_type_sealed_with_msgpack and aad_format_arrow_sealed_msgpack decrypt to a container that reader reads, so a retry there returns a value. A reader that builds its AAD inputs from configuration presents only the rows its configuration produces: cachekit-ts the four-component rows, the compressed flips one per compression setting, and the prefixed key through a backend key prefix; cachekit-rs and interop mode only the four-component rows with compressed False, cachekit-rs reaching the prefixed key through a namespace and interop mode, which refuses a key prefix, not at all; cachekit-py, which takes the inputs from its frame header, presents every row. No row presents another tenant, and none is sealed under an empty AAD or one of a version before 0x03, so a reader that falls back to one passes."
+          "gap": "After a retry, aad_without_original_type_sealed_with, aad_compressed_false_sealed_true_five_components, aad_without_original_type_sealed_with_msgpack and aad_format_arrow_sealed_msgpack decrypt to a container the reader that presents them reads, so the retry returns a value. aad_compressed_false_sealed_true, aad_compressed_true_sealed_false, aad_format_msgpack_sealed_arrow and aad_compressed_true_sealed_false_five_components decrypt to bytes that reader cannot read, so a retry still ends with no value and only a test that asserts the authentication failure itself, not just an empty read, tells it apart. aad_with_original_type_sealed_without and aad_key_with_prefix_sealed_without decrypt to one MessagePack document with bytes after it, which only an interop reader must refuse (ENC-3's gap), so a test asserts the authentication failure there too. A reader that builds its AAD inputs from configuration presents only the rows its configuration produces: cachekit-ts the four-component rows, the compressed flips one per compression setting, and the prefixed key through a backend key prefix; cachekit-rs and interop mode only the four-component rows with compressed False, cachekit-rs reaching the prefixed key through a namespace and interop mode, which refuses a key prefix, not at all; cachekit-py, which takes the inputs from its frame header, presents every row. A reader that retries only with an AAD no row was sealed under passes: another original_type value, original_type added to a four-component compressed-False AAD, a key prefix or namespace added, another tenant, an empty or pre-0x03 AAD."
         },
         "ENC-2": {
           "section": "AAD v0x03 Format",
@@ -1214,7 +1214,8 @@
             "python-frame.json:ck_frame_fed_to_interop_reader",
             "encryption.json:container_trailing_byte_to_interop_reader",
             "encryption.json:container_incomplete_tail_to_interop_reader"
-          ]
+          ],
+          "gap": "Both post-decryption rows end in exactly one byte after the document, so an end-of-input check that tolerates one stray byte after a decrypt passes them; only ck_frame_fed_to_interop_reader, a plaintext read, has more."
         },
         "IOP-20": {
           "section": "Interop Value Format",
@@ -1227,7 +1228,8 @@
             "python-frame.json:ck_frame_fed_to_interop_reader",
             "encryption.json:container_trailing_byte_to_interop_reader",
             "encryption.json:container_incomplete_tail_to_interop_reader"
-          ]
+          ],
+          "gap": "Both post-decryption rows end in exactly one byte after the document, so an end-of-input check that tolerates one stray byte after a decrypt passes them; only ck_frame_fed_to_interop_reader, a plaintext read, has more."
         },
         "IOP-21": {
           "section": "SDK Implementation Requirements",

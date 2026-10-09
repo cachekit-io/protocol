@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Mutation tests for encryption-verify.py's guards: the vectors table, the keyring, the default tenant, master key
-input, and the models of wrong implementations each table's notes name.
+input, the AAD reject, post-decryption container and keyring configuration tables, and the models of wrong
+implementations each table's notes name.
 
 Same doctrine as test_wire_format_reference.py: a conformance gate is proven by
 poisoning the fixture and watching it go red, not by reading it. Every case below
@@ -273,9 +274,13 @@ STDLIB_CASES: dict[str, Case] = {
     "aad reject row with an unknown field": (lambda d: ar(d).__setitem__("plaintext_hex", "00"), "(original_type optional)"),
     "frozen aad reject row deleted": (
         lambda d: d["aad_reject_vectors"].remove(ar(d, "aad_key_with_prefix_sealed_without")),
-        "frozen aad_reject_vectors missing",
+        "frozen aad_reject_vectors rows missing or moved",
     ),
     "aad reject row duplicated": (lambda d: d["aad_reject_vectors"].append(copy.deepcopy(ar(d))), "duplicate name"),
+    "aad reject row with a blank note": (
+        lambda d: ar(d).__setitem__("note", " "),
+        "aad_reject aad_compressed_false_sealed_true: note must be a non-empty string",
+    ),
     "aad reject row presenting another key than its name declares": (
         present("aad_key_with_prefix_sealed_without", cache_key="other:test:vector:1"),
         "and present cache_key 'app:test:vector:1'",
@@ -367,7 +372,19 @@ STDLIB_CASES: dict[str, Case] = {
     ),
     "frozen container row deleted": (
         lambda d: d["decrypted_container"]["vectors"].remove(dc(d, "container_plain_to_envelope_reader")),
-        "frozen decrypted_container rows missing",
+        "frozen decrypted_container.vectors rows missing or moved",
+    ),
+    "container block note blank": (
+        lambda d: d["decrypted_container"].__setitem__("note", " "),
+        "FAIL decrypted_container: note must be a non-empty string",
+    ),
+    "container row duplicated": (
+        lambda d: d["decrypted_container"]["vectors"].append(copy.deepcopy(dc(d, "container_plain_to_envelope_reader"))),
+        "decrypted_container container_plain_to_envelope_reader: duplicate name",
+    ),
+    "container row with a blank note": (
+        lambda d: dc(d, "container_plain_to_envelope_reader").__setitem__("note", ""),
+        "decrypted_container container_plain_to_envelope_reader: note must be a non-empty string",
     ),
     "container row with an unknown field": (
         lambda d: dc(d, "container_plain_to_envelope_reader").__setitem__("tenant_id", "default"),
@@ -411,7 +428,23 @@ STDLIB_CASES: dict[str, Case] = {
     ),
     "keyring configuration row renamed": (
         lambda d: kc(d, "keyring_current_key_decrypt_only").__setitem__("name", "renamed"),
-        "frozen keyring configuration rows missing",
+        "frozen keyring.configuration.vectors rows missing or moved",
+    ),
+    "keyring configuration block note blank": (
+        lambda d: d["keyring"]["configuration"].__setitem__("note", " "),
+        "FAIL keyring configuration: note must be a non-empty string",
+    ),
+    "keyring configuration row duplicated": (
+        lambda d: d["keyring"]["configuration"]["vectors"].append(copy.deepcopy(kc(d, "keyring_three_decrypt_only_keys"))),
+        "keyring configuration keyring_three_decrypt_only_keys: duplicate name",
+    ),
+    "keyring configuration row with a blank note": (
+        lambda d: kc(d, "keyring_three_decrypt_only_keys").__setitem__("note", " "),
+        "keyring configuration keyring_three_decrypt_only_keys: needs a non-empty note",
+    ),
+    "keyring configuration row whose decrypt-only keys are not a list": (
+        lambda d: kc(d, "keyring_three_decrypt_only_keys").__setitem__("decrypt_only_master_keys_hex", "11" * 32),
+        "keyring configuration keyring_three_decrypt_only_keys: needs a non-empty note",
     ),
     "keyring configuration row with an unknown field": (
         lambda d: kc(d, "keyring_three_decrypt_only_keys").__setitem__("tenant_id", "default"),
@@ -704,14 +737,22 @@ def run_with_decrypt(stand_in: Callable) -> tuple[int | None, str]:
         ev.decrypt_with_keyring = saved
 
 
-# Code mutations beyond the models, each with the text of the guard it targets: a frozen retry outcome flipped, and (seal
-# lane only) a decrypt that authenticates anything, which only the check that no AAD reject row authenticates catches
-# among the AAD reject guards.
-FLIPPED_RETRY = ("original_type_numpy", "original_type", None, "plain_msgpack", False)
+def with_retry(name: str, outcome: str) -> tuple:
+    """A row's frozen entry with another retry outcome."""
+    return (*ev.FROZEN_AAD_REJECT_VECTORS[name][:4], outcome)
+
+
+# Code mutations beyond the models, each with the text of the guard it targets: a frozen retry outcome changed, a value
+# outcome and an unstated one each recorded as none, and (seal lane only) a decrypt that authenticates anything, which
+# only the check that no AAD reject row authenticates catches among the AAD reject guards.
 CODE_CASES: dict[str, tuple[Callable[[], tuple[int | None, str]], str]] = {
-    "a frozen retry outcome flipped": (
-        lambda: run_patched("FROZEN_AAD_REJECT_VECTORS", "aad_without_original_type_sealed_with", FLIPPED_RETRY),
-        "a plain_msgpack reader that retried would read a value",
+    "a frozen value retry outcome recorded as none": (
+        lambda: run_patched("FROZEN_AAD_REJECT_VECTORS", "aad_without_original_type_sealed_with", with_retry("aad_without_original_type_sealed_with", "none")),
+        "a plain_msgpack reader that retried reads 'value' from original_type_numpy's plaintext, not 'none'",
+    ),
+    "a frozen unstated retry outcome recorded as none": (
+        lambda: run_patched("FROZEN_AAD_REJECT_VECTORS", "aad_key_with_prefix_sealed_without", with_retry("aad_key_with_prefix_sealed_without", "none")),
+        "a plain_msgpack reader that retried reads 'unstated' from basic_bytes's plaintext, not 'none'",
     ),
 }
 SEAL_CODE_CASES: dict[str, tuple[Callable[[], tuple[int | None, str]], str]] = {
