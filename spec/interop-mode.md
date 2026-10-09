@@ -579,6 +579,12 @@ not re-litigated by accident.
 | `encryption_vectors` | 1 | Full HKDF-SHA256 → AES-256-GCM round-trip over plain-msgpack plaintext with the interop AAD (fixed nonce; decrypt-verified) |
 | `error_vectors` | 34 | Inputs that MUST<sup id="iop-35">IOP-35</sup> be rejected (NaN, +Inf and −Inf as independent vectors, int overflow/underflow, naive datetime, then NaN, both integer bounds and a naive datetime again nested in a list, a map value or a set, bad segments rule by rule on both segments — over 64 characters, a leading `.`, `_` or `-`, empty, a non-ASCII digit, an accented or full-width letter, `/`, a space, uppercase, `:`, a trailing newline — the reserved namespaces `ns` and `nsapi`, `..` in either segment). The `error` text is a maintainer note, not a normative message |
 
+[`test-vectors/encryption.json`](../test-vectors/encryption.json)'s `decrypted_container`
+table holds two rows for an interop reader after a decrypt: `reader_trailing_byte`'s
+input, and the same value followed by an incomplete second document, each sealed
+under the interop AAD for one of the keys above. An interop reader returns no value
+for either, as it does for the same bytes stored without encryption.
+
 [`test-vectors/decode-bounds.json`](../test-vectors/decode-bounds.json) pins the
 [Decode bounds](#decode-bounds); `tools/decode-bounds-reference.py verify` checks it,
 and the tool's docstring states what each CI leg proves.

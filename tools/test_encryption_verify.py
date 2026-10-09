@@ -71,11 +71,12 @@ def ar(doc: dict, name: str = "aad_compressed_false_sealed_true") -> dict:
     return next(r for r in doc["aad_reject_vectors"] if r["name"] == name)
 
 
-def present(**inputs: object) -> Callable[[dict], None]:
-    """An AAD reject row presenting other inputs, its aad_hex rebuilt, so only the one-input rule can fail it."""
+def present(name: str = "aad_compressed_false_sealed_true", **inputs: object) -> Callable[[dict], None]:
+    """An AAD reject row presenting other inputs (None removes one), its aad_hex rebuilt, so only a guard on what it
+    presents can fail it."""
 
     def mutate(doc: dict) -> None:
-        row = ar(doc)
+        row = ar(doc, name)
         for k, v in inputs.items():
             if v is None:
                 row.pop(k, None)
@@ -86,14 +87,6 @@ def present(**inputs: object) -> Callable[[dict], None]:
         ).hex()
 
     return mutate
-
-
-def present_row(doc: dict, name: str) -> None:
-    """Rebuild an AAD reject row's aad_hex from what it presents."""
-    row = ar(doc, name)
-    row["aad_hex"] = ev.aad_v3(
-        doc["tenant_id"], row["cache_key"], fmt=row["format"], compressed=row["compressed"], original_type=row.get("original_type")
-    ).hex()
 
 
 def dc(doc: dict, name: str) -> dict:
@@ -227,6 +220,8 @@ READING_CASES = {
 
 # The value's plain MessagePack, the plaintext of two container rows.
 PLAIN = "83a7757365725f69642aa46e616d65a863616368656b6974a6616374697665c3"
+# interop-mode.json's issue_example_object value, the interop rows' first document.
+INTEROP_VALUE = "82a36167651ea46e616d65a5616c696365"
 
 # The sealed bytes and the AAD that binds them; swapping these between vectors leaves each vector's identity in place.
 PAYLOAD_FIELDS = ("cache_key", "aad_hex", "ciphertext_hex", "plaintext_hex")
@@ -281,18 +276,24 @@ STDLIB_CASES: dict[str, Case] = {
     ),
     "aad reject row duplicated": (lambda d: d["aad_reject_vectors"].append(copy.deepcopy(ar(d))), "duplicate name"),
     "aad reject row presenting another key than its name declares": (
-        lambda d: (
-            ar(d, "aad_key_with_prefix_sealed_without").update(cache_key="other:test:vector:1"),
-            present_row(d, "aad_key_with_prefix_sealed_without"),
-        ),
-        "must present cache_key 'app:test:vector:1'",
+        present("aad_key_with_prefix_sealed_without", cache_key="other:test:vector:1"),
+        "and present cache_key 'app:test:vector:1'",
     ),
     "aad reject row presenting an original_type its name does not declare": (
-        lambda d: (
-            ar(d, "aad_without_original_type_sealed_with").__setitem__("original_type", "dataframe"),
-            present_row(d, "aad_without_original_type_sealed_with"),
+        present("aad_without_original_type_sealed_with", original_type="dataframe"),
+        "and present original_type None",
+    ),
+    # special_cache_key's ciphertext also differs from the row in the cache key alone, so only the frozen sealed_as
+    # rejects it.
+    "aad reject row repointed at another sealed vector": (
+        lambda d: ar(d, "aad_key_with_prefix_sealed_without").update(
+            sealed_as="special_cache_key", ciphertext_hex=next(v for v in d["vectors"] if v["name"] == "special_cache_key")["ciphertext_hex"]
         ),
-        "must present original_type None",
+        "must carry basic_bytes's ciphertext",
+    ),
+    "aad reject rows reordered": (
+        lambda d: d["aad_reject_vectors"].insert(0, d["aad_reject_vectors"].pop(1)),
+        "frozen aad_reject_vectors rows missing or moved",
     ),
     "aad reject row added with no retry to show its mistake": (
         lambda d: d["aad_reject_vectors"].append({**copy.deepcopy(ar(d)), "name": "aad_another_row"}),
@@ -303,23 +304,31 @@ STDLIB_CASES: dict[str, Case] = {
         "a row that is not an object with a string name",
     ),
     # encryption.md ENC-2 and ENC-3 — containers after decryption. The plaintexts are the rows' own: the envelope, the
-    # map's plain MessagePack (PLAIN) and that with a trailing byte.
+    # map's plain MessagePack (PLAIN), and the interop value (INTEROP_VALUE) with a byte or a header after it.
     "decrypted_container block deleted": (lambda d: d.pop("decrypted_container"), "decrypted_container rows missing"),
     "envelope row holding plain MessagePack instead": (
         lambda d: reseal("container_envelope_to_plain_reader", PLAIN)(d),
         "holds no envelope whose value a conforming reader declines, so not_unwrapped pins nothing",
     ),
     "trailing-byte row without its trailing byte": (
-        lambda d: reseal("container_trailing_byte_to_plain_reader", PLAIN)(d),
-        "container_trailing_byte_to_plain_reader: a conforming plain_msgpack reader returns a value from it",
+        lambda d: reseal("container_trailing_byte_to_interop_reader", INTEROP_VALUE)(d),
+        "container_trailing_byte_to_interop_reader: a conforming interop reader returns a value from it",
     ),
     "plain row holding a valid envelope instead": (
         lambda d: reseal("container_plain_to_envelope_reader", dc(d, "container_envelope_to_plain_reader")["plaintext_hex"])(d),
         "container_plain_to_envelope_reader: a conforming bytestorage_envelope reader returns a value from it",
     ),
-    "plain-reader row sealed with compressed True": (
-        reseal("container_trailing_byte_to_plain_reader", compressed=True),
-        "a plain_msgpack reader builds its AAD with format msgpack, compressed False and original_type None",
+    "interop row sealed with compressed True": (
+        reseal("container_trailing_byte_to_interop_reader", compressed=True),
+        "the interop reader builds its AAD with format msgpack, compressed False and original_type None",
+    ),
+    "interop row under a key interop-mode.json does not hold": (
+        reseal("container_incomplete_tail_to_interop_reader", cache_key="t:op:" + "00" * 32),
+        "an interop row's cache_key must be one of interop-mode.json's keys",
+    ),
+    "container rows reordered": (
+        lambda d: d["decrypted_container"]["vectors"].reverse(),
+        "frozen decrypted_container.vectors rows missing or moved",
     ),
     "bare Arrow row holding the checksummed IPC instead": (
         lambda d: reseal(
@@ -329,19 +338,19 @@ STDLIB_CASES: dict[str, Case] = {
     ),
     "Arrow row sealed without original_type": (
         lambda d: (dc(d, "container_bare_arrow_to_arrow_reader").pop("original_type"), reseal("container_bare_arrow_to_arrow_reader")(d)),
-        "a arrow_checksummed reader builds its AAD with format arrow, compressed False and original_type arrow",
+        "the arrow_checksummed reader builds its AAD with format arrow, compressed False and original_type arrow",
     ),
     "plain-JSON row holding the checksummed JSON instead": (
         lambda d: reseal("container_plain_json_to_orjson_reader", "0102030405060708" + dc(d, "container_plain_json_to_orjson_reader")["plaintext_hex"])(d),
         "container_plain_json_to_orjson_reader: a conforming orjson_checksummed reader returns a value from it",
     ),
     "trailing-byte row with another second document": (
-        lambda d: reseal("container_trailing_byte_to_plain_reader", PLAIN + "01")(d),
-        "container_trailing_byte_to_plain_reader: plaintext differs from the bytes its frozen name pins",
+        lambda d: reseal("container_trailing_byte_to_interop_reader", INTEROP_VALUE + "01")(d),
+        "container_trailing_byte_to_interop_reader: plaintext differs from the bytes its frozen name pins",
     ),
     "incomplete-tail row with a complete second document": (
-        lambda d: reseal("container_incomplete_tail_to_plain_reader", PLAIN + "00")(d),
-        "refuses only a second complete document' returns what container_incomplete_tail_to_plain_reader's outcome allows",
+        lambda d: reseal("container_incomplete_tail_to_interop_reader", INTEROP_VALUE + "00")(d),
+        "refuses only a second complete document' returns what container_incomplete_tail_to_interop_reader's outcome allows",
     ),
     "container row that is not an object": (
         lambda d: d["decrypted_container"]["vectors"].append(["not", "an", "object"]),
@@ -365,7 +374,7 @@ STDLIB_CASES: dict[str, Case] = {
     ),
     "container row added with no wrong reader to show its mistake": (
         lambda d: d["decrypted_container"]["vectors"].append(
-            {**copy.deepcopy(dc(d, "container_trailing_byte_to_plain_reader")), "name": "container_another_row"}
+            {**copy.deepcopy(dc(d, "container_trailing_byte_to_interop_reader")), "name": "container_another_row"}
         ),
         "no wrong container reader shows why these rows exist: ['container_another_row']",
     ),
@@ -392,7 +401,7 @@ STDLIB_CASES: dict[str, Case] = {
         "only a repeat of the current key in another case may need the lenient reading",
     ),
     "a decrypt-only key of 31 bytes": (
-        set_decrypt_only("keyring_current_key_decrypt_only", lambda k: [k[0][:62], k[1]]),
+        set_decrypt_only("keyring_current_key_decrypt_only", lambda k: [k[0][:62], *k[1:]]),
         "every key must be a valid 32-byte key",
     ),
     "verdict flipped against the frozen name": (
@@ -406,6 +415,10 @@ STDLIB_CASES: dict[str, Case] = {
     "keyring configuration row with an unknown field": (
         lambda d: kc(d, "keyring_three_decrypt_only_keys").__setitem__("tenant_id", "default"),
         "keyring configuration keyring_three_decrypt_only_keys: fields",
+    ),
+    "keyring configuration rows reordered": (
+        lambda d: d["keyring"]["configuration"]["vectors"].reverse(),
+        "frozen keyring.configuration.vectors rows missing or moved",
     ),
     "keyring configuration row that is not an object": (
         lambda d: d["keyring"]["configuration"]["vectors"].append(7),
@@ -638,6 +651,9 @@ SEAL_CASES: dict[str, Case] = {
 CONFORMING_MODELS: dict[str, Callable] = {
     "WRONG_HEX_ENTRY_POINTS": lambda t: ev.behind(ev.EXACTLY_32, ev.read_hex_key(t)),
     "WRONG_RAW_ENTRY_POINTS": lambda k: ev.behind(ev.EXACTLY_32, k),
+    "WRONG_AAD_RETRIES": lambda i: [],
+    "WRONG_CONTAINER_READERS": lambda d: None,
+    "WRONG_KEYRING_LOADS": lambda c, d: ev.keyring_loads(c, d, lenient=False),
 }
 
 
@@ -657,18 +673,52 @@ def model_cases() -> dict[str, tuple[str, str, Callable, tuple[str, ...], str]]:
     return cases
 
 
-def run_model_case(table: str, label: str, stand_in: Callable, targets: tuple[str, ...]) -> tuple[int | None, str]:
-    """The verifier's status and output on the committed fixture with one model swapped in, the table restored after."""
-    models = getattr(ev, table)
-    saved = models.get(label)
-    models[label] = (stand_in, targets)
+def run_patched(table: str, key: str, value: object) -> tuple[int | None, str]:
+    """The verifier's status and output on the committed fixture with one entry of a module table replaced (or added),
+    the table restored after."""
+    entries = getattr(ev, table)
+    saved = entries.get(key)
+    entries[key] = value
     try:
         return run(lambda _: None)
     finally:
         if saved is None:
-            del models[label]
+            del entries[key]
         else:
-            models[label] = saved
+            entries[key] = saved
+
+
+def run_model_case(table: str, label: str, stand_in: Callable, targets: tuple[str, ...]) -> tuple[int | None, str]:
+    """The verifier's status and output on the committed fixture with one model swapped in."""
+    return run_patched(table, label, (stand_in, targets))
+
+
+def run_with_decrypt(stand_in: Callable) -> tuple[int | None, str]:
+    """The verifier's status and output with its AES-GCM decrypt replaced, restored after."""
+    saved = ev.decrypt_with_keyring
+    ev.decrypt_with_keyring = stand_in
+    try:
+        return run(lambda _: None)
+    finally:
+        ev.decrypt_with_keyring = saved
+
+
+# Code mutations beyond the models, each with the text of the guard it targets: a frozen retry outcome flipped, and (seal
+# lane only) a decrypt that authenticates anything, which only the check that no AAD reject row authenticates catches
+# among the AAD reject guards.
+FLIPPED_RETRY = ("original_type_numpy", "original_type", None, "plain_msgpack", False)
+CODE_CASES: dict[str, tuple[Callable[[], tuple[int | None, str]], str]] = {
+    "a frozen retry outcome flipped": (
+        lambda: run_patched("FROZEN_AAD_REJECT_VECTORS", "aad_without_original_type_sealed_with", FLIPPED_RETRY),
+        "a plain_msgpack reader that retried would read a value",
+    ),
+}
+SEAL_CODE_CASES: dict[str, tuple[Callable[[], tuple[int | None, str]], str]] = {
+    "a decrypt that authenticates any AAD": (
+        lambda: run_with_decrypt(lambda keys, ciphertext, aad: (0, b"")),
+        "decrypts under the AAD it presents",
+    ),
+}
 
 
 def main() -> int:
@@ -696,6 +746,8 @@ def main() -> int:
     for name, (table, label, stand_in, targets, expected) in model_cases().items():
         runs[name] = lambda table=table, label=label, stand_in=stand_in, targets=targets: run_model_case(table, label, stand_in, targets)
         expectations[name] = expected
+    for name, (go, expected) in (CODE_CASES | (SEAL_CODE_CASES if HAVE_SEAL else {})).items():
+        runs[name], expectations[name] = go, expected
     for name, go in runs.items():
         expected = expectations[name]
         rc, out = go()

@@ -227,9 +227,11 @@
             "encryption.json:aad_with_original_type_sealed_without",
             "encryption.json:aad_key_with_prefix_sealed_without",
             "encryption.json:aad_compressed_false_sealed_true_five_components",
-            "encryption.json:aad_compressed_true_sealed_false_five_components"
+            "encryption.json:aad_compressed_true_sealed_false_five_components",
+            "encryption.json:aad_without_original_type_sealed_with_msgpack",
+            "encryption.json:aad_format_arrow_sealed_msgpack"
           ],
-          "gap": "A reader that builds its AAD inputs from configuration presents only the rows its configuration produces: cachekit-ts the four-component compressed flips (one per compression setting), the four-component row and, through a backend key prefix, the prefixed key; cachekit-rs and interop mode only compressed False, cachekit-rs reaching the prefixed key through a namespace and interop mode, which refuses a key prefix, not at all; only cachekit-py presents the format, original_type and five-component rows, through a frame header. Most rows reuse plaintexts that are no container, so a retry still ends in no value there, and only a test that asserts the authentication failure itself, or reads the five-component rows, whose plaintexts are cachekit-py's own, tells a retrying reader apart. No row presents another tenant, which also changes the derived key."
+          "gap": "Most rows decrypt after a retry to bytes the reader that presents them does not read, so a retrying reader still ends with no value there, and only a test that asserts the authentication failure itself, not just an empty read, tells it apart; aad_without_original_type_sealed_with, aad_compressed_false_sealed_true_five_components, aad_without_original_type_sealed_with_msgpack and aad_format_arrow_sealed_msgpack decrypt to a container that reader reads, so a retry there returns a value. A reader that builds its AAD inputs from configuration presents only the rows its configuration produces: cachekit-ts the four-component rows, the compressed flips one per compression setting, and the prefixed key through a backend key prefix; cachekit-rs and interop mode only the four-component rows with compressed False, cachekit-rs reaching the prefixed key through a namespace and interop mode, which refuses a key prefix, not at all; cachekit-py, which takes the inputs from its frame header, presents every row. No row presents another tenant, and none is sealed under an empty AAD or one of a version before 0x03, so a reader that falls back to one passes."
         },
         "ENC-2": {
           "section": "AAD v0x03 Format",
@@ -250,13 +252,13 @@
           "vectors": [
             "python-frame.json:ciphertext_plain_msgpack_not_envelope",
             "python-frame.json:ciphertext_plain_msgpack_claims_uncompressed",
-            "encryption.json:container_trailing_byte_to_plain_reader",
-            "encryption.json:container_incomplete_tail_to_plain_reader",
+            "encryption.json:container_trailing_byte_to_interop_reader",
+            "encryption.json:container_incomplete_tail_to_interop_reader",
             "encryption.json:container_plain_to_envelope_reader",
             "encryption.json:container_bare_arrow_to_arrow_reader",
             "encryption.json:container_plain_json_to_orjson_reader"
           ],
-          "gap": "Whether a ByteStorage reader rejects bytes after the envelope is not stated (the Retrieve Flow in spec/wire-format.md has no end-of-input step; cachekit-core ignores them and cachekit-ts refuses them), so no row holds them. No row gives an Arrow or orjson reader plain MessagePack, or an envelope reader JSON, so a reader that falls back to the other family on a parse failure passes."
+          "gap": "Only interop readers are held to bytes after the document, since spec/interop-mode.md obliges them to consume exactly one: whether a reader of an auto-mode container, plain MessagePack (cachekit-ts with compression off, cachekit-rs) or a ByteStorage envelope, rejects bytes after its document or envelope is not stated, so no row asks it of them (cachekit-core ignores bytes after an envelope, and cachekit-ts refuses them). No row gives an Arrow or orjson reader plain MessagePack, or an envelope reader JSON, so a reader that falls back to the other family on a parse failure passes."
         },
         "ENC-4": {
           "section": "`format` tokens",
@@ -1209,7 +1211,9 @@
           "binds": "sdk",
           "vectors": [
             "interop-mode.json:reader_trailing_byte",
-            "python-frame.json:ck_frame_fed_to_interop_reader"
+            "python-frame.json:ck_frame_fed_to_interop_reader",
+            "encryption.json:container_trailing_byte_to_interop_reader",
+            "encryption.json:container_incomplete_tail_to_interop_reader"
           ]
         },
         "IOP-20": {
@@ -1220,7 +1224,9 @@
           ],
           "vectors": [
             "interop-mode.json:reader_trailing_byte",
-            "python-frame.json:ck_frame_fed_to_interop_reader"
+            "python-frame.json:ck_frame_fed_to_interop_reader",
+            "encryption.json:container_trailing_byte_to_interop_reader",
+            "encryption.json:container_incomplete_tail_to_interop_reader"
           ]
         },
         "IOP-21": {
