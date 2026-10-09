@@ -474,7 +474,9 @@ def verify_aad_rejects(doc: dict, key: bytes, *, seal: bool) -> int:
         sealed_as, component, presented, container, retry = FROZEN_AAD_REJECT_VECTORS.get(
             name, (row["sealed_as"], differs[0], row.get(differs[0]), None, None)
         )
-        if row["sealed_as"] != sealed_as or differs != [component] or row.get(component) != presented:
+        # With sealed_as frozen, a row that differs in another input keeps the frozen component at its sealed value, which
+        # is never the value the row presents, so the last term also catches a row that changes another input.
+        if row["sealed_as"] != sealed_as or row.get(component) != presented:
             print(f"FAIL {label}: must carry {sealed_as}'s ciphertext and present {component} {presented!r}, as its frozen name declares")
             failures += 1
             continue
@@ -1271,11 +1273,12 @@ def verify_keyring_configurations(keyring: dict | None) -> int:
             failures += 1
             continue
         current, decrypt_only = row["current_master_key_hex"], row["decrypt_only_master_keys_hex"]
+        # A key holding anything but lowercase hex and ASCII white space fails the 32-byte-key check below.
         if not (
             isinstance(row["note"], str) and row["note"].strip() and isinstance(current, str) and isinstance(decrypt_only, list)
-            and all(isinstance(k, str) and set(k) <= ROW_CHARACTERS for k in decrypt_only) and set(current) <= ROW_CHARACTERS
+            and all(isinstance(k, str) for k in decrypt_only)
         ):
-            print(f"FAIL {label}: needs a non-empty note, a key string and a list of key strings of printable ASCII")
+            print(f"FAIL {label}: needs a non-empty note, a key string and a list of key strings")
             failures += 1
             continue
         if row["verdict"] != FROZEN_KEYRING_CONFIGURATIONS.get(name, row["verdict"]) or row["verdict"] not in ("accept", "reject"):

@@ -281,6 +281,15 @@ STDLIB_CASES: dict[str, Case] = {
         lambda d: ar(d).__setitem__("note", " "),
         "aad_reject aad_compressed_false_sealed_true: note must be a non-empty string",
     ),
+    "aad reject row whose note is not a string": (
+        lambda d: ar(d).__setitem__("note", 7),
+        "aad_reject aad_compressed_false_sealed_true: note must be a non-empty string",
+    ),
+    "aad reject row whose name is not a string": (
+        lambda d: ar(d).__setitem__("name", 7),
+        "aad_reject_vectors missing, or a row that is not an object with a string name",
+    ),
+    "aad reject row with a format outside the registry": (lambda d: ar(d).__setitem__("format", "pickle"), "invalid metadata"),
     "aad reject row presenting another key than its name declares": (
         present("aad_key_with_prefix_sealed_without", cache_key="other:test:vector:1"),
         "and present cache_key 'app:test:vector:1'",
@@ -386,15 +395,51 @@ STDLIB_CASES: dict[str, Case] = {
         lambda d: dc(d, "container_plain_to_envelope_reader").__setitem__("note", ""),
         "decrypted_container container_plain_to_envelope_reader: note must be a non-empty string",
     ),
+    "container row whose note is not a string": (
+        lambda d: dc(d, "container_plain_to_envelope_reader").__setitem__("note", 7),
+        "decrypted_container container_plain_to_envelope_reader: note must be a non-empty string",
+    ),
+    "container block note that is not a string": (
+        lambda d: d["decrypted_container"].__setitem__("note", 7),
+        "FAIL decrypted_container: note must be a non-empty string",
+    ),
+    "container row whose name is not a string": (
+        lambda d: dc(d, "container_plain_to_envelope_reader").__setitem__("name", 7),
+        "decrypted_container rows missing, or a row that is not an object with a string name",
+    ),
+    # Rows added under new names: no frozen entry speaks for them, so only the table's own rules can refuse them.
+    "container row added for a reader no SDK has": (
+        lambda d: d["decrypted_container"]["vectors"].append(
+            {**copy.deepcopy(dc(d, "container_plain_to_envelope_reader")), "name": "container_another_row", "reader": "arrow"}
+        ),
+        "decrypted_container container_another_row: reader must be one of",
+    ),
+    "container row added with an outcome the table does not define": (
+        lambda d: d["decrypted_container"]["vectors"].append(
+            {**copy.deepcopy(dc(d, "container_plain_to_envelope_reader")), "name": "container_another_row", "outcome": "miss"}
+        ),
+        "decrypted_container container_another_row: reader must be one of",
+    ),
+    "container row added that an envelope reader unwraps, claiming not_unwrapped": (
+        lambda d: (
+            d["decrypted_container"]["vectors"].append(
+                {**copy.deepcopy(dc(d, "container_envelope_to_plain_reader")), "name": "container_another_row", "reader": "bytestorage_envelope"}
+            ),
+            reseal("container_another_row", compressed=True)(d),
+        ),
+        "decrypted_container container_another_row: holds no envelope whose value a conforming reader declines",
+    ),
     "container row with an unknown field": (
         lambda d: dc(d, "container_plain_to_envelope_reader").__setitem__("tenant_id", "default"),
         "decrypted_container container_plain_to_envelope_reader: fields",
     ),
+    # A row with no frozen entry has no pinned plaintext either, so it must not be told it differs from one.
     "container row added with no wrong reader to show its mistake": (
         lambda d: d["decrypted_container"]["vectors"].append(
             {**copy.deepcopy(dc(d, "container_trailing_byte_to_interop_reader")), "name": "container_another_row"}
         ),
         "no wrong container reader shows why these rows exist: ['container_another_row']",
+        "plaintext differs from the bytes its frozen name pins",
     ),
     # encryption.md ENC-7 and ENC-9 — keyring configurations an SDK accepts or refuses at load.
     "keyring configuration block deleted": (lambda d: d["keyring"].pop("configuration"), "keyring configuration rows missing"),
@@ -438,13 +483,50 @@ STDLIB_CASES: dict[str, Case] = {
         lambda d: d["keyring"]["configuration"]["vectors"].append(copy.deepcopy(kc(d, "keyring_three_decrypt_only_keys"))),
         "keyring configuration keyring_three_decrypt_only_keys: duplicate name",
     ),
+    # The next five cases reach one compound guard, which has one message: one case for each of its terms.
     "keyring configuration row with a blank note": (
         lambda d: kc(d, "keyring_three_decrypt_only_keys").__setitem__("note", " "),
+        "keyring configuration keyring_three_decrypt_only_keys: needs a non-empty note",
+    ),
+    "keyring configuration row whose note is not a string": (
+        lambda d: kc(d, "keyring_three_decrypt_only_keys").__setitem__("note", 7),
+        "keyring configuration keyring_three_decrypt_only_keys: needs a non-empty note",
+    ),
+    "keyring configuration row whose current key is not a string": (
+        lambda d: kc(d, "keyring_three_decrypt_only_keys").__setitem__("current_master_key_hex", 7),
         "keyring configuration keyring_three_decrypt_only_keys: needs a non-empty note",
     ),
     "keyring configuration row whose decrypt-only keys are not a list": (
         lambda d: kc(d, "keyring_three_decrypt_only_keys").__setitem__("decrypt_only_master_keys_hex", "11" * 32),
         "keyring configuration keyring_three_decrypt_only_keys: needs a non-empty note",
+    ),
+    "keyring configuration row with a decrypt-only key that is not a string": (
+        set_decrypt_only("keyring_three_decrypt_only_keys", lambda k: [*k[:2], 7]),
+        "keyring configuration keyring_three_decrypt_only_keys: needs a non-empty note",
+    ),
+    "keyring configuration block note that is not a string": (
+        lambda d: d["keyring"]["configuration"].__setitem__("note", 7),
+        "FAIL keyring configuration: note must be a non-empty string",
+    ),
+    "keyring configuration row whose name is not a string": (
+        lambda d: kc(d, "keyring_three_decrypt_only_keys").__setitem__("name", 7),
+        "keyring configuration rows missing, or a row that is not an object with a string name",
+    ),
+    "keyring configuration row added with a verdict the table does not define": (
+        lambda d: d["keyring"]["configuration"]["vectors"].append(
+            {**copy.deepcopy(kc(d, "keyring_three_decrypt_only_keys")), "name": "keyring_another_row", "verdict": "maybe"}
+        ),
+        "keyring configuration keyring_another_row: verdict must be accept or reject",
+    ),
+    "a decrypt-only key that is not hex": (
+        set_decrypt_only("keyring_three_decrypt_only_keys", lambda k: [*k[:2], "zz" * 32]),
+        "keyring_three_decrypt_only_keys: every key must be a valid 32-byte key",
+    ),
+    "a current key that needs the lenient reading for its 0x prefix": (
+        lambda d: kc(d, "keyring_three_decrypt_only_keys").__setitem__(
+            "current_master_key_hex", "0x" + kc(d, "keyring_three_decrypt_only_keys")["current_master_key_hex"]
+        ),
+        "keyring_three_decrypt_only_keys: only a repeat of the current key in another case may need the lenient reading",
     ),
     "keyring configuration row with an unknown field": (
         lambda d: kc(d, "keyring_three_decrypt_only_keys").__setitem__("tenant_id", "default"),
@@ -789,6 +871,8 @@ def main() -> int:
         print(f"note: {len(SEAL_CASES)} seal cases skipped — cryptography not installed")
     runs = {name: (lambda case=case: run(case[0] if isinstance(case, tuple) else case)) for name, case in cases.items()}
     expectations = {name: case[1] if isinstance(case, tuple) else None for name, case in cases.items()}
+    # An optional third element is a FAIL text the case must not print: a guard that has no business firing on it.
+    forbidden = {name: case[2] for name, case in cases.items() if isinstance(case, tuple) and len(case) > 2}
     for name, (table, label, stand_in, targets, expected) in model_cases().items():
         runs[name] = lambda table=table, label=label, stand_in=stand_in, targets=targets: run_model_case(table, label, stand_in, targets)
         expectations[name] = expected
@@ -805,6 +889,9 @@ def main() -> int:
             bad += 1
         elif expected is not None and expected not in out:
             print(f"FAIL mutation '{name}' went red without the guard it targets ({expected!r}):\n{out}")
+            bad += 1
+        elif name in forbidden and forbidden[name] in out:
+            print(f"FAIL mutation '{name}' also tripped a guard that should not fire on it ({forbidden[name]!r}):\n{out}")
             bad += 1
         else:
             print(f"ok  mutation '{name}' goes red")
