@@ -1276,7 +1276,9 @@ def verify_keyring_configurations(keyring: dict | None) -> int:
             failures += 1
             continue
         current, decrypt_only = row["current_master_key_hex"], row["decrypt_only_master_keys_hex"]
-        # A key holding anything but lowercase hex and ASCII white space fails the 32-byte-key check below.
+        # The checks below refuse every key string this one lets through that is no clean lowercase hex key: the 32-byte
+        # check, under the lenient reading, refuses any character but hex digits, ASCII white space and a 0x prefix; the
+        # next check refuses any key that needs that reading, except a repeat of the current key in another case.
         if not (
             isinstance(row["note"], str) and row["note"].strip() and isinstance(current, str) and isinstance(decrypt_only, list)
             and all(isinstance(k, str) for k in decrypt_only)
