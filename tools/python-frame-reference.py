@@ -20,8 +20,16 @@ Modes:
               name as a non-empty string in `s`) and the ByteStorage envelope down
               to the LZ4-decompressed inner msgpack (inner_msgpack_hex);
               checks every error vector is rejected, by the check its
-              `rejected_by` names, and that each encrypted_read_vectors frame
-              parses, claims what it declares and matches its pinned sha256. Runs in CI. It does not
+              `rejected_by` names (the serializer-name check included: a
+              frame that records no name is a mismatch for every reader),
+              that each alias write holds the MessagePack its canonical
+              serializer writes (pinned here; `generate` proves each equals
+              the canonical name's write byte for byte), that each write
+              records the serializer name and compressed flag it claims, that
+              each name-check pair carries the default write's payload under
+              another recorded name, and that each encrypted_read_vectors
+              frame parses, claims what it declares and matches its pinned
+              sha256. Runs in CI. It does not
               decode the inner msgpack, so value_json is checked against the
               decoded value only by tools/frame-crosscheck.mjs (Node).
     generate  Upserts the vector file by vector name (LAB-1203): every vector
@@ -177,6 +185,98 @@ def parse_frame(frame: bytes) -> tuple[dict, bytes]:
 def _reject_constant(token: str) -> NoReturn:
     """json.loads accepts NaN/Infinity/-Infinity; RFC 8259 has no such tokens, and the Node leg rejects them."""
     raise FrameError(f"header is not RFC 8259 JSON: non-standard token {token}")
+
+
+def _require_serializer_name(header: object) -> None:
+    """spec/cache-key-format.md (KEY-5): a frame that records no serializer name is a mismatch for every reader.
+
+    Same rule as cachekit-py's reader, which refuses it while unwrapping the frame: the header's `s` must be a
+    non-empty str, nothing else.
+    """
+    ser = header.get("s") if isinstance(header, dict) else None
+    if type(ser) is not str or not ser:
+        raise FrameError(f"frame header records no serializer name in 's' (got {ser!r})", "serializer_name")
+
+
+# The write every frame claim below is measured against: the default @cache write as protocol 1.1 wheels emit it.
+DEFAULT_WRITE = "default_saas_write_msgpack_bytestorage_bin"
+
+# Name-check pairs (spec/cache-key-format.md, KEY-4 and KEY-5): frames whose header records another serializer name
+# than the default write's, over the default write's payload and metadata. A reader configured with "default" that
+# skipped the name check, or resolved the recorded name through its own alias table, would decode each one to the
+# value, so planting it under that reader isolates the check. Checked here so that a rebuilt frame cannot drift into
+# one that only a decode error rejects. std_recorded_as_given_frame is constructed: what a writer that records an
+# alias as given would store.
+NAME_CHECK_PAIRS = {
+    "auto_serializer_write": "auto",
+    "standard_serializer_instance_write": "StandardSerializer",
+    "std_recorded_as_given_frame": "std",
+}
+
+# Writes under each alias spelling (KEY-7, KEY-8) of a value AutoSerializer and StandardSerializer write differently,
+# and the MessagePack each envelope holds: StandardSerializer writes {"pair": (1, "two")} with the tuple as an array,
+# AutoSerializer marks it ({"__tuple__": true, "value": [...]}). generate proves each write equals the canonical
+# name's byte for byte; verify pins what each holds, so a writer that picks the serializer by the raw spelling, or a
+# fixture that swaps the two payloads under their headers, fails.
+ALIAS_WRITES = {
+    "std_alias_write": "81a4706169729201a374776f",
+    "pythonic_alias_write": "81a47061697282a95f5f7475706c655f5fc3a576616c75659201a374776f",
+}
+
+# The serializer name and compressed flag each write records (KEY-3, ENC-10), so a frame rebuilt or edited into
+# another configuration's cannot pass for this one.
+WRITE_CLAIMS = {
+    DEFAULT_WRITE: ("default", True),
+    "arrow_dataframe_write": ("arrow", True),
+    "auto_serializer_write": ("auto", True),
+    "standard_serializer_instance_write": ("StandardSerializer", True),
+    "std_alias_write": ("default", True),
+    "pythonic_alias_write": ("auto", True),
+    "integrity_checking_off_write": ("default", False),
+    "arrow_compression_off_write": ("ArrowSerializer", False),
+}
+
+
+def _frame_claim_failures(by_name: dict[str, dict]) -> list[str]:
+    """Why the name-check pairs or the alias writes no longer hold, one line each; empty when every claim holds."""
+    lines = []
+    base = by_name.get(DEFAULT_WRITE)
+    for name, recorded in NAME_CHECK_PAIRS.items():
+        vec = by_name.get(name)
+        if vec is None or base is None:
+            lines.append(f"{name}: the name-check pair needs both {name} and {DEFAULT_WRITE}")
+            continue
+        header, base_header = vec.get("expected_header"), base.get("expected_header")
+        if not isinstance(header, dict) or header.get("s") != recorded:
+            lines.append(f"{name}: must record the serializer name {recorded!r} over {DEFAULT_WRITE}'s payload")
+        elif not isinstance(base_header, dict) or json.dumps(header.get("m"), sort_keys=True) != json.dumps(
+            base_header.get("m"), sort_keys=True
+        ):
+            lines.append(f"{name}: metadata differs from {DEFAULT_WRITE}'s, so a reader that skips the name check may not decode it")
+        elif vec.get("expected_payload_hex") != base.get("expected_payload_hex"):
+            lines.append(f"{name}: payload differs from {DEFAULT_WRITE}'s, so a reader that skips the name check may not decode it")
+    for name, inner in ALIAS_WRITES.items():
+        env = (by_name.get(name) or {}).get("payload_envelope")
+        if not isinstance(env, dict) or env.get("inner_msgpack_hex") != inner:
+            lines.append(f"{name}: its envelope must hold {inner}, the MessagePack its canonical serializer writes")
+    for name, (recorded, compressed) in WRITE_CLAIMS.items():
+        vec = by_name.get(name)
+        header = vec.get("expected_header") if vec is not None else None
+        meta = header.get("m") if isinstance(header, dict) else None
+        if vec is None:
+            lines.append(f"{name}: missing")
+        elif not isinstance(meta, dict) or header.get("s") != recorded or meta.get("compressed") is not compressed:
+            lines.append(f"{name}: must record the serializer name {recorded!r} and compressed {str(compressed).lower()}")
+    # The flag says what the write's container did: a ByteStorage envelope compresses, a plain MessagePack payload does not.
+    for name, vec in by_name.items():
+        header = vec.get("expected_header")
+        meta = header.get("m") if isinstance(header, dict) else None
+        flag = meta.get("compressed") if isinstance(meta, dict) else None
+        if "payload_envelope" in vec and flag is not True:
+            lines.append(f"{name}: a ByteStorage envelope payload records compressed true, not {flag!r}")
+        elif "payload_envelope" not in vec and "value_json" in vec and flag is not False:
+            lines.append(f"{name}: a plain MessagePack payload records compressed false, not {flag!r}")
+    return lines
 
 
 # Fields a twin must share with its base. envelope_encoding must DIFFER, so it is
@@ -420,7 +520,8 @@ def verify() -> int:
             continue
         want = vec.get("rejected_by")
         try:
-            parse_frame(frame)
+            header, _ = parse_frame(frame)
+            _require_serializer_name(header)
         except FrameError as e:
             # A boundary vector is only worth its bytes if the check it sits on rejects it:
             # a later check rejecting it instead is the reader the vector exists to catch.
@@ -433,6 +534,10 @@ def verify() -> int:
         else:
             print(f"FAIL {name}: expected rejection, parsed successfully")
             failures += 1
+
+    for line in _frame_claim_failures(by_name):
+        print(f"FAIL {line}")
+        failures += 1
 
     failures += _verify_encrypted_reads(doc)
 
@@ -456,6 +561,12 @@ def verify() -> int:
 # closed (spec/wire-format.md, the CK frame CAUTION). The reader resolves its own tenant.
 ENCRYPTED_READER_FIELDS = ("master_key_hex", "tenant_id", "tenant_source", "cache_key")
 
+# Encrypted frames that carry one real encrypted write of the reader's under headers that differ only in the serializer
+# name they record, None for none (spec/cache-key-format.md, KEY-4 and KEY-5). The name is not an AAD input, so each
+# still authenticates, and a reader that compares the name only on plaintext entries returns the value. generate
+# builds the pair together and proves the write reads back under the name default.
+ENCRYPTED_NAME_FRAMES = {"ciphertext_serializer_name_auto": "auto", "ciphertext_serializer_name_missing": None}
+
 
 # sha256 of each encrypted-read frame, pinned in code. `generate` proves each frame fails
 # closed against cachekit-py, but CI runs only `verify`, which cannot run the SDK's read
@@ -467,6 +578,10 @@ ENCRYPTED_READ_PINS = {
     "forged_plaintext_orjson": "887544092fc08040d0a1652b8ec7a50095d610a7d513cf58c5479790507cb647",
     "ciphertext_key_not_in_keyring": "323b270b4b67860213afd2c6bc0ecddb52f01958f6d6702ff6a3b1715a026c25",
     "ciphertext_other_tenant": "2ee0a5c536698672380fbc8b2300b87fda1f14e4d1fdc5f56a813423936caeb6",
+    "ciphertext_plain_msgpack_not_envelope": "506a07d4cfe66adc03f2b1a1483f7378e55d6084845600ccde505a6624719e67",
+    "ciphertext_plain_msgpack_claims_uncompressed": "542cf03a05b0e90b1a7e159523ce279ceb69e0365c99c8b5343fcf3ff57943a8",
+    "ciphertext_serializer_name_auto": "ff7fc48cf555b8f1eb2ed3926f67ab2d2cce2710c5312f703974438c9a090283",
+    "ciphertext_serializer_name_missing": "4154a80585b814382c0f904b9c49d7792301700d102b8c0c91e542ba3cc7ddb4",
 }
 
 
@@ -476,8 +591,10 @@ def _verify_encrypted_reads(doc: dict) -> int:
     stdlib cannot run the SDK's read path, so verify pins the bytes `generate` proved: the
     set of vectors and each frame's sha256 (ENCRYPTED_READ_PINS), and the reader, which must
     equal ENCRYPTED_READER. It also checks what the bytes claim: each frame parses, records a
-    serializer name, matches its declared header and payload, and its header claims what the
-    vector's `header_claims` says (plaintext or ciphertext).
+    serializer name (the name frames record the one ENCRYPTED_NAME_FRAMES gives, or none),
+    matches its declared header and payload, and its header claims what the vector's
+    `header_claims` says (plaintext or ciphertext); the name frames carry one write of the
+    reader's tenant.
     """
     vectors = doc.get("encrypted_read_vectors", [])
     failures = 0
@@ -526,9 +643,16 @@ def _verify_encrypted_reads(doc: dict) -> int:
         if payload.hex() != vec.get("expected_payload_hex"):
             why.append("payload mismatch")
         ser = header.get("s") if isinstance(header, dict) else None
-        if type(ser) is not str or not ser:
-            why.append("no serializer name in 's'")
         meta = header.get("m") if isinstance(header, dict) else None
+        if name in ENCRYPTED_NAME_FRAMES:
+            want = ENCRYPTED_NAME_FRAMES[name]
+            has_name = isinstance(header, dict) and "s" in header
+            if (want is None) != (not has_name) or ser != want:
+                why.append("must record no serializer name" if want is None else f"must record the serializer name {want!r}")
+            if not isinstance(meta, dict) or meta.get("tenant_id") != ENCRYPTED_READER["tenant_id"]:
+                why.append("must be a write of the encrypted reader's own tenant")
+        elif type(ser) is not str or not ser:
+            why.append("no serializer name in 's'")
         claims = "ciphertext" if isinstance(meta, dict) and meta.get("encrypted") is True else "plaintext"
         if vec.get("header_claims") != claims:
             why.append(f"header claims {claims}, vector declares {vec.get('header_claims')!r}")
@@ -539,17 +663,37 @@ def _verify_encrypted_reads(doc: dict) -> int:
         failures += len(why)
         if not why:
             print(f"ok   {name} (header claims {claims}; an encrypted reader fails closed)")
+    pair = [v for v in vectors if v["name"] in ENCRYPTED_NAME_FRAMES]
+    carried = set()
+    for v in pair:
+        declared = v.get("expected_header")
+        meta = declared.get("m") if isinstance(declared, dict) else None
+        carried.add((json.dumps(meta, sort_keys=True), v.get("expected_payload_hex")))
+    if len(pair) == len(ENCRYPTED_NAME_FRAMES) and len(carried) != 1:
+        first, second = ENCRYPTED_NAME_FRAMES
+        print(f"FAIL {first}: must carry {second}'s write under the same metadata, so the two differ only in the name")
+        failures += 1
     return failures
 
 
-def _build_default_path_vector() -> dict:
-    """Build the default-@cache-write vector from the installed cachekit wheel.
+VALUE = {"user_id": 42, "name": "cachekit", "active": True}
+# A value AutoSerializer and StandardSerializer write differently: AutoSerializer marks the tuple, StandardSerializer
+# writes it as an array and reads it back as a list. The alias writes hold it, so their bytes show which serializer
+# wrote them.
+TUPLE_VALUE = {"pair": (1, "two")}
 
-    The vector's name follows the envelope encoding the wheel emits:
-    "bin" (msgpack 0xc4/0xc5/0xc6, protocol 1.1 writers) builds the `_bin`
-    twin, "int-array" (legacy array-of-ints writers) builds the legacy
-    original. Every frame is round-tripped through the real cachekit-py
-    deserialization path before being returned.
+
+def _build_envelope_vector(
+    serializer: object, name: str | None = None, description: str | None = None, value: object = None, read_back: object = None
+) -> dict:
+    """A write of `value` (VALUE by default) through a handler configured with `serializer` (a name or an instance).
+
+    With no `name`, it is the default write, named for the envelope encoding the wheel emits: "bin" (msgpack
+    0xc4/0xc5/0xc6, protocol 1.1 writers) builds the `_bin` twin, "int-array" (legacy array-of-ints writers) the legacy
+    original. The frame is round-tripped through cachekit-py's own read path, under the same configuration, which must
+    return `read_back`
+    (the value itself by default). value_json is the envelope's inner MessagePack decoded, what a reader of the bytes
+    sees: a tuple AutoSerializer marks reads back as a tuple, but value_json holds its marker map.
     """
     import msgpack  # third-party; generation only
 
@@ -557,15 +701,17 @@ def _build_default_path_vector() -> dict:
     from cachekit.cache_handler import CacheSerializationHandler
     from cachekit.serializers.wrapper import SerializationWrapper
 
-    value = {"user_id": 42, "name": "cachekit", "active": True}
-    handler = CacheSerializationHandler(serializer_name="default")
+    value = VALUE if value is None else value
+    handler = CacheSerializationHandler(serializer)
     frame = handler.serialize_data(value, cache_key="python-frame-vector")
-    _require(handler.deserialize_data(frame, cache_key="python-frame-vector") == value, "cachekit-py round-trip mismatch")
+    read = handler.deserialize_data(frame, cache_key="python-frame-vector")
+    _require(read == (value if read_back is None else read_back) and type(read) is type(value), "cachekit-py round-trip mismatch")
     payload_mv, meta, ser_name = SerializationWrapper.unwrap(frame)
     payload = bytes(payload_mv)
     inner, fmt = ByteStorage("msgpack").retrieve(payload)
     inner = bytes(inner)
-    _require(msgpack.unpackb(inner) == value and fmt == "msgpack", "ByteStorage.retrieve round-trip mismatch")
+    value_json = msgpack.unpackb(inner)
+    _require(fmt == "msgpack" and json.loads(json.dumps(value_json)) == value_json, "ByteStorage.retrieve round-trip mismatch")
     # Shared codec (wire-format-reference.py). decode_envelope enforces the
     # protocol 1.1 flip exclusions — checksum must stay an array of 8 integers
     # and format a fixstr — so a wheel drifting either field fails here.
@@ -580,26 +726,27 @@ def _build_default_path_vector() -> dict:
     default_header, _ = parse_frame(frame)
     _require(default_header["m"] == meta and default_header["s"] == ser_name, "frame header disagrees with unwrap metadata")
     if encoding == "bin":
-        name = "default_saas_write_msgpack_bytestorage_bin"
-        description = BIN_DESCRIPTION
         encoding_note = (
             "rmp_serde positional fixarray(4); compressed_data encodes as msgpack bin "
             "(serde_bytes, protocol 1.1); checksum [u8;8] stays an array of integers"
         )
+        if name is None:
+            name, description = DEFAULT_WRITE, BIN_DESCRIPTION
     else:
-        name = "default_saas_write_msgpack_bytestorage"
-        description = (
-            "Exact stored bytes for a default @cache write (StandardSerializer, integrity on): "
-            "CK v3 frame wrapping the ByteStorage envelope of the MessagePack-encoded value. "
-            "This is what any backend — including the SaaS — receives from cachekit-py in auto mode."
-        )
         encoding_note = (
             "rmp_serde::to_vec positional fixarray(4); Vec<u8>/[u8;8] fields encode as msgpack arrays of integers"
         )
+        if name is None:
+            name = "default_saas_write_msgpack_bytestorage"
+            description = (
+                "Exact stored bytes for a default @cache write (StandardSerializer, integrity on): "
+                "CK v3 frame wrapping the ByteStorage envelope of the MessagePack-encoded value. "
+                "This is what any backend — including the SaaS — receives from cachekit-py in auto mode."
+            )
     return {
         "name": name,
         "description": description,
-        "value_json": value,
+        "value_json": value_json,
         "frame_hex": frame.hex(),
         "expected_header": default_header,
         "expected_payload_hex": payload.hex(),
@@ -612,6 +759,33 @@ def _build_default_path_vector() -> dict:
             "format": env_fmt,
             "inner_msgpack_hex": inner.hex(),
         },
+    }
+
+
+def _build_integrity_off_vector() -> dict:
+    """VALUE written by StandardSerializer with integrity checking off: plain MessagePack, no envelope, compressed false."""
+    import msgpack  # third-party; generation only
+
+    from cachekit.cache_handler import CacheSerializationHandler
+
+    handler = CacheSerializationHandler("default", enable_integrity_checking=False)
+    frame = handler.serialize_data(VALUE, cache_key="python-frame-vector")
+    _require(handler.deserialize_data(frame, cache_key="python-frame-vector") == VALUE, "integrity-off round-trip mismatch")
+    header, payload = parse_frame(frame)
+    _require(msgpack.unpackb(payload) == VALUE, "integrity-off payload is not the value's plain MessagePack")
+    _require(header["m"]["compressed"] is False, "integrity-off write records compressed other than false")
+    return {
+        "name": "integrity_checking_off_write",
+        "description": (
+            "The same value written by StandardSerializer with integrity checking off (@cache(integrity_checking=False), "
+            "key suffix 0s): the payload is the value's plain MessagePack, with no ByteStorage envelope, and the header "
+            "records compressed false, which is what an encrypted write of it authenticates in its AAD "
+            "(spec/encryption.md: the AAD inputs reflect what the write produced)."
+        ),
+        "value_json": VALUE,
+        "frame_hex": frame.hex(),
+        "expected_header": header,
+        "expected_payload_hex": payload.hex(),
     }
 
 
@@ -680,6 +854,7 @@ _PY_REJECTION = {
     "version": "Unsupported cache envelope frame version",
     "header_length": "Invalid cache envelope header length",
     "magic": "Corrupt cache envelope",
+    "serializer_name": "records no serializer name",
 }
 
 
@@ -700,6 +875,13 @@ def _build_error_vectors(raw_frame: bytes, default_vec: dict) -> list[dict]:
 
     frame = bytes.fromhex(default_vec["frame_hex"])
     header_end = PREFIX_LEN + int.from_bytes(frame[3:PREFIX_LEN], "big")
+    header, payload = parse_frame(frame)
+
+    def reframed(new_header: dict) -> str:
+        """The default write with another header, in cachekit-py's JSON layout (default separators)."""
+        raw = json.dumps(new_header).encode("utf-8")
+        return (MAGIC + bytes([FRAME_VERSION]) + len(raw).to_bytes(4, "big") + raw + payload).hex()
+
     built_errors = [
         {
             "name": "truncated_frame",
@@ -775,6 +957,25 @@ def _build_error_vectors(raw_frame: bytes, default_vec: dict) -> list[dict]:
             ),
             "rejected_by": "magic",
         },
+        {
+            "name": "serializer_name_missing",
+            "frame_hex": reframed({k: v for k, v in header.items() if k != "s"}),
+            "error": (
+                f"{default_vec['name']} with no serializer name in its header (no 's'). An entry that records no "
+                "serializer name is a mismatch for every reader, so a miss. A reader that treats a nameless frame as "
+                "a match returns the value, because the payload is intact"
+            ),
+            "rejected_by": "serializer_name",
+        },
+        {
+            "name": "serializer_name_empty",
+            "frame_hex": reframed({**header, "s": ""}),
+            "error": (
+                f"{default_vec['name']} with an empty serializer name ('s': \"\"), which records no name either: a "
+                "mismatch for every reader, so a miss. A reader that checks only that 's' is present returns the value"
+            ),
+            "rejected_by": "serializer_name",
+        },
     ]
     from cachekit.serializers.base import SerializationError  # every read-path refusal derives from it
 
@@ -820,6 +1021,8 @@ ENCRYPTED_READER = {
 }
 OTHER_MASTER_KEY_HEX = "22" * 32
 OTHER_TENANT = "00000000-0000-4000-8000-00000000000b"
+# Fixed nonce for the one encrypted-read frame sealed here rather than by cachekit-py, so it is reproducible.
+HAND_SEALED_NONCE = bytes.fromhex("a0a1a2a3a4a5a6a7a8a9aaab")
 
 
 def _encrypted_handler(master_key_hex: str, tenant: str, *, fail_closed: bool = False, serializer: str = "default"):
@@ -856,6 +1059,82 @@ def _build_encrypted_read_vectors(default_vec: dict, committed: list[dict]) -> l
     def sealed(master_key_hex: str, tenant: str) -> Callable[[], bytes]:
         return lambda: _encrypted_handler(master_key_hex, tenant).serialize_data(value, cache_key=key)
 
+    def plain_msgpack_sealed(compressed: bool = True) -> Callable[[], bytes]:
+        return lambda: _plain_msgpack_sealed(compressed)
+
+    shared_write: list[bytes] = []
+
+    def renamed(recorded: str | None) -> Callable[[], bytes]:
+        """The reader's own encrypted write, one for both name frames, under a header recording `recorded` (None: no name).
+
+        The same write recording default must read back as the value, so the name is all that stands between the
+        frame and the value, and the reader must refuse the frame at the name check.
+        """
+
+        def build() -> bytes:
+            from cachekit.serializers.base import SerializationError  # every read-path refusal derives from it
+
+            reader_key, tenant = ENCRYPTED_READER["master_key_hex"], ENCRYPTED_READER["tenant_id"]
+            if not shared_write:
+                shared_write.append(_encrypted_handler(reader_key, tenant).serialize_data(value, cache_key=key))
+            own_payload, own_meta, _ = SerializationWrapper.unwrap(shared_write[0])
+            control = SerializationWrapper.wrap(bytes(own_payload), own_meta, "default")
+            _require(_encrypted_handler(reader_key, tenant).deserialize_data(control, cache_key=key) == value,
+                     "the reader's own write, recording default, does not read back as the value")
+            if recorded is not None:
+                frame = SerializationWrapper.wrap(bytes(own_payload), own_meta, recorded)
+                refusal = "Serializer mismatch"
+            else:
+                header, body = parse_frame(control)
+                raw = json.dumps({k: v for k, v in header.items() if k != "s"}).encode("utf-8")
+                frame = MAGIC + bytes([FRAME_VERSION]) + len(raw).to_bytes(4, "big") + raw + body
+                refusal = _PY_REJECTION["serializer_name"]
+            try:
+                _encrypted_handler(reader_key, tenant).deserialize_data(frame, cache_key=key)
+            except SerializationError as e:
+                _require(refusal in str(e), f"cachekit-py refuses the name frame elsewhere than at the name check: {e}")
+            else:  # pragma: no cover - generation-time invariant
+                raise AssertionError("the encrypted reader returned a value from a name frame")
+            return frame
+
+        return build
+
+    def _plain_msgpack_sealed(compressed: bool) -> bytes:
+        """The value's plain MessagePack, sealed under the reader's own key and AAD, in a real encrypted write's frame.
+
+        The AAD is rebuilt from that write's header, and must open the write's own ciphertext first. With `compressed`
+        false the header and AAD claim an uncompressed write, which the reader, configured for an envelope, must not
+        take as its cue. The same frame sealed over the write's ByteStorage envelope must read back as the value, so
+        only the container differs.
+        """
+        from cryptography.exceptions import InvalidTag  # third-party; generation only
+        from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+
+        ev = _load_tool("encryption-verify.py", "encryption_verify")
+        reader_key, tenant = ENCRYPTED_READER["master_key_hex"], ENCRYPTED_READER["tenant_id"]
+        own = _encrypted_handler(reader_key, tenant).serialize_data(value, cache_key=key)
+        header, own_payload = parse_frame(own)
+        m = header["m"]
+        aad = ev.aad_v3(tenant, key, fmt=m["format"], compressed=m["compressed"], original_type=m.get("original_type"))
+        derived = ev.derive_encryption_key(bytes.fromhex(reader_key), tenant)
+        try:
+            opened = AESGCM(derived).decrypt(own_payload[:12], own_payload[12:], aad)
+        except InvalidTag as exc:
+            raise ValueError("generation invariant violated: the rebuilt AAD does not open cachekit-py's own write") from exc
+        _require(opened == bytes.fromhex(default_vec["expected_payload_hex"]), "the encrypted write's plaintext is not the default envelope")
+        prefix = own[: len(own) - len(own_payload)]
+        if not compressed:
+            raw = json.dumps({**header, "m": {**m, "compressed": False}}).encode("utf-8")
+            prefix = MAGIC + bytes([FRAME_VERSION]) + len(raw).to_bytes(4, "big") + raw
+            aad = ev.aad_v3(tenant, key, fmt=m["format"], compressed=False, original_type=m.get("original_type"))
+
+        def seal(plaintext: bytes) -> bytes:
+            return prefix + HAND_SEALED_NONCE + AESGCM(derived).encrypt(HAND_SEALED_NONCE, plaintext, aad)
+
+        control = _encrypted_handler(reader_key, tenant).deserialize_data(seal(opened), cache_key=key)
+        _require(control == value, "the hand-sealed frame over the envelope does not read back as the value")
+        return seal(bytes.fromhex(default_vec["payload_envelope"]["inner_msgpack_hex"]))
+
     builders = {
         "forged_plaintext_encrypted_false": (
             plaintext_false,
@@ -881,6 +1160,42 @@ def _build_encrypted_read_vectors(default_vec: dict, committed: list[dict]) -> l
             f"resolves its own tenant ({ENCRYPTED_READER['tenant_id']}) derives another key and builds another AAD, "
             "so the ciphertext does not authenticate and the read MUST fail closed. A reader that takes the "
             "tenant from the unauthenticated header decrypts it.",
+        ),
+        "ciphertext_plain_msgpack_not_envelope": (
+            plain_msgpack_sealed(),
+            f"the value's plain MessagePack ({default_vec['name']}'s inner value, with no ByteStorage envelope), "
+            "sealed under the reader's own key, tenant and AAD, in the frame of a real encrypted default write, whose "
+            "header claims format msgpack, compressed true and original_type msgpack. The reader is configured for "
+            "a ByteStorage envelope, and the container after decryption is the configured one and a parse "
+            "mismatch hard-fails (spec/encryption.md), so the read MUST fail closed. A reader that falls back to "
+            "plain MessagePack, or picks the container by looking at the bytes, returns the value. Sealed with a "
+            "fixed nonce by tools/python-frame-reference.py, which checks that the same frame over the envelope "
+            "reads back as the value.",
+        ),
+        "ciphertext_plain_msgpack_claims_uncompressed": (
+            plain_msgpack_sealed(compressed=False),
+            "ciphertext_plain_msgpack_not_envelope with its header and AAD claiming compressed false, which plain "
+            "MessagePack is: the ciphertext authenticates under the reader's own key and AAD. The reader is configured "
+            "for a ByteStorage envelope and the container after decryption is the configured one, never one the stored "
+            "flag picks (spec/encryption.md), so the read MUST fail closed. A reader that takes the container from the "
+            "flag reads plain MessagePack and returns the value. Sealed with a fixed nonce by "
+            "tools/python-frame-reference.py, which checks that the same frame over the envelope reads back as the value.",
+        ),
+        # Built together: the pair carries one write (ENCRYPTED_NAME_FRAMES), so rebuild both if either is dropped.
+        "ciphertext_serializer_name_auto": (
+            renamed("auto"),
+            "the reader's own encrypted write of the value, sealed by cachekit-py under its key, tenant and AAD, with the "
+            "header's serializer name changed to auto. The name is not an AAD input, so the ciphertext still "
+            "authenticates and decrypts to the default write's envelope, which the default serializer decodes to the "
+            "value; generate checks that the same frame recording default reads back as the value. A reader configured "
+            "with \"default\" MUST miss on it, as on the plaintext name-check frames (spec/cache-key-format.md); one "
+            "that compares the name only on plaintext entries returns the value.",
+        ),
+        "ciphertext_serializer_name_missing": (
+            renamed(None),
+            "ciphertext_serializer_name_auto's write with no serializer name in its header. An entry that records no "
+            "serializer name is a mismatch for every reader, so the read MUST miss; one that checks for a name only on "
+            "plaintext entries decrypts it and returns the value.",
         ),
     }
     vectors = list(committed)
@@ -951,8 +1266,100 @@ def generate() -> int:
     # -> CK frame. Named by the envelope encoding the wheel emits, so a
     # protocol 1.1 wheel rebuilds the _bin twin and a legacy wheel rebuilds the
     # legacy original — either way the other vector stays as committed.
-    default_vec = _build_default_path_vector()
+    default_vec = _build_envelope_vector("default")
     built.append(default_vec)
+
+    # 2b. Writes that pin the recorded serializer name (spec/cache-key-format.md, KEY-3 to KEY-8): AutoSerializer and a
+    # StandardSerializer instance writing the default value, and each alias spelling writing TUPLE_VALUE.
+    # NAME_CHECK_PAIRS, ALIAS_WRITES and WRITE_CLAIMS say what verify holds them to; they are measured against the
+    # protocol 1.1 default write.
+    if default_vec["name"] == DEFAULT_WRITE:
+        from cachekit.cache_handler import CacheSerializationHandler
+        from cachekit.serializers.base import SerializationError
+        from cachekit.serializers.standard_serializer import StandardSerializer
+
+        for serializer, name, description in (
+            (
+                "auto",
+                "auto_serializer_write",
+                f"The same value written by AutoSerializer (@cache(serializer=\"auto\")). Its payload and metadata equal "
+                f"{DEFAULT_WRITE}'s and only the recorded name differs (s: auto), so a reader configured with "
+                "\"default\" that skipped the serializer-name check would decode it to the value. Planted under that "
+                "reader, it MUST be a miss (spec/cache-key-format.md).",
+            ),
+            (
+                StandardSerializer(),
+                "standard_serializer_instance_write",
+                "The same value written by a StandardSerializer() instance (@cache(serializer=StandardSerializer())). "
+                "The frame records the bare class name, StandardSerializer, over "
+                f"{DEFAULT_WRITE}'s payload and metadata, while the key carries the identity "
+                "<custom>:StandardSerializer (code x8542). A reader configured with \"default\" MUST miss on it, and a "
+                "reader configured with an instance of the class MUST read it, which one that compares its key "
+                "identity instead of the recorded name does not.",
+            ),
+        ):
+            built.append(_build_envelope_vector(serializer, name, description))
+        for alias, canonical, name, read_back, description in (
+            (
+                "std",
+                "default",
+                "std_alias_write",
+                {"pair": [1, "two"]},
+                "{\"pair\": (1, \"two\")}, a map holding a tuple, written under the alias std: byte for byte what the "
+                "canonical name default writes, so the alias records default and writes StandardSerializer's bytes, which "
+                "hold the tuple as an array. AutoSerializer writes the same value differently (pythonic_alias_write), so a "
+                "writer that picks the serializer by the raw spelling fails one of the two.",
+            ),
+            (
+                "pythonic",
+                "auto",
+                "pythonic_alias_write",
+                None,
+                "{\"pair\": (1, \"two\")} written under the alias pythonic: byte for byte what the canonical name auto "
+                "writes, so the alias records auto and writes AutoSerializer's bytes, which mark the tuple "
+                "({\"__tuple__\": true, \"value\": [1, \"two\"]}). StandardSerializer writes the same value differently "
+                "(std_alias_write).",
+            ),
+        ):
+            vec = _build_envelope_vector(alias, name, description, value=TUPLE_VALUE, read_back=read_back)
+            canonical_frame = CacheSerializationHandler(canonical).serialize_data(TUPLE_VALUE, cache_key="python-frame-vector")
+            _require(bytes.fromhex(vec["frame_hex"]) == canonical_frame, f"the {alias} write differs from the {canonical} write")
+            built.append(vec)
+        # What a writer that records an alias as given would store: the default write's bytes under the name std.
+        payload_mv, meta, _ = SerializationWrapper.unwrap(bytes.fromhex(default_vec["frame_hex"]))
+        recorded_std = SerializationWrapper.wrap(bytes(payload_mv), meta, "std")
+        std_header, std_payload = parse_frame(recorded_std)
+        built.append(
+            {
+                "name": "std_recorded_as_given_frame",
+                "description": (
+                    f"Constructed: {DEFAULT_WRITE}'s payload and metadata under the recorded name std, the frame a writer "
+                    "that records an alias as given would store. A reader configured with \"default\" MUST miss on it, "
+                    "since it records std, not the canonical name; one that resolves the recorded name through its own "
+                    "alias table before it compares returns the value."
+                ),
+                "value_json": default_vec["value_json"],
+                "frame_hex": recorded_std.hex(),
+                "expected_header": std_header,
+                "expected_payload_hex": std_payload.hex(),
+                "payload_envelope": default_vec["payload_envelope"],
+            }
+        )
+        # Each name-check pair is refused by a default-configured reader at the name check, and its payload is one that
+        # reader's serializer decodes to the value: only the name check stands between it and the value.
+        for vec in built:
+            if vec["name"] not in NAME_CHECK_PAIRS:
+                continue
+            frame = bytes.fromhex(vec["frame_hex"])
+            try:
+                CacheSerializationHandler("default").deserialize_data(frame, cache_key="python-frame-vector")
+            except SerializationError as exc:
+                _require("Serializer mismatch" in str(exc), f"cachekit-py refuses {vec['name']} elsewhere: {exc}")
+            else:  # pragma: no cover - generation-time invariant
+                raise AssertionError(f"a default-configured reader returned a value from {vec['name']}")
+            payload_mv, _, _ = SerializationWrapper.unwrap(frame)
+            _require(StandardSerializer().deserialize(bytes(payload_mv), None) == VALUE, f"{vec['name']}'s payload does not decode to the value")
+        built.append(_build_integrity_off_vector())
 
     # 3. Arrow path: frame wrapping [8-byte xxHash3-64][Arrow IPC file].
     # Optional: without pandas + pyarrow the committed vector is left untouched.
@@ -974,6 +1381,34 @@ def generate() -> int:
         _require(a_payload[8:14] == b"ARROW1", "Arrow IPC magic not at documented offset")
         arrow_header, _ = parse_frame(arrow_frame)
         _require(arrow_header["m"] == a_meta and arrow_header["s"] == a_ser, "Arrow frame header disagrees with unwrap metadata")
+        from cachekit.serializers.arrow_serializer import ArrowSerializer
+
+        off_handler = CacheSerializationHandler(ArrowSerializer(compression=None))
+        off_frame = off_handler.serialize_data(df, cache_key="python-frame-vector")
+        _require(off_handler.deserialize_data(off_frame, cache_key="python-frame-vector").equals(df), "uncompressed Arrow round-trip mismatch")
+        off_header, off_payload = parse_frame(off_frame)
+        _require(off_payload[8:14] == b"ARROW1" and off_header["m"]["compressed"] is False, "uncompressed Arrow write is not what it claims")
+        built.append(
+            {
+                "name": "arrow_compression_off_write",
+                "description": (
+                    "DataFrame write via an ArrowSerializer(compression=None) instance: CK v3 frame wrapping "
+                    "[8-byte xxHash3-64 checksum][Arrow IPC file] with uncompressed buffers. The header records "
+                    "compressed false and the bare class name ArrowSerializer; spec/encryption.md gives this write's AAD "
+                    "inputs as (\"arrow\", false, original_type=\"arrow\"). Arrow IPC bytes are NOT canonical across "
+                    f"pyarrow versions (this vector: pyarrow {pyarrow.__version__}) — verify frame structure and envelope "
+                    "detection only, never IPC bytes."
+                ),
+                "frame_hex": off_frame.hex(),
+                "expected_header": off_header,
+                "arrow_detection": {
+                    "checksum_len": 8,
+                    "checksum_hex": off_payload[:8].hex(),
+                    "ipc_magic_offset": 8,
+                    "ipc_magic": "ARROW1",
+                },
+            }
+        )
         built.append(
             {
                 "name": "arrow_dataframe_write",

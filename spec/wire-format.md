@@ -901,20 +901,44 @@ frame against the real `cachekit-py` implementation: a minimal frame, a complete
 default-path write (frame → ByteStorage envelope → inner MessagePack → value, full
 round-trip) in both envelope encodings — the legacy array-of-ints original
 (cachekit 0.11.1) and its protocol 1.1 `bin` twin (cachekit 0.17.0, the first
-release emitting `bin`) — an Arrow-envelope frame (structural checks), and
-must-reject error vectors — including a CK frame fed to a strict interop reader.
+release emitting `bin`) — Arrow-envelope frames with compression on and off
+(structural checks), and must-reject error vectors — including a CK frame fed to a
+strict interop reader.
+
+Other frames pin the serializer name a frame records
+([Cache Key Format → Serializer Codes](cache-key-format.md#serializer-codes)).
+AutoSerializer's write of the same value (`s: auto`), a `StandardSerializer()`
+instance's (`s: StandardSerializer`) and a constructed frame that records the alias
+`std` as given all carry the default write's payload and metadata under another name,
+so a reader configured with `default` that skipped the name check, or resolved the
+recorded name through its alias table, would return the value; `verify` holds them to
+that. Writes under the aliases `std` and `pythonic` hold a map with a tuple, which
+StandardSerializer writes as an array and AutoSerializer marks, so their bytes show
+which serializer wrote them; `generate` proves each equals its canonical name's write.
+A write with integrity checking off pins the plain MessagePack container under
+`compressed: false`, and `verify` holds each write to the name and flag it records.
 
 Each CK error vector names, in `rejected_by`, the check that rejects it: `magic`, the
-7-byte `prefix_length`, `version` or `header_length`, so a test can assert the frame
-parser's own error rather than a later miss.
+7-byte `prefix_length`, `version`, `header_length`, or `serializer_name` for a frame
+that parses but records no serializer name or an empty one, so a test can assert the
+frame parser's own error rather than a later miss.
 
 The `encrypted_read_vectors` group holds frames that a cache configured for encryption
 (`encrypted_reader`: a master key, a tenant, a cache key, and `tenant_source`
 `reader`, meaning the reader resolves its tenant itself and never takes the frame
 header's) fails closed on: a plaintext payload under a header that adds
-`"encrypted": false`, a plaintext `orjson` write, and two ciphertexts that do not
+`"encrypted": false`, a plaintext `orjson` write, two ciphertexts that do not
 authenticate under the reader's key and AAD, one sealed under another master key and
-one for another tenant. `header_claims` records what each header claims. `generate` proves against the real
+one for another tenant, and two that do authenticate but hold plain MessagePack
+where the reader's configured container is a ByteStorage envelope, one with a header
+and AAD claiming `compressed: true` and one claiming `false`
+([Encryption → AAD v0x03](encryption.md#additional-authenticated-data-aad): the
+container after decryption is the configured one, never one the stored flag picks).
+Two more carry one of the reader's own encrypted writes, which authenticates, under a
+header that records the serializer name `auto` or none: the name is no AAD input, so
+only the reader's name check stands between them and the value
+([Cache Key Format → Serializer Codes](cache-key-format.md#serializer-codes)).
+`header_claims` records what each header claims. `generate` proves against the real
 cachekit-py that each read fails closed under both tamper policies. The stdlib verifier
 cannot run that read, so it pins the vector set and each frame's sha256 to what
 `generate` proved, and checks the frames' structure.

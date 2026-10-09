@@ -6,9 +6,12 @@
 // the default-path vector it performs the FULL round-trip a hypothetical reader
 // of the documented container would: CK v3 frame parse -> ByteStorage envelope
 // decode (positional msgpack array) -> LZ4 block decompress -> inner MessagePack
-// decode -> deep-compare against the original value. It also pins the normative
-// behavior for interop readers: a CK frame is NOT one well-formed MessagePack
-// document, so a strict single-document decoder rejects it.
+// decode -> deep-compare against the original value; a vector with a value but no
+// envelope (integrity checking off) is decoded as the value's plain MessagePack. It
+// also pins the normative behavior for interop readers: a CK frame is NOT one
+// well-formed MessagePack document, so a strict single-document decoder rejects it.
+// Every frame vector must record a serializer name, and an error vector that parses
+// but records none is rejected by that check (spec/cache-key-format.md).
 //
 // Run:  node tools/frame-crosscheck.mjs [path/to/python-frame.json]
 
@@ -55,6 +58,14 @@ function parseFrame(frame) {
   if (headerEnd > frame.length) throw new Error("header length exceeds frame");
   const header = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(frame.subarray(FRAME_PREFIX_LEN, headerEnd)));
   return { header, payload: frame.subarray(headerEnd) };
+}
+
+// spec/cache-key-format.md: an entry that records no serializer name is a mismatch for
+// every reader. Same rule as cachekit-py's reader and tools/python-frame-reference.py:
+// a non-empty string in `s`, nothing else.
+function requireSerializerName(header) {
+  const s = header !== null && typeof header === "object" && !Array.isArray(header) ? header.s : undefined;
+  if (typeof s !== "string" || s === "") throw new Error(`frame header records no serializer name in 's' (got ${JSON.stringify(s)})`);
 }
 
 // ------------------------------------------------- minimal MessagePack decode
@@ -237,6 +248,12 @@ for (const vec of doc.frame_vectors) {
     fail(vec.name, "payload mismatch");
     continue;
   }
+  try {
+    requireSerializerName(parsed.header);
+  } catch (e) {
+    fail(vec.name, e.message);
+    continue;
+  }
 
   if (vec.payload_envelope) {
     // Full round-trip: ByteStorage envelope -> LZ4 -> inner msgpack -> value.
@@ -279,6 +296,17 @@ for (const vec of doc.frame_vectors) {
     continue;
   }
 
+  if (vec.value_json !== undefined) {
+    // No envelope: the payload is the value's plain MessagePack (integrity checking off).
+    try {
+      if (!deepEqual(decodeDocument(parsed.payload), vec.value_json)) throw new Error("decoded value != value_json");
+      ok(vec.name, "frame -> plain msgpack -> value");
+    } catch (e) {
+      fail(vec.name, e.message);
+    }
+    continue;
+  }
+
   if (vec.arrow_detection) {
     const det = vec.arrow_detection;
     const magic = new TextEncoder().encode(det.ipc_magic);
@@ -310,11 +338,26 @@ for (const vec of doc.error_vectors) {
     }
     continue;
   }
+  // The frame parser must reject every vector but those its rejected_by sends to the serializer-name
+  // check, so a parser loosened at one of its own checks is not covered by the name check on a
+  // nameless header.
+  let parsed;
   try {
-    parseFrame(frame);
-    fail(vec.name, "expected rejection, parsed successfully");
+    parsed = parseFrame(frame);
   } catch {
-    ok(vec.name, "rejected");
+    if (vec.rejected_by === "serializer_name") fail(vec.name, "rejected by the frame parser, not the serializer-name check");
+    else ok(vec.name, "rejected");
+    continue;
+  }
+  if (vec.rejected_by !== "serializer_name") {
+    fail(vec.name, `expected rejection by the ${vec.rejected_by} check, parsed successfully`);
+    continue;
+  }
+  try {
+    requireSerializerName(parsed.header);
+    fail(vec.name, "expected rejection by the serializer-name check, parsed successfully");
+  } catch {
+    ok(vec.name, "rejected by the serializer-name check");
   }
 }
 

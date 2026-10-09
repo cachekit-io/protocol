@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Mutation tests for encryption-verify.py's keyring, default-tenant and master key input guards.
+"""Mutation tests for encryption-verify.py's guards: the vectors table, the keyring, the default tenant, master key
+input, and the models of wrong implementations each table's notes name.
 
 Same doctrine as test_wire_format_reference.py: a conformance gate is proven by
 poisoning the fixture and watching it go red, not by reading it. Every case below
@@ -22,6 +23,7 @@ import importlib.util
 import io
 import json
 import sys
+import traceback
 from collections.abc import Callable
 from pathlib import Path
 
@@ -37,10 +39,10 @@ HAVE_SEAL = importlib.util.find_spec("cryptography") is not None
 
 
 def run(mutate: Callable[[dict], None]) -> tuple[int | None, str]:
-    """The verifier's exit status and output on a mutated copy of the fixture; None, and the exception, if it raised.
+    """The verifier's exit status and output on a mutated copy of the fixture; None as the status if it raised.
 
     The verifier reports a bad fixture with a FAIL line, never a traceback. A raise is caught here so that it is
-    reported against its own case and cannot hide the cases after it.
+    reported against its own case and cannot hide the cases after it; its traceback ends the output.
     """
     doc = copy.deepcopy(DOC)
     mutate(doc)
@@ -48,8 +50,8 @@ def run(mutate: Callable[[dict], None]) -> tuple[int | None, str]:
     with contextlib.redirect_stdout(out):
         try:
             rc = ev.verify(doc, require_seal=HAVE_SEAL)
-        except Exception as exc:  # noqa: BLE001 -- any raise is a finding, reported by the caller
-            print(f"RAISED {type(exc).__name__}: {exc}")
+        except Exception:  # noqa: BLE001 -- any raise is a finding, reported by the caller
+            print(f"RAISED\n{traceback.format_exc()}")
             return None, out.getvalue()
     return rc, out.getvalue()
 
@@ -66,6 +68,36 @@ def dt(doc: dict) -> dict:
     return next(v for v in doc["default_tenant"]["vectors"] if v["name"] == "default_tenant_interop")
 
 
+def with_envelope_format(plaintext_hex: str, fmt: str) -> str:
+    """A ByteStorage envelope's hex with its format field replaced, everything else kept."""
+    wire = ev._load_tool("wire-format-reference.py")  # noqa: SLF001 -- the verifier's own loader
+    data, checksum, size, _, encoding = wire.decode_envelope(bytes.fromhex(plaintext_hex))
+    return wire.encode_envelope(data, checksum, size, fmt, encoding=encoding).hex()
+
+
+def shape_vector(doc: dict, name: str) -> dict:
+    return next(v for v in doc["vectors"] if v["name"] == name)
+
+
+def reshape(name: str, **fields: object) -> Callable[[dict], None]:
+    """A vector with other fields, its AAD rebuilt and, when `cryptography` imports, its ciphertext sealed again under
+    its own nonce, so only the guard a case targets can fail it."""
+
+    def mutate(doc: dict) -> None:
+        vec = shape_vector(doc, name)
+        vec.update(fields)
+        aad = ev.aad_v3(doc["tenant_id"], vec["cache_key"], fmt=vec["format"], compressed=vec["compressed"], original_type=vec.get("original_type"))
+        vec["aad_hex"] = aad.hex()
+        if HAVE_SEAL:
+            from cryptography.hazmat.primitives.ciphers.aead import AESGCM  # noqa: PLC0415
+
+            key = ev.derive_encryption_key(bytes.fromhex(doc["master_key_hex"]), doc["tenant_id"])
+            nonce = bytes.fromhex(vec["ciphertext_hex"][:24])
+            vec["ciphertext_hex"] = (nonce + AESGCM(key).encrypt(nonce, bytes.fromhex(vec["plaintext_hex"]), aad)).hex()
+
+    return mutate
+
+
 def master_fingerprint(doc: dict, key_id: str) -> str:
     entry = next(e for e in doc["keyring"]["entries"] if e["id"] == key_id)
     return ev.key_fingerprint(bytes.fromhex(entry["master_key_hex"]))
@@ -79,6 +111,10 @@ def accept_row(doc: dict) -> dict:
     return mk(doc, ev.ACCEPT_ROW)
 
 
+def first_byte_80_row(doc: dict) -> dict:
+    return mk(doc, ev.FIRST_BYTE_80_ROW)
+
+
 def set_key(name: str, text: str) -> Callable[[dict], None]:
     return lambda d: mk(d, name).__setitem__("master_key_hex", text)
 
@@ -87,14 +123,14 @@ def set_raw(name: str, raw: bytes) -> Callable[[dict], None]:
     return lambda d: mk(d, name).__setitem__("raw_key_hex", raw.hex())
 
 
-def rekey(key: bytes) -> Callable[[dict], None]:
-    """The accept row under another key with its fingerprint recomputed, so only a property the key lacks can fail it.
+def rekey(key: bytes, name: str = ev.ACCEPT_ROW) -> Callable[[dict], None]:
+    """An accept row under another key with its fingerprint recomputed, so only a property the key lacks can fail it.
 
     The sealed entry is left as it was, so in the seal lane the decrypt fails as well.
     """
 
     def mutate(doc: dict) -> None:
-        accept_row(doc).update(
+        mk(doc, name).update(
             master_key_hex=key.hex(),
             derived_key_fingerprint_hex=ev.key_fingerprint(ev.derive_encryption_key(key, ev.DEFAULT_TENANT_ID)),
         )
@@ -117,6 +153,8 @@ H = KEY.hex()
 LOW_KEY = bytes(range(32))
 # KEY with bytes 1 and 3 swapped, so byte 1 is ff: a two's-complement decoder's sign byte restores the leading 00.
 SIGN_BYTE_KEY = bytes.fromhex("00ff807fa55ac33c1ee12dd24bb469968778f00f01102332455467768998abba")
+# KEY with its first byte set to 7f, the highest first byte a two's-complement decoder padded to 32 bytes reads right.
+FIRST_BYTE_7F_KEY = bytes.fromhex("7f" + KEY.hex()[2:])
 # Digits only, with a leading 00 and bytes above 7f.
 ALL_DIGITS = bytes.fromhex("00" + "".join(f"{n:02d}" for n in range(99, 79, -1)) + "".join(f"{n:02d}" for n in range(79, 68, -1)))
 # A leading 00, bytes above 7f and letters in both digits, reading the same reversed.
@@ -166,6 +204,36 @@ STDLIB_CASES: dict[str, Case] = {
     "aad corrupted": lambda d: k1(d).__setitem__("aad_hex", "03" + k1(d)["aad_hex"][2:].replace("6b", "6c", 1)),
     "cache_key substituted": lambda d: k1(d).__setitem__("cache_key", "keyring:attacker:entry"),
     "frozen keyring vector renamed": lambda d: k1(d).__setitem__("name", "renamed"),
+    # encryption.md ENC-10 — writer-shape vectors keep their shape over their writer's own container. Each is sealed again,
+    # so only the shape guard rejects it.
+    "writer-shape vector resealed as compressed False": (
+        reshape("standard_serializer_default", compressed=False),
+        "must keep the AAD shape (msgpack, True, msgpack)",
+    ),
+    "writer-shape vector over plain MessagePack under compressed True": (
+        lambda d: reshape("standard_serializer_default", plaintext_hex=shape_vector(d, "standard_serializer_integrity_off")["plaintext_hex"])(d),
+        "claims compressed True, but its plaintext is no ByteStorage envelope",
+    ),
+    "writer-shape vector over an envelope under compressed False": (
+        lambda d: reshape("standard_serializer_integrity_off", plaintext_hex=shape_vector(d, "standard_serializer_default")["plaintext_hex"])(d),
+        "claims compressed False, but its plaintext is not one plain MessagePack document",
+    ),
+    "writer-shape vector over two documents under compressed False": (
+        lambda d: reshape("standard_serializer_integrity_off", plaintext_hex=shape_vector(d, "standard_serializer_integrity_off")["plaintext_hex"] + "00")(d),
+        "claims compressed False, but its plaintext is not one plain MessagePack document",
+    ),
+    # The same envelope with its format field saying orjson: still a valid envelope, so only the format check refuses it.
+    "writer-shape vector over an envelope that records another format": (
+        lambda d: reshape("standard_serializer_default", plaintext_hex=with_envelope_format(shape_vector(d, "standard_serializer_default")["plaintext_hex"], "orjson"))(d),
+        "its plaintext's envelope records format 'orjson', not the AAD's 'msgpack'",
+    ),
+    # Append-only means a published row never moves either: consumers read rows by position (accept_vectors[0]).
+    "accept rows reversed": (
+        lambda d: d["master_key_input"]["accept_vectors"].reverse(),
+        "frozen master_key_input.accept_vectors rows missing or moved",
+    ),
+    "first two vectors swapped": (lambda d: d["vectors"].insert(0, d["vectors"].pop(1)), "frozen vectors rows missing or moved"),
+    "keyring vectors reversed": (lambda d: d["keyring"]["vectors"].reverse(), "frozen keyring.vectors rows missing or moved"),
     # intent-presets.md rule 5 — the default-tenant block is ground truth for "no tenant configured".
     "default_tenant block deleted": lambda d: d.pop("default_tenant"),
     "default_tenant is not the literal": lambda d: d["default_tenant"].__setitem__("tenant_id", "cross-sdk-test"),
@@ -225,7 +293,7 @@ STDLIB_CASES: dict[str, Case] = {
     # Deleted, not renamed: a renamed row is also a row no wrong entry point lists, which the next case's guard catches.
     "frozen master_key_input row deleted": (
         lambda d: d["master_key_input"]["raw_reject_vectors"].remove(mk(d, "raw_key_31_bytes")),
-        "frozen master_key_input raw_reject_vectors missing",
+        "frozen master_key_input.raw_reject_vectors rows missing or moved",
     ),
     "row added with no wrong entry point to show its mistake": (
         lambda d: d["master_key_input"]["reject_vectors"].append(
@@ -293,6 +361,10 @@ STDLIB_CASES: dict[str, Case] = {
         rekey(SIGN_BYTE_KEY),
         'to_signed_bytes_be)" judges master_key_every_hex_digit correctly',
     ),
+    "first-byte-80 row whose first byte is 7f": (
+        rekey(FIRST_BYTE_7F_KEY, ev.FIRST_BYTE_80_ROW),
+        "signed=True))\" judges master_key_first_byte_80 correctly",
+    ),
     # PRE-51's pairing needs the accept row and default_tenant_interop under different keys, in different entries. One
     # case per clause of the guard; the AAD is rebuilt, and the guard runs before the seal check, so only that clause
     # rejects each.
@@ -308,6 +380,20 @@ STDLIB_CASES: dict[str, Case] = {
         "shares its master key, cache_key or plaintext",
     ),
     "accept row under the main master key": (rekey(bytes.fromhex(DOC["master_key_hex"])), "shares its master key, cache_key or plaintext"),
+    # The two accept rows must differ from each other the same way, so a test can plant both and read each under its
+    # own key. The first-byte-80 row under the accept row's key also fails the model check; the guard's text is asked.
+    "first-byte-80 row on the accept row's cache_key": (
+        lambda d: first_byte_80_row(d).update(
+            cache_key=accept_row(d)["cache_key"],
+            aad_hex=ev.aad_v3(ev.DEFAULT_TENANT_ID, accept_row(d)["cache_key"], fmt="msgpack", compressed=False).hex(),
+        ),
+        "shares its master key, cache_key or plaintext",
+    ),
+    "first-byte-80 row on the accept row's plaintext": (
+        lambda d: first_byte_80_row(d).__setitem__("plaintext_hex", accept_row(d)["plaintext_hex"]),
+        "shares its master key, cache_key or plaintext",
+    ),
+    "first-byte-80 row under the accept row's key": (rekey(KEY, ev.FIRST_BYTE_80_ROW), "shares its master key, cache_key or plaintext"),
     # A row of sound shape that a model cannot parse reaches the models, which report the raise as a failure.
     "accept row of 63 digits": (
         lambda d: accept_row(d).__setitem__("master_key_hex", H[:63]),
@@ -334,7 +420,51 @@ SEAL_CASES: dict[str, Case] = {
         "decrypt failed",
     ),
     "accept row plaintext pinned wrong": (lambda d: accept_row(d).__setitem__("plaintext_hex", "00"), "plaintext mismatch"),
+    # The accept row's bytes, sealed under another master key: the first-byte-80 row's own fields still match.
+    "first-byte-80 row sealed under another master key": (
+        lambda d: first_byte_80_row(d).__setitem__("ciphertext_hex", accept_row(d)["ciphertext_hex"]),
+        "decrypt failed",
+    ),
 }
+
+
+# Each model of a mistake, replaced in turn by an entry point that conforms, must turn the verifier red under its own
+# label: proof that every model's check is live, not covered by another guard. A model that lists a row its table does
+# not freeze must turn it red too.
+CONFORMING_MODELS: dict[str, Callable] = {
+    "WRONG_HEX_ENTRY_POINTS": lambda t: ev.behind(ev.EXACTLY_32, ev.read_hex_key(t)),
+    "WRONG_RAW_ENTRY_POINTS": lambda k: ev.behind(ev.EXACTLY_32, k),
+}
+
+
+def model_cases() -> dict[str, tuple[str, str, Callable, tuple[str, ...], str]]:
+    """Case name -> (model table, label, stand-in, rows it lists, text the verifier must print)."""
+    cases = {}
+    for table, conforming in CONFORMING_MODELS.items():
+        for label, (_, targets) in getattr(ev, table).items():
+            cases[f"{table}: {label!r} replaced by a conforming entry point"] = (table, label, conforming, targets, repr(label))
+        cases[f"{table}: a model listing a row that does not exist"] = (
+            table,
+            "a model listing a misspelled row",
+            conforming,
+            ("no_such_row",),
+            "which is not a frozen row",
+        )
+    return cases
+
+
+def run_model_case(table: str, label: str, stand_in: Callable, targets: tuple[str, ...]) -> tuple[int | None, str]:
+    """The verifier's status and output on the committed fixture with one model swapped in, the table restored after."""
+    models = getattr(ev, table)
+    saved = models.get(label)
+    models[label] = (stand_in, targets)
+    try:
+        return run(lambda _: None)
+    finally:
+        if saved is None:
+            del models[label]
+        else:
+            models[label] = saved
 
 
 def main() -> int:
@@ -357,9 +487,14 @@ def main() -> int:
         cases.update(SEAL_CASES)
     else:
         print(f"note: {len(SEAL_CASES)} seal cases skipped — cryptography not installed")
-    for name, case in cases.items():
-        mutate, expected = case if isinstance(case, tuple) else (case, None)
-        rc, out = run(mutate)
+    runs = {name: (lambda case=case: run(case[0] if isinstance(case, tuple) else case)) for name, case in cases.items()}
+    expectations = {name: case[1] if isinstance(case, tuple) else None for name, case in cases.items()}
+    for name, (table, label, stand_in, targets, expected) in model_cases().items():
+        runs[name] = lambda table=table, label=label, stand_in=stand_in, targets=targets: run_model_case(table, label, stand_in, targets)
+        expectations[name] = expected
+    for name, go in runs.items():
+        expected = expectations[name]
+        rc, out = go()
         if rc is None:
             print(f"FAIL mutation '{name}' raised instead of failing a guard:\n{out}")
             bad += 1
@@ -374,7 +509,7 @@ def main() -> int:
     if bad:
         print(f"{bad} mutation(s) NOT caught")
         return 1
-    print(f"all {len(cases)} mutations caught")
+    print(f"all {len(runs)} mutations caught")
     return 0
 
 
