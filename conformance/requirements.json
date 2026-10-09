@@ -2463,7 +2463,7 @@
             "python-frame.json:bare_envelope_fed_to_frame_reader",
             "python-frame.json:plain_msgpack_fed_to_frame_reader"
           ],
-          "gap": "cachekit-py's refusal of a bare envelope and of plain MessagePack is pinned, and so is a plain-MessagePack reader's refusal of a CK frame, by its trailing bytes. No vector names cachekit-ts's envelope reader as the one refusing a CK frame or plain MessagePack, though the vectors carry both, and none can tell cachekit-ts's uncompressed container from cachekit-rs's: both are plain MessagePack."
+          "gap": "cachekit-py's refusal of a bare envelope and of plain MessagePack is pinned, and so is a plain-MessagePack reader's refusal of a CK frame, by its trailing bytes. No vector names cachekit-ts's envelope reader as the one refusing a CK frame or plain MessagePack, though the vectors carry both, and none can tell cachekit-ts's uncompressed container from cachekit-rs's: both are plain MessagePack. cachekit-rs decodes bare_envelope_fed_to_frame_reader, a WIRE-21 violation (sdk-feature-matrix.md note 15)."
         },
         "WIRE-22": {
           "section": "Python: CK v3 frame",
