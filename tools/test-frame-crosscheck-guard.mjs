@@ -1,6 +1,8 @@
 #!/usr/bin/env node
-// Mutation tests for the lz4BlockDecompress validate-before-allocate guard in
-// frame-crosscheck.mjs.
+// Mutation tests for guards in frame-crosscheck.mjs: the lz4BlockDecompress
+// validate-before-allocate guard, the value check on a frame whose payload is
+// plain MessagePack (no envelope), the serializer-name check on frame vectors,
+// and the hold of each error vector to the check its rejected_by names.
 // Zero dependencies. Run: node tools/test-frame-crosscheck-guard.mjs
 //
 // Evidence convention (LAB-903 / test_check_version_floors.py): a baseline
@@ -30,6 +32,11 @@ const FIXTURE = join(HERE, "..", "test-vectors", "python-frame.json");
 // Must match the guard's message in frame-crosscheck.mjs and the driver's
 // post-allocation mismatch message respectively.
 const GUARD_MSG = "exceeds max expansion ceiling";
+// The plain-MessagePack value check and the vector that reaches it: integrity
+// checking off, so its payload is the value's MessagePack with no envelope.
+const PLAIN_VECTOR = "integrity_checking_off_write";
+const VALUE_MSG = "decoded value != value_json";
+const PLAIN_CHECK = 'if (!deepEqual(decodeDocument(parsed.payload), vec.value_json)) throw new Error("decoded value != value_json");';
 const POST_ALLOC_MSG = "LZ4 output 2 != expected 67108864";
 
 const ABSURD_SIZE = 64 * 1024 * 1024; // 64 MiB declared from 3 compressed bytes; ceiling is 3*255 = 765
@@ -67,6 +74,18 @@ function buildAbsurdVector() {
     },
     value_json: null,
   };
+}
+
+// Rewrite a vector's CK frame header with `change`, keeping HDR_LEN and expected_header in step.
+function reheader(vec, change) {
+  const bytes = Buffer.from(vec.frame_hex, "hex");
+  const hdrLen = bytes.readUInt32BE(3);
+  const header = change(JSON.parse(bytes.subarray(7, 7 + hdrLen).toString("utf-8")));
+  const raw = Buffer.from(JSON.stringify(header), "utf-8");
+  const prefix = Buffer.from(bytes.subarray(0, 7));
+  prefix.writeUInt32BE(raw.length, 3);
+  vec.frame_hex = Buffer.concat([prefix, raw, bytes.subarray(7 + hdrLen)]).toString("hex");
+  vec.expected_header = header;
 }
 
 const run = (toolPath, fixturePath) => {
@@ -125,6 +144,66 @@ try {
     unguarded.code !== 0 && unguarded.out.includes(POST_ALLOC_MSG),
     `expected exit != 0 with "${POST_ALLOC_MSG}", got exit ${unguarded.code}:\n${unguarded.out}`
   );
+
+  // Case 4 — a plain-MessagePack vector whose value_json is not the value its
+  // payload holds. Only the plain branch's value check can refuse it: the frame
+  // and payload are untouched. Stripping that check must turn the run green.
+  const plainDoc = JSON.parse(readFileSync(FIXTURE, "utf-8"));
+  const plain = plainDoc.frame_vectors.find((v) => v.name === PLAIN_VECTOR);
+  const before = JSON.stringify(plain.value_json);
+  plain.value_json = { ...plain.value_json, user_id: plain.value_json.user_id + 1 };
+  check("value mutation is not a no-op", JSON.stringify(plain.value_json) !== before, `value_json unchanged: ${before}`);
+  const plainFixture = join(tmp, "python-frame-wrong-value.json");
+  writeFileSync(plainFixture, JSON.stringify(plainDoc));
+  const valued = run(TOOL, plainFixture);
+  check(
+    "guarded tool: a wrong value_json on a plain-MessagePack vector exits non-zero, by the value check",
+    valued.code !== 0 && valued.out.includes(PLAIN_VECTOR) && valued.out.includes(VALUE_MSG),
+    `expected exit != 0 naming ${PLAIN_VECTOR} with "${VALUE_MSG}", got exit ${valued.code}:\n${valued.out}`
+  );
+  const unchecked = source.replace(PLAIN_CHECK, "decodeDocument(parsed.payload);");
+  check("value-check strip is not a no-op", unchecked !== source, "the plain branch's value check moved; fix this test's anchor");
+  const uncheckedTool = join(tmp, "frame-crosscheck-unchecked.mjs");
+  writeFileSync(uncheckedTool, unchecked);
+  const loose = run(uncheckedTool, plainFixture);
+  check(
+    "stripped tool: the same fixture passes once the value check is gone (no other check refuses it)",
+    loose.code === 0,
+    `expected exit 0, got exit ${loose.code}:\n${loose.out}`
+  );
+
+  // Cases 5-7 — one fixture mutation each, which the tool must refuse with the
+  // named guard's message: a frame vector that records no serializer name; a
+  // serializer_name error vector the frame parser already rejects; a parseable
+  // error vector whose rejected_by names a parser check.
+  for (const [label, mutate, vector, message] of [
+    [
+      "a frame vector that records no serializer name",
+      (d) => reheader(d.frame_vectors.find((v) => v.name === "raw_payload_frame"), ({ s, ...rest }) => rest),
+      "raw_payload_frame",
+      "frame header records no serializer name",
+    ],
+    [
+      "a serializer_name error vector the frame parser rejects first",
+      (d) => (d.error_vectors.find((v) => v.name === "bare_envelope_fed_to_frame_reader").rejected_by = "serializer_name"),
+      "bare_envelope_fed_to_frame_reader",
+      "rejected by the frame parser, not the serializer-name check",
+    ],
+    [
+      "a parseable error vector held to a parser check",
+      (d) => (d.error_vectors.find((v) => v.name === "serializer_name_missing").rejected_by = "magic"),
+      "serializer_name_missing",
+      "expected rejection by the magic check, parsed successfully",
+    ],
+  ]) {
+    const mutated = JSON.parse(readFileSync(FIXTURE, "utf-8"));
+    mutate(mutated);
+    const path = join(tmp, "python-frame-mutated.json");
+    writeFileSync(path, JSON.stringify(mutated));
+    const r = run(TOOL, path);
+    const line = r.out.split("\n").find((l) => l.includes(vector) && l.includes(message));
+    check(`guarded tool: ${label} exits non-zero, by that guard`, r.code !== 0 && line !== undefined, `exit ${r.code}:\n${r.out}`);
+  }
 } finally {
   rmSync(tmp, { recursive: true, force: true });
 }
@@ -134,4 +213,4 @@ if (failures.length) {
   for (const f of failures) console.error(`  - ${f}`);
   process.exit(1);
 }
-console.log("\nall lz4 allocation-guard mutation cases passed");
+console.log("\nall frame-crosscheck guard mutation cases passed");

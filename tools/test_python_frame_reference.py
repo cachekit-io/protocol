@@ -8,6 +8,9 @@ loosening any byte comparison, that generate() warns and never raises
 (LAB-1203 deadlock pin), and that _upsert() carries the declaration across
 rebuilds. It also proves each boundary error vector fails verify for a parser
 loosened at its check, and that verify pins the encrypted-read group's claims.
+Each check verify makes of the frame claims and the encrypted name frames has a
+case that fails on that check's own FAIL text; a case that rewrites an encrypted
+frame re-pins its sha256 first, so only the check under test can fail.
 Stdlib only, no framework.
 
 Run: python3 tools/test_python_frame_reference.py     (exit 1 on any failure)
@@ -17,6 +20,7 @@ from __future__ import annotations
 
 import contextlib
 import copy
+import hashlib
 import importlib.util
 import io
 import json
@@ -644,9 +648,10 @@ def as_vector(doc: dict, name: str, source: str) -> None:
     vectors[i].pop("twin_of", None)
 
 
-def reheader(doc: dict, name: str, change) -> None:
-    """Rewrite vector `name`'s header with `change`, keeping its frame, HDR_LEN and expected_header in step."""
-    vec = next(v for v in doc["frame_vectors"] if v["name"] == name)
+def reheader(doc: dict, table: str, name: str, change) -> None:
+    """Rewrite the header of vector `name` in `table` with `change`, keeping its frame, HDR_LEN and expected_header in
+    step."""
+    vec = next(v for v in doc[table] if v["name"] == name)
     header, payload = pfr.parse_frame(bytes.fromhex(vec["frame_hex"]))
     raw = json.dumps(change(header)).encode()
     vec["frame_hex"] = (pfr.MAGIC + bytes([pfr.FRAME_VERSION]) + len(raw).to_bytes(4, "big") + raw + payload).hex()
@@ -673,7 +678,7 @@ OVER = f"over {DEFAULT_WRITE}'s payload"
 for label, mutate, want in (
     (
         "the AutoSerializer write over the integrity-off write's payload and metadata",
-        lambda d: (as_vector(d, "auto_serializer_write", "integrity_checking_off_write"), reheader(d, "auto_serializer_write", lambda h: {**h, "s": "auto"})),
+        lambda d: (as_vector(d, "auto_serializer_write", "integrity_checking_off_write"), reheader(d, "frame_vectors", "auto_serializer_write", lambda h: {**h, "s": "auto"})),
         [
             f"FAIL auto_serializer_write: metadata differs from {DEFAULT_WRITE}'s, so a reader that skips the name check may not decode it",
             "FAIL auto_serializer_write: must record the serializer name 'auto' and compressed true",
@@ -689,7 +694,7 @@ for label, mutate, want in (
     ),
     (
         "the alias-as-given frame recording default",
-        lambda d: reheader(d, "std_recorded_as_given_frame", lambda h: {**h, "s": "default"}),
+        lambda d: reheader(d, "frame_vectors", "std_recorded_as_given_frame", lambda h: {**h, "s": "default"}),
         [f"FAIL std_recorded_as_given_frame: must record the serializer name 'std' {OVER}"],
     ),
     (
@@ -711,7 +716,7 @@ for label, mutate, want in (
     ),
     (
         "the integrity-off write claiming compressed true",
-        lambda d: reheader(d, "integrity_checking_off_write", lambda h: {**h, "m": {**h["m"], "compressed": True}}),
+        lambda d: reheader(d, "frame_vectors", "integrity_checking_off_write", lambda h: {**h, "m": {**h["m"], "compressed": True}}),
         [
             "FAIL integrity_checking_off_write: must record the serializer name 'default' and compressed false",
             "FAIL integrity_checking_off_write: a plain MessagePack payload records compressed false, not True",
@@ -719,8 +724,21 @@ for label, mutate, want in (
     ),
     (
         "the uncompressed Arrow write recorded as arrow",
-        lambda d: reheader(d, "arrow_compression_off_write", lambda h: {**h, "s": "arrow"}),
+        lambda d: reheader(d, "frame_vectors", "arrow_compression_off_write", lambda h: {**h, "s": "arrow"}),
         ["FAIL arrow_compression_off_write: must record the serializer name 'ArrowSerializer' and compressed false"],
+    ),
+    (
+        "the AutoSerializer write over the std write's payload, under the default write's metadata",
+        lambda d: (as_vector(d, "auto_serializer_write", "std_alias_write"), reheader(d, "frame_vectors", "auto_serializer_write", lambda h: {**h, "s": "auto"})),
+        [f"FAIL auto_serializer_write: payload differs from {DEFAULT_WRITE}'s, so a reader that skips the name check may not decode it"],
+    ),
+    (
+        "an envelope write claiming compressed false",
+        lambda d: reheader(d, "frame_vectors", "std_alias_write", lambda h: {**h, "m": {**h["m"], "compressed": False}}),
+        [
+            "FAIL std_alias_write: must record the serializer name 'default' and compressed true",
+            "FAIL std_alias_write: a ByteStorage envelope payload records compressed true, not False",
+        ],
     ),
     (
         "the AutoSerializer write dropped",
@@ -746,15 +764,6 @@ def zero_ciphertext(doc: dict) -> None:
 
 
 
-def reheader_encrypted(doc: dict, name: str, change) -> None:
-    """Rewrite an encrypted-read vector's header with `change`, keeping its frame, HDR_LEN and expected_header in step."""
-    vec = next(v for v in doc["encrypted_read_vectors"] if v["name"] == name)
-    header, payload = pfr.parse_frame(bytes.fromhex(vec["frame_hex"]))
-    raw = json.dumps(change(header)).encode()
-    vec["frame_hex"] = (pfr.MAGIC + bytes([pfr.FRAME_VERSION]) + len(raw).to_bytes(4, "big") + raw + payload).hex()
-    vec["expected_header"] = json.loads(raw)
-
-
 def repayload_encrypted(doc: dict, name: str, payload_hex: str) -> None:
     """Give an encrypted-read vector another payload, its frame and declaration in step."""
     vec = next(v for v in doc["encrypted_read_vectors"] if v["name"] == name)
@@ -762,20 +771,54 @@ def repayload_encrypted(doc: dict, name: str, payload_hex: str) -> None:
     vec["expected_payload_hex"] = payload_hex
 
 
-for label, mutate, names in (
+def run_repinned(doc: dict) -> tuple[int | None, str]:
+    """run_verify with ENCRYPTED_READ_PINS re-pinned to `doc`'s frames, as a deliberate re-pin after `generate` leaves
+    them: a case that rewrites a frame then fails only the guard it targets, not the sha256 pin."""
+    pins = {
+        v["name"]: hashlib.sha256(bytes.fromhex(v["frame_hex"])).hexdigest()
+        for v in doc["encrypted_read_vectors"]
+        if v["name"] in pfr.ENCRYPTED_READ_PINS
+    }
+    saved, pfr.ENCRYPTED_READ_PINS = pfr.ENCRYPTED_READ_PINS, pins
+    try:
+        return run_verify(doc)
+    finally:
+        pfr.ENCRYPTED_READ_PINS = saved
+
+
+NAME_AUTO, NAME_MISSING = pfr.ENCRYPTED_NAME_FRAMES
+OWN_TENANT = "must be a write of the encrypted reader's own tenant"
+ONE_WRITE = f"FAIL {NAME_AUTO}: must carry {NAME_MISSING}'s write under the same metadata, so the two differ only in the name"
+for label, mutate, want in (
     ("an encrypted name frame recording default",
-     lambda d: reheader_encrypted(d, "ciphertext_serializer_name_auto", lambda h: {**h, "s": "default"}),
-     {"ciphertext_serializer_name_auto"}),
+     lambda d: reheader(d, "encrypted_read_vectors", NAME_AUTO, lambda h: {**h, "s": "default"}),
+     {f"FAIL {NAME_AUTO}: must record the serializer name 'auto'"}),
     ("the nameless encrypted frame recording a name",
-     lambda d: reheader_encrypted(d, "ciphertext_serializer_name_missing", lambda h: {"s": "auto", **h}),
-     {"ciphertext_serializer_name_missing"}),
-    ("an encrypted name frame written for another tenant",
-     lambda d: reheader_encrypted(d, "ciphertext_serializer_name_auto",
-                                  lambda h: {**h, "m": {**h["m"], "tenant_id": "00000000-0000-4000-8000-00000000000b"}}),
-     {"ciphertext_serializer_name_auto"}),
+     lambda d: reheader(d, "encrypted_read_vectors", NAME_MISSING, lambda h: {"s": "auto", **h}),
+     {f"FAIL {NAME_MISSING}: must record no serializer name"}),
+    ("both encrypted name frames written for another tenant",
+     lambda d: [
+         reheader(d, "encrypted_read_vectors", name, lambda h: {**h, "m": {**h["m"], "tenant_id": "00000000-0000-4000-8000-00000000000b"}})
+         for name in (NAME_AUTO, NAME_MISSING)
+     ],
+     {f"FAIL {NAME_AUTO}: {OWN_TENANT}", f"FAIL {NAME_MISSING}: {OWN_TENANT}"}),
     ("the encrypted name frames carrying two writes",
-     lambda d: repayload_encrypted(d, "ciphertext_serializer_name_auto", "00" * 64),
-     {"ciphertext_serializer_name_auto"}),
+     lambda d: repayload_encrypted(d, NAME_AUTO, "00" * 64), {ONE_WRITE}),
+    ("an encrypted name frame whose header is JSON null",
+     lambda d: reheader(d, "encrypted_read_vectors", NAME_AUTO, lambda h: None),
+     {f"FAIL {NAME_AUTO}: must record the serializer name 'auto'", f"FAIL {NAME_AUTO}: {OWN_TENANT}",
+      f"FAIL {NAME_AUTO}: header claims plaintext, vector declares 'ciphertext'", ONE_WRITE}),
+    ("another encrypted-read frame recording no serializer name",
+     lambda d: reheader(d, "encrypted_read_vectors", "ciphertext_other_tenant", lambda h: {k: v for k, v in h.items() if k != "s"}),
+     {"FAIL ciphertext_other_tenant: no serializer name in 's'"}),
+):
+    doc = copy.deepcopy(COMMITTED)
+    mutate(doc)
+    rc, out = run_repinned(doc)
+    got = {line for line in out.splitlines() if line.startswith("FAIL")}
+    check(f"encrypted-read guard: {label}: verify fails on that guard alone", rc == 1 and got == want)
+
+for label, mutate, names in (
     ("a forged frame declared as ciphertext",
      lambda d: d["encrypted_read_vectors"][0].update(header_claims="ciphertext"), {"forged_plaintext_encrypted_false"}),
     ("an outcome other than fail_closed",
