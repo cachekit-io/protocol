@@ -222,8 +222,9 @@ function encodeCanonical(v, chunks, { collapseFloats }) {
     // outside the data model and falls through to the error below, never to an
     // empty map. Sort keys by UTF-8 byte order (== Unicode code point order). JS default
     // string sort compares UTF-16 code units and gets supplementary-plane
-    // characters WRONG — compare encoded bytes instead. Its data is its own
-    // enumerable properties, and an enumerable Symbol key is a non-string map key.
+    // characters WRONG — compare encoded bytes instead.
+    // A plain object's data is its own enumerable properties, and an enumerable
+    // Symbol key is a non-string map key.
     // propertyIsEnumerable goes through Object.prototype: a null-prototype object
     // has none, and the message names no Symbol, since interpolating one throws.
     if (Object.getOwnPropertySymbols(v).some((s) => Object.prototype.propertyIsEnumerable.call(v, s))) {
@@ -542,12 +543,17 @@ for (const v of doc.error_vectors) {
 
 // Self-tests for inputs portable JSON cannot carry. Named functions, so
 // conformance/requirements.json can cite them.
-function expectRejected(test, label, args) {
+// The rejection must be exactly errorClass: OutOfModelError extends Error, so
+// instanceof could not tell a plain Error from it.
+function expectRejected(test, label, args, errorClass) {
   try {
     encodeToBuffer(args, { collapseFloats: true });
   } catch (err) {
     if (err instanceof TypeError || err instanceof ReferenceError) throw err; // a harness bug, not a rejection
-    return; // expected
+    if (err.constructor === errorClass) return; // expected
+    failures++;
+    console.error(`FAIL ${test} (${label}): expected ${errorClass.name}, got ${err.constructor.name}: ${err.message}`);
+    return;
   }
   failures++;
   console.error(`FAIL ${test} (${label}): expected rejection, encoding succeeded`);
@@ -566,7 +572,7 @@ function loneSurrogateSelftest() {
     ["lone surrogate in a nested value", [{ k: ["ok", lo] }]],
     ["lone surrogate in a set", [new TaggedSet([hi])]],
   ]) {
-    expectRejected("loneSurrogateSelftest", label, args);
+    expectRejected("loneSurrogateSelftest", label, args, Error);
   }
   check("loneSurrogateSelftest", "valid pair", "91a4f0908080", encodeToBuffer([hi + lo], { collapseFloats: true }).toString("hex"));
 }
@@ -584,7 +590,7 @@ function outOfModelSelftest() {
     ["class instance in a map value", [{ k: new Point() }]],
     ["class instance in a set", [new TaggedSet([new Point()])]],
   ]) {
-    expectRejected("outOfModelSelftest", label, args);
+    expectRejected("outOfModelSelftest", label, args, OutOfModelError);
   }
 }
 
@@ -601,7 +607,7 @@ function nonStringKeySelftest() {
     ["Symbol key in a list", [[1n, { [sym]: 1n }]]],
     ["Symbol key in a set element", [new TaggedSet([{ [sym]: 1n }])]],
   ]) {
-    expectRejected("nonStringKeySelftest", label, args);
+    expectRejected("nonStringKeySelftest", label, args, OutOfModelError);
   }
   const hidden = Object.defineProperty({ a: 2n }, sym, { value: 1n, enumerable: false });
   check("nonStringKeySelftest", "non-enumerable Symbol key", "9181a16102", encodeToBuffer([hidden], { collapseFloats: true }).toString("hex"));
@@ -619,7 +625,7 @@ function unsafeNumberSelftest() {
     ["2^53 + 2 in a list", [[2 ** 53 + 2]]],
     ["2^53 + 2 in a map value", [{ id: 2 ** 53 + 2 }]],
   ]) {
-    expectRejected("unsafeNumberSelftest", label, args);
+    expectRejected("unsafeNumberSelftest", label, args, Error);
   }
   const safe = Number.MAX_SAFE_INTEGER;
   check(
