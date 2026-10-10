@@ -1127,9 +1127,10 @@
             "interop-mode.json:map_key_proto"
           ],
           "tests": [
-            "tools/interop-reference.py:_non_string_key_selftest"
+            "tools/interop-reference.py:_non_string_key_selftest",
+            "tools/interop-crosscheck.mjs:nonStringKeySelftest"
           ],
-          "gap": "Portable JSON object keys are always strings, so no vector carries a non-string key and only the Python reference's self-test rejects one; map_key_proto pins only that a string key such as __proto__ survives normalization. JavaScript objects have string keys only, and the cross-check rejects a Map as outside the data model (IOP-8)."
+          "gap": "Portable JSON object keys are always strings, so no vector carries a non-string key and only the reference tools' self-tests reject one; map_key_proto pins only that a string key such as __proto__ survives normalization. A JavaScript object can also carry Symbol keys: the cross-check rejects an own enumerable Symbol key, ignores a non-enumerable one as it ignores a non-enumerable string key, and rejects a Map as outside the data model (IOP-8)."
         },
         "IOP-14": {
           "section": "The Interop Data Model",

@@ -222,7 +222,13 @@ function encodeCanonical(v, chunks, { collapseFloats }) {
     // outside the data model and falls through to the error below, never to an
     // empty map. Sort keys by UTF-8 byte order (== Unicode code point order). JS default
     // string sort compares UTF-16 code units and gets supplementary-plane
-    // characters WRONG — compare encoded bytes instead.
+    // characters WRONG — compare encoded bytes instead. Its data is its own
+    // enumerable properties, and an enumerable Symbol key is a non-string map key.
+    // propertyIsEnumerable goes through Object.prototype: a null-prototype object
+    // has none, and the message names no Symbol, since interpolating one throws.
+    if (Object.getOwnPropertySymbols(v).some((s) => Object.prototype.propertyIsEnumerable.call(v, s))) {
+      throw new OutOfModelError("map keys must be strings: object has an enumerable Symbol key");
+    }
     const keys = Object.keys(v).sort((a, b) =>
       Buffer.compare(Buffer.from(a, "utf8"), Buffer.from(b, "utf8")),
     );
@@ -566,7 +572,7 @@ function loneSurrogateSelftest() {
 }
 
 // A value outside the data model is rejected wherever it sits, never encoded
-// as an empty map: in JavaScript a non-string map key needs a Map.
+// as an empty map.
 function outOfModelSelftest() {
   class Point {}
   for (const [label, args] of [
@@ -580,6 +586,26 @@ function outOfModelSelftest() {
   ]) {
     expectRejected("outOfModelSelftest", label, args);
   }
+}
+
+// Map keys must be strings, at every nesting level, as in the Python reference.
+// A JavaScript object can carry Symbol keys: an own enumerable one is rejected, and
+// a non-enumerable one is ignored, as Object.keys ignores a non-enumerable string key.
+function nonStringKeySelftest() {
+  const sym = Symbol("k");
+  const nullProto = Object.assign(Object.create(null), { [sym]: 1n });
+  for (const [label, args] of [
+    ["Symbol key", [{ [sym]: 1n, a: 2n }]],
+    ["Symbol key on a null-prototype object", [nullProto]],
+    ["Symbol key in a nested map", [{ ok: { [sym]: 1n } }]],
+    ["Symbol key in a list", [[1n, { [sym]: 1n }]]],
+    ["Symbol key in a set element", [new TaggedSet([{ [sym]: 1n }])]],
+  ]) {
+    expectRejected("nonStringKeySelftest", label, args);
+  }
+  const hidden = Object.defineProperty({ a: 2n }, sym, { value: 1n, enumerable: false });
+  check("nonStringKeySelftest", "non-enumerable Symbol key", "9181a16102", encodeToBuffer([hidden], { collapseFloats: true }).toString("hex"));
+  check("nonStringKeySelftest", "string key", "9181a131a161", encodeToBuffer([{ "1": "a" }], { collapseFloats: true }).toString("hex"));
 }
 
 // A bare Number that is not a safe integer has already lost precision, so it is
@@ -606,6 +632,7 @@ function unsafeNumberSelftest() {
 
 loneSurrogateSelftest();
 outOfModelSelftest();
+nonStringKeySelftest();
 unsafeNumberSelftest();
 
 if (failures > 0) {
