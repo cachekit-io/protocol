@@ -96,7 +96,6 @@ VECTOR_PATH = Path(__file__).resolve().parent.parent / "test-vectors" / "python-
 MAGIC = b"CK"
 FRAME_VERSION = 3
 PREFIX_LEN = 7  # magic(2) + version(1) + header_len(4)
-PADDED_HEADER_DESCRIPTION = 'Constructed: raw_payload_frame with its HEADER followed by ASCII spaces, counted in HDR_LEN, so the payload starts at frame offset 128. A writer MAY pad this way to align the payload (spec/wire-format.md, Python: CK v3 frame); cachekit-py pads uncompressed, unencrypted Arrow frames. A reader MUST parse it to the same header and payload as raw_payload_frame. Parse-level only: re-wrapping that header and payload without padding does not reproduce these bytes.'
 
 # Generator-owned text for the `_bin` default-path vector. It describes; it makes
 # no twin claim — that claim is the operator-owned `twin_of` field, so dropping
@@ -1272,7 +1271,13 @@ def generate() -> int:
     built.append(
         {
             "name": "padded_header_frame",
-            "description": PADDED_HEADER_DESCRIPTION,
+            "description": (
+                "Constructed: raw_payload_frame with its HEADER followed by ASCII spaces, counted in HDR_LEN, so the "
+                "payload starts at frame offset 128. A writer MAY pad this way to align the payload (spec/wire-format.md, "
+                "Python: CK v3 frame); cachekit-py pads uncompressed, unencrypted Arrow frames. A reader MUST parse it to "
+                "the same header and payload as raw_payload_frame. Parse-level only: re-wrapping that header and payload "
+                "without padding does not reproduce these bytes."
+            ),
             "frame_hex": padded_frame.hex(),
             "expected_header": padded_header,
             "expected_payload_hex": padded_payload.hex(),
