@@ -1261,6 +1261,28 @@ def generate() -> int:
             "expected_payload_hex": raw_payload.hex(),
         }
     )
+    # 1b. The same frame with its HEADER padded by ASCII spaces counted in HDR_LEN (a writer MAY pad to align the
+    # payload). Constructed byte by byte, so it does not depend on which cachekit-py release pads.
+    raw_hdr_len = int.from_bytes(raw_frame[3:7], "big")
+    padded = raw_frame[7 : 7 + raw_hdr_len] + b" " * (-(7 + raw_hdr_len) % 64)
+    padded_frame = raw_frame[:3] + len(padded).to_bytes(4, "big") + padded + raw_frame[7 + raw_hdr_len :]
+    padded_header, padded_payload = parse_frame(padded_frame)
+    _require(padded_header == raw_header and padded_payload == raw_payload, "padded frame parses differently")
+    built.append(
+        {
+            "name": "padded_header_frame",
+            "description": (
+                "Constructed: raw_payload_frame with its HEADER followed by ASCII spaces, counted in HDR_LEN, so the "
+                "payload starts at frame offset 128. A writer MAY pad this way to align the payload (spec/wire-format.md, "
+                "Python: CK v3 frame); cachekit-py pads uncompressed, unencrypted Arrow frames. A reader MUST parse it to "
+                "the same header and payload as raw_payload_frame. Parse-level only: re-wrapping that header and payload "
+                "without padding does not reproduce these bytes."
+            ),
+            "frame_hex": padded_frame.hex(),
+            "expected_header": padded_header,
+            "expected_payload_hex": padded_payload.hex(),
+        }
+    )
 
     # 2. Full default-path SaaS write: value -> msgpack -> ByteStorage envelope
     # -> CK frame. Named by the envelope encoding the wheel emits, so a
