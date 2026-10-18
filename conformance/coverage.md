@@ -12,9 +12,9 @@ How ids are assigned, and what each status means: [README.md](README.md#coverage
 
 | SDK | Read at | Vendored fixtures |
 | :--- | :--- | :--- |
-| cachekit-py | [`d49b984`](https://github.com/cachekit-io/cachekit-py/commit/d49b984ea9560ae936d8215a17ab537cc3994a82) | `cache-keys.json` 1.3.0, `decode-bounds.json` 1.2.0, `encryption.json` 1.5.0, `file-backend.json` 1.2.0, `freshness-headers.json` 1.0.0, `interop-mode.json` 1.3.0, `path-encoding.json` 1.2.0, `python-frame.json` unversioned, `wire-format.json` 1.4.0 |
-| cachekit-ts | [`83e0566`](https://github.com/cachekit-io/cachekit-ts/commit/83e0566251b0b0d2cad4557b37b3041c9b2aa9a0) | `decode-bounds.json` 1.2.0, `encryption.json` 1.5.0, `file-backend.json` 1.2.0, `freshness-headers.json` 1.0.0, `interop-mode.json` 1.3.0, `path-encoding.json` 1.2.0, `python-frame.json` unversioned, `wire-format.json` 1.4.0 |
-| cachekit-rs | [`3a0d241`](https://github.com/cachekit-io/cachekit-rs/commit/3a0d241b99d1593fae28cf1195ec8bdb59a9fddf) | `decode-bounds.json` 1.2.0, `encryption.json` 1.5.0, `file-backend.json` 1.2.0, `freshness-headers.json` 1.0.0, `interop-mode.json` 1.3.0, `path-encoding.json` 1.2.0, `python-frame.json` unversioned |
+| cachekit-py | [`d49b984`](https://github.com/cachekit-io/cachekit-py/commit/d49b984ea9560ae936d8215a17ab537cc3994a82) | `cache-keys.json` 1.3.0, `decode-bounds.json` 1.2.0, `encryption.json` 1.5.0, `file-backend.json` 1.2.0, `freshness-headers.json` 1.0.0, `interop-mode.json` 1.3.0, `path-encoding.json` 1.2.0, `python-frame.json` unversioned (not the current revision), `wire-format.json` 1.4.0 |
+| cachekit-ts | [`83e0566`](https://github.com/cachekit-io/cachekit-ts/commit/83e0566251b0b0d2cad4557b37b3041c9b2aa9a0) | `decode-bounds.json` 1.2.0, `encryption.json` 1.5.0, `file-backend.json` 1.2.0, `freshness-headers.json` 1.0.0, `interop-mode.json` 1.3.0, `path-encoding.json` 1.2.0, `python-frame.json` unversioned (not the current revision), `wire-format.json` 1.4.0 |
+| cachekit-rs | [`3a0d241`](https://github.com/cachekit-io/cachekit-rs/commit/3a0d241b99d1593fae28cf1195ec8bdb59a9fddf) | `decode-bounds.json` 1.2.0, `encryption.json` 1.5.0, `file-backend.json` 1.2.0, `freshness-headers.json` 1.0.0, `interop-mode.json` 1.3.0, `path-encoding.json` 1.2.0, `python-frame.json` unversioned (not the current revision) |
 
 ## Summary
 

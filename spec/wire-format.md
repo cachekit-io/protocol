@@ -841,7 +841,7 @@ MAGIC b"CK" (0x43 0x4B) | VERSION u8 (0x03) | HDR_LEN u32 big-endian | HEADER | 
 - **HEADER**: UTF-8 JSON object `{"s": <serializer name>, "m": <metadata object>, "v": <envelope version string>}`,
   exactly `HDR_LEN` bytes. A writer MAY follow the object with ASCII spaces (0x20), counted
   in `HDR_LEN`, to align the payload; JSON allows trailing whitespace, so a reader parses a
-  padded HEADER unchanged. `cachekit-py` pads the frame of an uncompressed, unencrypted Arrow
+  padded HEADER unchanged (vector `padded_header_frame`). `cachekit-py` pads the frame of an uncompressed, unencrypted Arrow
   payload so that its Arrow IPC file starts on a 64-byte boundary of a
   [File backend](file-backend-format.md) cache file. Typical metadata keys: `format`, `encoding`,
   `compressed`, `encrypted`, `original_type`.
