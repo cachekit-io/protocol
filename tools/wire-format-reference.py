@@ -199,7 +199,7 @@ GENERATOR = (
     "first 253 and 254 bytes of width_boundary_bin16's input; *_bin vectors: "
     "tools/wire-format-reference.py generate - deterministic re-encode of the "
     "legacy fields, byte-verified against rmp-serde 1.3.1 + serde_bytes 0.11.19 "
-    "output (LAB-783); constructed_vectors: tools/wire-format-reference.py "
+    "output; constructed_vectors: tools/wire-format-reference.py "
     "generate - stdlib construction, checksum by xxhash 4.0.1 (xxHash 0.8.3); "
     "reject_vectors: tools/wire-format-reference.py generate - re-encode of legacy "
     "base fields with one check broken; payload_reject_vectors and "
