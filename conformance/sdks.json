@@ -1,7 +1,7 @@
 {
   "cachekit-py": {
     "repository": "https://github.com/cachekit-io/cachekit-py",
-    "commit": "d49b984ea9560ae936d8215a17ab537cc3994a82",
+    "commit": "ff040612445d9d14673b34108befb8415e21add6",
     "fixtures": {
       "cache-keys.json": "e75fb8f98d0e54fcb0d586cae72b8aa6129ed082f254539b450a47ba8e96167a",
       "decode-bounds.json": "c52c27f724fe138e63440dc0306936b48fe389e2bd823c058b86b30d854e2e2e",
@@ -11,12 +11,12 @@
       "interop-mode.json": "e1ca6c2361509f347d17f3352e0d7ab4d4b61488737bdf0056bb5769d9794e72",
       "path-encoding.json": "807af0d39ccf3f5afda65577787ac5adcd01ff6617468060161c84267fa7e0cb",
       "python-frame.json": "b677d5f14de4a3cd1fa5307d4b46eae0545a20e51e9163f96495ee7ad15600d0",
-      "wire-format.json": "2f6818903a552a7c09414c1e5c02caf21fa92dcd56ccff5634c8257038e7575c"
+      "wire-format.json": "806de79dca2e0e6b221b8ec191526207d32f9fe5d88597098dd2549427b4993c"
     }
   },
   "cachekit-ts": {
     "repository": "https://github.com/cachekit-io/cachekit-ts",
-    "commit": "83e0566251b0b0d2cad4557b37b3041c9b2aa9a0",
+    "commit": "37a543d068e4b17ccae8e4244a8385991c68f1a2",
     "fixtures": {
       "decode-bounds.json": "c52c27f724fe138e63440dc0306936b48fe389e2bd823c058b86b30d854e2e2e",
       "encryption.json": "1a8a3735408675bf9660ce1372f77723a9ffda8084010fa52eb756a330961589",
@@ -25,7 +25,7 @@
       "interop-mode.json": "e1ca6c2361509f347d17f3352e0d7ab4d4b61488737bdf0056bb5769d9794e72",
       "path-encoding.json": "807af0d39ccf3f5afda65577787ac5adcd01ff6617468060161c84267fa7e0cb",
       "python-frame.json": "b677d5f14de4a3cd1fa5307d4b46eae0545a20e51e9163f96495ee7ad15600d0",
-      "wire-format.json": "2f6818903a552a7c09414c1e5c02caf21fa92dcd56ccff5634c8257038e7575c"
+      "wire-format.json": "806de79dca2e0e6b221b8ec191526207d32f9fe5d88597098dd2549427b4993c"
     }
   },
   "cachekit-rs": {
