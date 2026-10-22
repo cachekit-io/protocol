@@ -508,8 +508,8 @@ A reader MUST<sup id="iop-24">IOP-24</sup> therefore:
    shapes). Do not assume a decoder is lazy: `rmp-serde` reads str/bin lazily but
    serde's `Vec<T>` visitor still pre-allocates up to 1 MiB per collection from the
    declared length. A header-only structural walk before decoding (the pre-scan in
-   `cachekit-ts`, `check_msgpack_structure` in `cachekit-py`, `check_structure` in
-   `cachekit-rs`) is sufficient.
+   `cachekit-ts`; `cachekit-core`'s `check_msgpack_structure`, which `cachekit-py`
+   and `cachekit-rs` call) is sufficient.
 3. **Fail closed, catchably.** Rejection surfaces as a decode error the SDK read
    path turns into a cache miss — never an uncaught crash or an OOM abort.
 
