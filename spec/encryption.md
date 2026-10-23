@@ -351,7 +351,7 @@ configurations an SDK accepts or refuses at load.
 ## Key Rotation (Keyring)
 
 > [!NOTE]
-> **Status: implemented in Python, Rust, and TypeScript; released in Python (`cachekit` 0.18.0+) and Rust (`cachekit-rs` 0.8.0+) — TypeScript is on `main` and pending its next release** (published artifacts inspected 2026-09-22, the Rust `.crate`s 2026-09-30 (0.8.0) and 2026-10-03 (0.9.0); decision record:
+> **Status: released in Python (`cachekit` 0.18.0+), Rust (`cachekit-rs` 0.8.0+) and TypeScript (`@cachekit-io/cachekit` 0.2.1+; 0.2.0 does not install)** (published artifacts inspected 2026-09-22, the Rust `.crate`s 2026-09-30 (0.8.0) and 2026-10-03 (0.9.0), the npm `.tgz` 2026-10-24; decision record:
 > [decisions/key-rotation.md](../decisions/key-rotation.md), 2026-07-23; LAB-516).
 > The shared decrypt helper is `cachekit_core::encryption::keyring::Keyring`
 > ([cachekit-core#67](https://github.com/cachekit-io/cachekit-core/pull/67)); the SDK
