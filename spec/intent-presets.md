@@ -126,7 +126,7 @@ the same freshness window everywhere; through `cachekit` 0.19.0 a Python
    `SecureCache` and TypeScript already comply.
 
 **Rationale.** `minimal` means minimal *features*, not minimal *layers*. L1 is what turns
-a hit into tens of nanoseconds instead of a network round trip, and the staleness it
+a hit into microseconds or less instead of a network round trip, and the staleness it
 introduces on `minimal` — no invalidation — is already bounded by the 300 s TTL the same
 preset accepts. Rust 0.7.0's `.no_l1()` (`intents.rs:77`) made `minimal` the only preset whose
 every read crosses the network, contradicting its own "speed-first" rustdoc; `cachekit-rs`
