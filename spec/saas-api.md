@@ -384,7 +384,7 @@ After a project is deleted, its API keys stop working normally within seconds an
 
 Not-found results are held for at most 5 seconds or the namespace's budget, whichever is lower, and values read in their `stale_ttl` window are never held as edge copies. Every `GET` of a cache key that returns a value or a not-found says where it came from (`X-CacheKit-Store-Source`) and, for an edge copy, how old it is (`Age`).
 
-Your SDK's in-process L1 cache is separate and is not told about other processes' writes. When a response carries `X-CacheKit-Fresh-For`, SDKs that honour it (cachekit-py 0.19.0 and later, cachekit-rs 0.9.0 and later) keep a copy for at most that many seconds; otherwise the L1 copy keeps its own configured TTL. Edge age and L1 life add up.
+Your SDK's in-process L1 cache is separate and is not told about other processes' writes. When a response carries `X-CacheKit-Fresh-For`, SDKs that honour it (cachekit-py 0.19.0 and later, cachekit-rs 0.9.0 and later, cachekit-ts 0.2.1 and later) keep a copy for at most that many seconds; otherwise the L1 copy keeps its own configured TTL. Edge age and L1 life add up.
 
 ---
 
