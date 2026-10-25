@@ -244,7 +244,7 @@ also exercises `bin32` at runtime.
 > array of integers in **both** revisions — a reader MUST NOT<sup id="wire-3">WIRE-3</sup> expect `bin` there.
 
 > [!WARNING]
-> **Discrepancy with RFC** — The RFC (Section 4.3.3) states the checksum is **Blake3 (32 bytes)**. The actual `cachekit-core` implementation uses **xxHash3-64 (8 bytes)**. The crate comments explain: "xxHash3-64 checksums for corruption detection (19x faster than Blake3)". xxHash3-64 is non-cryptographic — tamper resistance is provided by the encryption layer (AES-GCM auth tag), not the checksum. **The implementation (xxHash3-64) is authoritative.**
+> **Discrepancy with RFC** — The RFC (Section 4.3.3) states the checksum is **Blake3 (32 bytes)**. The actual `cachekit-core` implementation uses **xxHash3-64 (8 bytes)**. xxHash3-64 is non-cryptographic — tamper resistance is provided by the encryption layer (AES-GCM auth tag), not the checksum. **The implementation (xxHash3-64) is authoritative.**
 
 > [!NOTE]
 > **Discrepancy with RFC** — The RFC (Section 4.3.4) states the maximum compression ratio is **100x**. The actual `cachekit-core` uses **1000x** (`MAX_COMPRESSION_RATIO: u64 = 1000`). **The implementation (1000x) is authoritative.**
@@ -267,6 +267,9 @@ also exercises `bin32` at runtime.
 | PHP | `php-ext-lz4` (fork) | `lz4_compress_raw()` | See warning below |
 | Node.js | `lz4js` | `lz4.encode()` | Block format |
 | Go | `pierrec/lz4/v4` | `lz4.CompressBlock()` | Block format |
+
+> [!NOTE]
+> The canonical writer, cachekit-core's `ByteStorage`, does not call `lz4_flex::compress()` for an input shorter than 64 bytes. It writes the input as one literals-only block: a token whose high nibble is the literal length (15 when one more length byte follows), that length byte if any, then the input. This is the LZ4 block format's last-sequence form, so every block decoder reads it. The block is the input plus 1 byte (plus 2 from 15 bytes up). For an input under 64 bytes on which `lz4_flex::compress()` would emit a match, these bytes differ from its output; otherwise they are the same. The block format is unchanged, and compressed bytes are not canonical (see [Compressed-byte reproducibility](#compressed-byte-reproducibility-per-vector-scoping)).
 
 > [!WARNING]
 > **PHP**: Standard `php-ext-lz4`'s `lz4_compress()` is **not compliant** — it prepends a proprietary 4-byte size header. Use `lz4_compress_raw()` from the forked extension at `27Bslash6/php-ext-lz4`.
