@@ -268,6 +268,9 @@ also exercises `bin32` at runtime.
 | Node.js | `lz4js` | `lz4.encode()` | Block format |
 | Go | `pierrec/lz4/v4` | `lz4.CompressBlock()` | Block format |
 
+> [!NOTE]
+> The canonical writer, cachekit-core's `ByteStorage`, does not call `lz4_flex::compress()` for an input shorter than 64 bytes. It writes the input as one literals-only block: a token whose high nibble is the literal length (15 when one more length byte follows), that length byte if any, then the input. This is the LZ4 block format's last-sequence form, so every block decoder reads it. For a compressible input under 64 bytes its bytes differ from `lz4_flex::compress()`'s and run up to 2 bytes longer than the input; for other inputs they are the same. The block format is unchanged, and compressed bytes are not canonical (see [Compressed-byte reproducibility](#compressed-byte-reproducibility-per-vector-scoping)).
+
 > [!WARNING]
 > **PHP**: Standard `php-ext-lz4`'s `lz4_compress()` is **not compliant** — it prepends a proprietary 4-byte size header. Use `lz4_compress_raw()` from the forked extension at `27Bslash6/php-ext-lz4`.
 
