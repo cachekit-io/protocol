@@ -360,9 +360,10 @@ configurations an SDK accepts or refuses at load.
 > [cachekit-ts#103](https://github.com/cachekit-io/cachekit-ts/pull/103). An SDK
 > release that does not carry this section invalidates every encrypted entry when its
 > master key rotates — fail-open readers take misses, fail-closed readers take errors. In
-> `cachekit-rs`, `from_env()` and, from 0.9.0, the `secure` preset's `secure_from_env` read
-> `CACHEKIT_PREVIOUS_MASTER_KEYS`; a client on the explicit-key `secure(url, master_key_hex)`,
-> or on `secure_from_env` in 0.8.0, passes its decrypt-only keys programmatically
+> `cachekit-rs`, the `secure` preset's `secure_from_env` (from 0.9.0) and the builder call
+> `.encryption_from_env()` (from 0.12.0) apply `CACHEKIT_PREVIOUS_MASTER_KEYS`, as `from_env()`
+> did through 0.11.x; from 0.12.0 `from_env()` only validates it. A client on the explicit-key
+> `secure(url, master_key_hex)`, or on `secure_from_env` in 0.8.0, passes its decrypt-only keys programmatically
 > ([feature matrix](../sdk-feature-matrix.md#encryption) note ⁵). The
 > [feature matrix](../sdk-feature-matrix.md) reflects per-SDK implementation status.
 >
