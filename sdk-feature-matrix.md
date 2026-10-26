@@ -332,7 +332,7 @@ its spec:
 <details>
 <summary><strong>Rust SDK (cachekit-rs)</strong></summary>
 
-- Published on crates.io as `cachekit-rs` v0.6.0+ + `cachekit-macros` v0.6.0+; new releases support the latest stable Rust
+- Published on crates.io as `cachekit-rs` v0.6.0+ + `cachekit-macros` v0.6.0+; new releases support the latest stable Rust and may raise `rust-version` ([policy](https://github.com/cachekit-io/cachekit-rs#minimum-supported-rust-version)); releases up to 0.13.0 declare `rust-version` 1.85
 - Feature flags: `cachekitio`, `redis`, `memcached`, `file`, `encryption`, `l1`, `macros`, `workers`, `reliability`, `unsync` — default = `cachekitio` + `encryption` + `l1` + `reliability` (verified in the published 0.6.0 `.crate`)
 - Backends: `RedisBackend` (fred), `CachekitIO` (reqwest), `WorkersCachekitIO` (CF Workers fetch), `MemcachedBackend`, `FileBackend` (both native-only cargo features)
 - L1 cache via moka (native only, `l1` feature), with serve-stale + single-flight background refresh (LAB-728)
