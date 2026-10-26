@@ -21,7 +21,7 @@ HERE = Path(__file__).resolve().parent
 CHECKER = HERE / "check-version-floors.py"
 MATRIX = HERE.parent / "sdk-feature-matrix.md"
 
-RS_FLOOR = "| cachekit-rs | `cachekit-rs` (crates.io) | 0.6.0+ | Rust 1.85+ | ✅ Production |"
+RS_FLOOR = "| cachekit-rs | `cachekit-rs` (crates.io) | 0.6.0+ | Rust (latest stable) | ✅ Production |"
 PHP_ROW = "| cachekit-php | \u2014 | \u2014 | PHP 8.1+ | \U0001f51c Development |"
 
 # (name, mutate(text) -> text, expected_exit)
@@ -38,14 +38,14 @@ CASES: list[tuple[str, Callable[[str], str], int]] = [
     ),
     (
         "snapshot in a row that itself holds a hyphen cell",
-        lambda t: t.replace(RS_FLOOR, "| cachekit-rs | - | 0.6.0 | Rust 1.85+ | - |"),
+        lambda t: t.replace(RS_FLOOR, "| cachekit-rs | - | 0.6.0 | Rust (latest stable) | - |"),
         1,
     ),
-    ("empty version cell", lambda t: t.replace(RS_FLOOR, "| cachekit-rs | `cachekit-rs` |  | Rust 1.85+ | ✅ |"), 1),
+    ("empty version cell", lambda t: t.replace(RS_FLOOR, "| cachekit-rs | `cachekit-rs` |  | Rust (latest stable) | ✅ |"), 1),
     ("row trimmed below the version column", lambda t: t.replace(RS_FLOOR, "| cachekit-rs | `cachekit-rs` |"), 1),
     (
         "snapshot on a row with no leading pipe",
-        lambda t: t.replace(RS_FLOOR, "cachekit-rs | `cachekit-rs` (crates.io) | 0.6.0 | Rust 1.85+ | ✅ |"),
+        lambda t: t.replace(RS_FLOOR, "cachekit-rs | `cachekit-rs` (crates.io) | 0.6.0 | Rust (latest stable) | ✅ |"),
         1,
     ),
     ("prerelease snapshot", lambda t: t.replace(RS_FLOOR, RS_FLOOR.replace("0.6.0+", "0.7.0-rc.1")), 1),
