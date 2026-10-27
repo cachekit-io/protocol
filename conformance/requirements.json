@@ -1521,7 +1521,7 @@
     },
     "spec/saas-api.md": {
       "prefix": "API",
-      "next": 78,
+      "next": 77,
       "requirements": {
         "API-1": {
           "section": "Authentication",
@@ -2099,17 +2099,12 @@
         "API-75": {
           "section": "Counting outcomes",
           "binds": "sdk",
-          "gap": "No vector covers request headers, so nothing here catches a client that counts a plain read twice, or counts a failed read; only the SDK's own counter tests do."
+          "gap": "No vector covers request headers, so nothing here catches a client that counts a plain read twice, or counts a read that failed at the backend; only the SDK's own counter tests do."
         },
         "API-76": {
           "section": "Counting outcomes",
           "binds": "sdk",
-          "gap": "No vector covers request headers, so nothing here catches a client that counts a wrapped call that runs the function as anything but one miss, or a joined in-process caller as anything but one L1 hit; only the SDK's own counter tests do."
-        },
-        "API-77": {
-          "section": "Counting outcomes",
-          "binds": "sdk",
-          "gap": "No vector covers request headers, so nothing here catches a client that counts a miss on each single-flight re-poll or lock re-check of a wrapped call; only the SDK's own counter tests do."
+          "gap": "No vector covers request headers, so nothing here catches a client that counts a wrapped call that runs the function as anything but one miss,, a joined in-process caller as anything but one L1 hit, or a miss on each single-flight re-poll or lock re-check; only the SDK's own counter tests do."
         }
       },
       "retired": {}
