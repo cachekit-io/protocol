@@ -45,20 +45,24 @@ The server-side scope that API-key grants, quotas and the edge budget apply to, 
 _Avoid_: keyspace, bucket, partition
 
 **Default namespace**:
-The namespace named `default`, which holds every cache key that carries neither prefix and is an open write space within the tenant.
+The namespace named `default`. It holds every cache key that carries neither prefix, which together form the open write space, and also any `ns:default:` or `nsapi:default:` key, which keeps its own write space.
 _Avoid_: global namespace, root namespace, unscoped
 
 **SDK namespace**:
-The namespace value a caller sets on an SDK cache. Only cachekit-py's auto mode writes it as an `ns:` prefix, which makes it a namespace; everywhere else, interop mode included, it is a client-side key segment that lands in the default namespace.
+The namespace value a caller sets on an SDK cache to build its generated cache keys. Only cachekit-py's auto mode writes it as an `ns:` prefix, which makes it a namespace; everywhere else, interop mode included, it is a client-side key segment, so the key lands in the default namespace unless the value itself starts with `ns:` or `nsapi:`.
 _Avoid_: namespace (on its own, where the server scope could be meant), key prefix, tenant
-In cachekit-ts auto mode the SDK namespace also identifies the operation, and the word also names the group of entries that L1 invalidation clears.
+In cachekit-ts auto mode the SDK namespace also identifies the operation.
+
+**Invalidation group**:
+The label cachekit-ts files an entry under in L1 so that one call can invalidate the group; a wrapped function's group is its SDK namespace, and the `namespace` option of a direct `set` names a group without changing the cache key.
+_Avoid_: namespace, SDK namespace (a `set` option of that name never separates two entries with the same key)
 
 **Key prefix**:
 A string a backend or its client library prepends to every cache key (a Memcached or ioredis `keyPrefix`), outside the SDK namespace; interop mode refuses a backend that hides one.
 _Avoid_: namespace, hidden namespace
 
 **Write space**:
-The set of cache keys one API-key class may mutate: `ns:` keys for SDK keys, `nsapi:` keys for direct-API keys, and the open default namespace for every class. Reads are not split by write space.
+The set of cache keys one API-key class may mutate: `ns:` keys for SDK keys, `nsapi:` keys for direct-API keys, and the open write space of unprefixed keys for every class. Reads are not split by write space.
 _Avoid_: key space, write namespace
 
 **API key**:
@@ -177,5 +181,5 @@ The encrypted preset is `secure`; `encrypted` is a retired spelling.
 
 ## Known divergences
 
-- cachekit-py writes any SDK namespace into its `ns:` prefix unchecked, so a value outside the server's namespace grammar (1–64 of `[a-zA-Z0-9_-]`) is rejected by CachekitIO, or, if it contains `:`, lands in a different namespace.
+- cachekit-py writes any SDK namespace into its `ns:` prefix without checking it against the server's namespace grammar (1–64 of `[a-zA-Z0-9_-]`). A space, line feed or carriage return in it silently becomes `_`, so `team a` shares the `team_a` namespace; a `:` moves the key to a different namespace; other characters outside the grammar get the key rejected by CachekitIO.
 - The 250-character key limit keeps the first 50 characters of an over-long Python auto-mode key, so an SDK namespace longer than 47 characters is cut short and the key lands in a different namespace.
