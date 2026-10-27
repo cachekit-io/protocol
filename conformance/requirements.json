@@ -1521,7 +1521,7 @@
     },
     "spec/saas-api.md": {
       "prefix": "API",
-      "next": 75,
+      "next": 77,
       "requirements": {
         "API-1": {
           "section": "Authentication",
@@ -2095,6 +2095,16 @@
           "section": "SSRF Protection",
           "binds": "sdk",
           "gap": "No vector holds an API URL, so nothing here checks HTTPS-only, the listed private ranges or the hostname allowlist."
+        },
+        "API-75": {
+          "section": "Counting outcomes",
+          "binds": "sdk",
+          "gap": "No vector covers request headers, so nothing here catches a client that counts a plain read twice, or counts a read that failed at the backend; only the SDK's own counter tests do."
+        },
+        "API-76": {
+          "section": "Counting outcomes",
+          "binds": "sdk",
+          "gap": "No vector covers request headers, so nothing here catches a client that counts a wrapped call that runs the function as anything but one miss, a joined in-process caller as anything but one L1 hit, or a miss on each single-flight re-poll or lock re-check; only the SDK's own counter tests do."
         }
       },
       "retired": {}
