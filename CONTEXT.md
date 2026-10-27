@@ -1,6 +1,6 @@
 # CacheKit
 
-CacheKit is a multi-language caching framework with optional client-side encryption, made of per-language SDKs and the managed CachekitIO backend. This file is the one definition of the terms its specs, decision records and SDKs share. It is informative: where this glossary and a spec differ, the spec wins.
+CacheKit is a multi-language caching framework with optional client-side encryption, made of per-language SDKs and the managed CachekitIO backend. This file is the one glossary of the terms its specs, decision records and SDKs share. It is informative: where this glossary and a spec differ, the spec wins.
 
 ## Language
 
@@ -49,7 +49,7 @@ The namespace named `default`. It holds every cache key that carries neither pre
 _Avoid_: global namespace, root namespace, unscoped
 
 **SDK namespace**:
-The namespace value a caller sets on an SDK cache to build its generated cache keys. Only cachekit-py's auto mode writes it as an `ns:` prefix, which makes it a namespace. In interop mode it is a validated key segment that can never contain `:` or be `ns` or `nsapi`, so an interop key always lands in the default namespace. Elsewhere it is a client-side key segment, and the key lands in the default namespace unless the key the SDK emits starts with `ns:` or `nsapi:` (in cachekit-ts and cachekit-rs auto mode a value of `ns` or `nsapi` is enough). In cachekit-ts auto mode it also stands in for the function identity.
+The namespace value a caller sets on an SDK cache to build its generated cache keys. Only cachekit-py's auto mode writes it as an `ns:` prefix, which makes it a namespace. In interop mode it is a validated key segment that can never contain `:` or be `ns` or `nsapi`, so an interop key always lands in the default namespace. Elsewhere it is a client-side key segment, and the key lands in the default namespace unless the key the SDK emits starts with `ns:` or `nsapi:` (in cachekit-ts auto mode, and on a cachekit-rs key built with `.namespace()`, a value of `ns` or `nsapi` is enough). In cachekit-ts auto mode it also stands in for the function identity.
 _Avoid_: namespace (on its own, where the server scope could be meant), backend key prefix, tenant
 
 **Invalidation group**:
@@ -78,7 +78,7 @@ _Avoid_: permission, ACL, scope
 
 **Tenant**:
 The server-side owner of a set of cache entries, fixed by the API key at authentication and never by anything in the cache key.
-_Avoid_: tenant ID (that is the encryption input), namespace, account, project (the customer-facing name)
+_Avoid_: tenant ID (that is the encryption input), namespace, account, project (the customer-facing name, also used in the SaaS API spec)
 
 ### Storage
 
