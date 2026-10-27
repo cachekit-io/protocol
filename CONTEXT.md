@@ -1,6 +1,6 @@
 # CacheKit
 
-CacheKit is a multi-language caching framework with optional client-side encryption, made of per-language SDKs and the managed CachekitIO backend. This file is the one definition of the terms its specs, decision records and SDKs share; the specs stay normative wherever this glossary is shorter than they are.
+CacheKit is a multi-language caching framework with optional client-side encryption, made of per-language SDKs and the managed CachekitIO backend. This file is the one definition of the terms its specs, decision records and SDKs share. It is informative: where this glossary and a spec differ, the spec wins.
 
 ## Language
 
@@ -8,10 +8,10 @@ CacheKit is a multi-language caching framework with optional client-side encrypt
 
 **Cache key**:
 The string an entry is stored under, which CachekitIO treats as opaque apart from its security checks, the `ns:` / `nsapi:` prefix among them.
-_Avoid_: key (on its own, it is ambiguous with master key and API key), slot
+_Avoid_: key (on its own, it is ambiguous with master key and API key)
 
 **Logical backend key**:
-The full cache key as the client hands it to a backend, including every client-side prefix and excluding any encoding the backend uses to address its store.
+The full cache key including every client-side prefix, whichever layer adds it (the SDK, its backend or the backend's client library), and excluding any encoding the backend uses to address its storage.
 _Avoid_: raw key, storage key
 
 **Auto mode**:
@@ -19,7 +19,7 @@ The default mode, in which each SDK builds its own cache keys and stores its own
 _Avoid_: default mode, native mode, SDK mode
 
 **Interop mode**:
-The opt-in mode whose cache keys (`{namespace}:{operation}:{args_hash}`) and plain-MessagePack values are identical across SDKs; it is the only cross-SDK format.
+The opt-in mode whose cache keys (`{namespace}:{operation}:{args_hash}`) and values are identical across SDKs; it is the only cross-SDK format.
 _Avoid_: cross-SDK mode, compat mode, multi-language parity
 
 **Interop profile**:
@@ -35,7 +35,7 @@ The language-specific `func:{module}.{qualname}` segment that names the cached f
 _Avoid_: operation (that is the interop name)
 
 **Serializer code**:
-The one- or five-character code at the end of a Python auto-mode key that names the serializer the cache is configured with, so two serializers do not share a key.
+The one- or five-character code at the end of a Python auto-mode key that names the serializer the cache is configured with; it is not a collision-resistant separator (see the cache-key spec).
 _Avoid_: format flag, type code
 
 ### Namespaces and access
@@ -49,17 +49,16 @@ The namespace named `default`. It holds every cache key that carries neither pre
 _Avoid_: global namespace, root namespace, unscoped
 
 **SDK namespace**:
-The namespace value a caller sets on an SDK cache to build its generated cache keys. Only cachekit-py's auto mode writes it as an `ns:` prefix, which makes it a namespace; everywhere else, interop mode included, it is a client-side key segment, so the key lands in the default namespace unless the value itself starts with `ns:` or `nsapi:`.
-_Avoid_: namespace (on its own, where the server scope could be meant), key prefix, tenant
-In cachekit-ts auto mode the SDK namespace also identifies the operation.
+The namespace value a caller sets on an SDK cache to build its generated cache keys. Only cachekit-py's auto mode writes it as an `ns:` prefix, which makes it a namespace; everywhere else, interop mode included, it is a client-side key segment, so the key lands in the default namespace unless the key the SDK emits starts with `ns:` or `nsapi:` (in cachekit-ts and cachekit-rs a value of `ns` or `nsapi` is enough). In cachekit-ts auto mode it also stands in for the function identity.
+_Avoid_: namespace (on its own, where the server scope could be meant), backend key prefix, tenant
 
 **Invalidation group**:
 The label cachekit-ts files an entry under in L1 so that one call can invalidate the group; a wrapped function's group is its SDK namespace, and the `namespace` option of a direct `set` names a group without changing the cache key.
 _Avoid_: namespace, SDK namespace (a `set` option of that name never separates two entries with the same key)
 
-**Key prefix**:
+**Backend key prefix**:
 A string a backend or its client library prepends to every cache key (a Memcached or ioredis `keyPrefix`), outside the SDK namespace; interop mode refuses a backend that hides one.
-_Avoid_: namespace, hidden namespace
+_Avoid_: key prefix (on its own: the specs also use it for API-key prefixes and for `ns:` / `nsapi:`), namespace, hidden namespace
 
 **Write space**:
 The set of cache keys one API-key class may mutate: `ns:` keys for SDK keys, `nsapi:` keys for direct-API keys, and the open write space of unprefixed keys for every class. Reads are not split by write space.
@@ -79,8 +78,7 @@ _Avoid_: permission, ACL, scope
 
 **Tenant**:
 The server-side owner of a set of cache entries, fixed by the API key at authentication and never by anything in the cache key.
-_Avoid_: tenant ID (that is the encryption input), namespace, account
-Customer-facing pages call a tenant a project.
+_Avoid_: tenant ID (that is the encryption input), namespace, account, project (the customer-facing name)
 
 ### Storage
 
@@ -98,7 +96,7 @@ _Avoid_: the SaaS, cachekit.io API, cloud backend
 
 **L1**:
 An SDK's in-process cache in front of its backend.
-_Avoid_: local cache, memory cache, near cache
+_Avoid_: memory cache, near cache
 
 **L2**:
 The backend behind L1, shared between processes.
@@ -140,7 +138,7 @@ _Avoid_: refresh (on its own), server-side recompute
 
 **Lock**:
 A best-effort claim on a cache key, identified by its `lock_id`, that lets one client recompute an entry while the others wait or serve stale.
-_Avoid_: mutex, lease (on its own)
+_Avoid_: mutex
 
 **Edge copy**:
 A copy of an entry held at the CachekitIO edge location that served a request, reused for later reads within the edge budget.
@@ -157,7 +155,7 @@ _Avoid_: origin, database
 ### Encryption
 
 **Master key**:
-The customer's secret of at least 32 bytes, supplied as hex, from which every encryption key is derived; it never leaves the client.
+The customer's 32-byte secret, supplied as 64 hex characters, from which every encryption key is derived; exactly 32 bytes is the only length every SDK accepts, and it never leaves the client.
 _Avoid_: encryption key (that is derived from it), API key, secret key
 
 **Tenant ID**:
@@ -176,8 +174,7 @@ _Avoid_: end-to-end encryption, fully private
 
 **Intent preset**:
 A named constructor that fixes a cache's defaults for one purpose; the four canonical presets are `minimal`, `production`, `secure` and `io`.
-_Avoid_: profile, tier, mode
-The encrypted preset is `secure`; `encrypted` is a retired spelling.
+_Avoid_: profile, tier, mode, `encrypted` (a retired spelling of `secure`)
 
 ## Known divergences
 
