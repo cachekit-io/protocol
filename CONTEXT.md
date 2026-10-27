@@ -7,7 +7,7 @@ CacheKit is a multi-language caching framework with optional client-side encrypt
 ### Keys and modes
 
 **Cache key**:
-The string an entry is stored under, which the server treats as opaque apart from its `ns:` / `nsapi:` prefix.
+The string an entry is stored under, which CachekitIO treats as opaque apart from its security checks, the `ns:` / `nsapi:` prefix among them.
 _Avoid_: key (on its own, it is ambiguous with master key and API key), slot
 
 **Logical backend key**:
@@ -35,7 +35,7 @@ The language-specific `func:{module}.{qualname}` segment that names the cached f
 _Avoid_: operation (that is the interop name)
 
 **Serializer code**:
-The one- or five-character suffix of a Python auto-mode key that names the serializer the cache is configured with, so two serializers never share a key.
+The one- or five-character code at the end of a Python auto-mode key that names the serializer the cache is configured with, so two serializers do not share a key.
 _Avoid_: format flag, type code
 
 ### Namespaces and access
@@ -93,7 +93,7 @@ CacheKit's managed SaaS backend, which stores entries as opaque bytes under per-
 _Avoid_: the SaaS, cachekit.io API, cloud backend
 
 **L1**:
-An SDK's in-process cache in front of its backend, which no other process's writes reach.
+An SDK's in-process cache in front of its backend.
 _Avoid_: local cache, memory cache, near cache
 
 **L2**:
@@ -101,7 +101,7 @@ The backend behind L1, shared between processes.
 _Avoid_: remote cache, distributed cache
 
 **Storage container**:
-The SDK-internal byte layout an SDK stores in auto mode (cachekit-py's CK v3 frame, cachekit-ts's ByteStorage envelope, cachekit-rs's plain MessagePack); no SDK decodes another's.
+The SDK-internal byte layout an SDK stores in auto mode (cachekit-py's CK v3 frame, by default cachekit-ts's ByteStorage envelope, cachekit-rs's plain MessagePack); no SDK decodes another's.
 _Avoid_: wire format, envelope (it is not always one)
 
 **ByteStorage envelope**:
@@ -135,7 +135,7 @@ The client recomputing a stale entry in the background and writing the result ba
 _Avoid_: refresh (on its own), server-side recompute
 
 **Lock**:
-A best-effort, non-blocking claim on a cache key, identified by its `lock_id`, that lets one client run a recompute while others serve stale.
+A best-effort claim on a cache key, identified by its `lock_id`, that lets one client recompute an entry while the others wait or serve stale.
 _Avoid_: mutex, lease (on its own)
 
 **Edge copy**:
@@ -143,7 +143,7 @@ A copy of an entry held at the CachekitIO edge location that served a request, r
 _Avoid_: CDN cache, replica
 
 **Edge budget**:
-A namespace's bound, from 0 to 300 seconds, on how old an edge copy may be when it is served.
+A namespace's bound, from 0 to 300 seconds and 5 by default, on how old an edge copy may be when it is served.
 _Avoid_: edge TTL, staleness budget
 
 **Store**:
@@ -153,11 +153,11 @@ _Avoid_: origin, database
 ### Encryption
 
 **Master key**:
-The customer's 32-byte secret, supplied as hex, from which every encryption key is derived; it never leaves the client.
+The customer's secret of at least 32 bytes, supplied as hex, from which every encryption key is derived; it never leaves the client.
 _Avoid_: encryption key (that is derived from it), API key, secret key
 
 **Tenant ID**:
-The client-supplied string that separates key derivation and is bound into every ciphertext's authenticated data; it defaults to `default` and has no relation to the server-side tenant or to any namespace.
+The client-supplied string that separates key derivation and is bound into every ciphertext's authenticated data; it defaults to `default`, and CacheKit never derives it from the server-side tenant or from a namespace.
 _Avoid_: tenant (that is the server-side owner), namespace
 
 **Keyring**:
