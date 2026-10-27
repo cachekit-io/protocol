@@ -49,7 +49,7 @@ The namespace named `default`. It holds every cache key that carries neither pre
 _Avoid_: global namespace, root namespace, unscoped
 
 **SDK namespace**:
-The namespace value a caller sets on an SDK cache to build its generated cache keys. Only cachekit-py's auto mode writes it as an `ns:` prefix, which makes it a namespace; everywhere else, interop mode included, it is a client-side key segment, so the key lands in the default namespace unless the key the SDK emits starts with `ns:` or `nsapi:` (in cachekit-ts and cachekit-rs a value of `ns` or `nsapi` is enough). In cachekit-ts auto mode it also stands in for the function identity.
+The namespace value a caller sets on an SDK cache to build its generated cache keys. Only cachekit-py's auto mode writes it as an `ns:` prefix, which makes it a namespace. In interop mode it is a validated key segment that can never contain `:` or be `ns` or `nsapi`, so an interop key always lands in the default namespace. Elsewhere it is a client-side key segment, and the key lands in the default namespace unless the key the SDK emits starts with `ns:` or `nsapi:` (in cachekit-ts and cachekit-rs auto mode a value of `ns` or `nsapi` is enough). In cachekit-ts auto mode it also stands in for the function identity.
 _Avoid_: namespace (on its own, where the server scope could be meant), backend key prefix, tenant
 
 **Invalidation group**:
@@ -179,4 +179,4 @@ _Avoid_: profile, tier, mode, `encrypted` (a retired spelling of `secure`)
 ## Known divergences
 
 - cachekit-py writes any SDK namespace into its `ns:` prefix without checking it against the server's namespace grammar (1–64 of `[a-zA-Z0-9_-]`). A space, line feed or carriage return in it silently becomes `_`, so `team a` shares the `team_a` namespace; a `:` moves the key to a different namespace; other characters outside the grammar get the key rejected by CachekitIO.
-- The 250-character key limit keeps the first 50 characters of an over-long Python auto-mode key, so an SDK namespace longer than 47 characters is cut short and the key lands in a different namespace.
+- When a complete Python auto-mode key exceeds 250 characters, cachekit-py keeps only its first 50 characters plus a hash, so if the key's SDK namespace is longer than 47 characters it is cut short and the key lands in a different namespace.
