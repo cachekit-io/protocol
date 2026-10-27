@@ -25,14 +25,14 @@ How ids are assigned, and what each status means: [README.md](README.md#coverage
 | [`spec/file-backend-format.md`](../spec/file-backend-format.md) | 6 | 1 | 3 | 0 | 2 |
 | [`spec/intent-presets.md`](../spec/intent-presets.md) | 55 | 0 | 19 | 0 | 36 |
 | [`spec/interop-mode.md`](../spec/interop-mode.md) | 36 | 5 | 23 | 4 | 4 |
-| [`spec/saas-api.md`](../spec/saas-api.md) | 74 | 0 | 15 | 0 | 59 |
+| [`spec/saas-api.md`](../spec/saas-api.md) | 77 | 0 | 15 | 0 | 62 |
 | [`spec/wire-format.md`](../spec/wire-format.md) | 24 | 3 | 18 | 3 | 0 |
 
 | SDK | Covered | Partial | Uncovered | Gap | n/a |
 | :--- | ---: | ---: | ---: | ---: | ---: |
-| cachekit-py | 12 | 86 | 5 | 67 | 47 |
-| cachekit-ts | 9 | 78 | 7 | 52 | 71 |
-| cachekit-rs | 4 | 69 | 3 | 53 | 88 |
+| cachekit-py | 12 | 86 | 5 | 70 | 47 |
+| cachekit-ts | 9 | 78 | 7 | 55 | 71 |
+| cachekit-rs | 4 | 69 | 3 | 56 | 88 |
 
 Not indexed yet: [`spec/interop-v2.md`](../spec/interop-v2.md).
 
@@ -272,6 +272,9 @@ Marked not-a-requirement in `spec/intent-presets.md`:
 | [API-72](../spec/saas-api.md#api-72) | *GET /v1/cache/{key}/ttl*: … or coerces a non-integer to `0`, reads an immortal key as missing or as expiring now. Deployments **MUST NOT** store no-expiry entries for keys whose `/ttl` readers predate `null` support — the same mixed-reader rule as … | Binds application code.<br>**Gap:** Whether every /ttl reader of a key accepts null is a fact of the deployment, which no vector or SDK test can observe. | n/a | n/a | n/a |
 | [API-73](../spec/saas-api.md#api-73) | *PATCH /v1/cache/{key}/ttl*: … see SWR write semantics: a PATCH within the fresh window renews it; a PATCH on a stale entry **MUST** return `409 Conflict`. A `PATCH` on a no-expiry entry is within the fresh window by definition and bounds it: … | Binds the server.<br>**Gap:** As API-56. | n/a | n/a | n/a |
 | [API-74](../spec/saas-api.md#api-74) | *SSRF Protection*: All SDKs **MUST** enforce SSRF protection when accepting the API URL. The following rules apply: | **Gap:** No vector holds an API URL, so nothing here checks HTTPS-only, the listed private ranges or the hostname allowlist. | gap | gap | gap |
+| [API-75](../spec/saas-api.md#api-75) | *Counting outcomes*: Plain read. A value read **MUST** count one outcome: an L1 hit when the in-memory layer served it, an L2 hit when a backend read did, or a miss when … | **Gap:** No vector covers request headers, so nothing here catches a client that counts a plain read twice, or counts a failed read; only the SDK's own counter tests do. | gap | gap | gap |
+| [API-76](../spec/saas-api.md#api-76) | *Counting outcomes*: … caching wrapper (the cachekit-py decorators, cachekit-ts `wrap()`, cachekit-rs `#[cachekit]`) **MUST** count one outcome, however many reads it makes. A call that runs the wrapped function counts one miss, before its … | **Gap:** No vector covers request headers, so nothing here catches a client that counts a wrapped call that runs the function as anything but one miss, or a joined in-process caller as anything but one L1 hit; only the SDK's own counter tests do. | gap | gap | gap |
+| [API-77](../spec/saas-api.md#api-77) | *Counting outcomes*: … call's own reads (its first read, single-flight re-polls, re-checks under the distributed lock) **MUST NOT** count anything themselves. | **Gap:** No vector covers request headers, so nothing here catches a client that counts a miss on each single-flight re-poll or lock re-check of a wrapped call; only the SDK's own counter tests do. | gap | gap | gap |
 
 Marked not-a-requirement in `spec/saas-api.md`:
 
