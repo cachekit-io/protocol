@@ -2104,7 +2104,7 @@
         "API-76": {
           "section": "Counting outcomes",
           "binds": "sdk",
-          "gap": "No vector covers request headers, so nothing here catches a client that counts a wrapped call that runs the function as anything but one miss,, a joined in-process caller as anything but one L1 hit, or a miss on each single-flight re-poll or lock re-check; only the SDK's own counter tests do."
+          "gap": "No vector covers request headers, so nothing here catches a client that counts a wrapped call that runs the function as anything but one miss, a joined in-process caller as anything but one L1 hit, or a miss on each single-flight re-poll or lock re-check; only the SDK's own counter tests do."
         }
       },
       "retired": {}
