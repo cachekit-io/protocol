@@ -1974,7 +1974,8 @@
           "section": "Validation",
           "binds": "sdk",
           "sdks": [
-            "cachekit-py"
+            "cachekit-py",
+            "cachekit-ts"
           ],
           "gap": "As API-42, for X-CacheKit-Stale-TTL."
         },
@@ -1982,7 +1983,8 @@
           "section": "Write semantics",
           "binds": "sdk",
           "sdks": [
-            "cachekit-py"
+            "cachekit-py",
+            "cachekit-ts"
           ],
           "gap": "No vector covers request headers, so nothing here catches a revalidation write that omits X-CacheKit-TTL, which stores a no-expiry entry (or draws a 400 if it still sends X-CacheKit-Stale-TTL), or omits X-CacheKit-Stale-TTL, which leaves no stale window."
         },
@@ -2021,7 +2023,8 @@
           "section": "Revalidation flow (SDK)",
           "binds": "sdk",
           "sdks": [
-            "cachekit-py"
+            "cachekit-py",
+            "cachekit-ts"
           ],
           "gap": "As API-60, for a client that holds a stale read until its recompute or its lock attempt finishes."
         },
@@ -2029,7 +2032,8 @@
           "section": "Revalidation flow (SDK)",
           "binds": "sdk",
           "sdks": [
-            "cachekit-py"
+            "cachekit-py",
+            "cachekit-ts"
           ],
           "gap": "No vector presents a lock response, so nothing here catches a client that waits, or retries the lock, when another client holds it."
         },
@@ -2037,7 +2041,8 @@
           "section": "Semantics notes",
           "binds": "sdk",
           "sdks": [
-            "cachekit-py"
+            "cachekit-py",
+            "cachekit-ts"
           ],
           "gap": "No vector covers request headers, so nothing here catches a client that counts a background revalidation as a miss in X-CacheKit-Misses."
         },
