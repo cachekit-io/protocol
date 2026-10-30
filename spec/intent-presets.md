@@ -455,7 +455,7 @@ are pinned to `cachekit-ts@379847c`.
 | Requirement | Python | Rust | TypeScript |
 | :--- | :--- | :--- | :--- |
 | Finite default TTL 300 / 600 / 600 / 3 600 s | ✅ `cachekit` 0.20.0+; explicit `ttl=` overrides | ✅ `intents.rs:76,117,167,217` | ✅ `intents-core.ts:220,242,265,297` |
-| No process-wide default-TTL override (rule 3) | ✅ `cachekit` 0.20.0+ — `CACHEKIT_DEFAULT_TTL` is gone | ❌ `from_env()` reads `CACHEKIT_DEFAULT_TTL` (`config.rs:165`), an override this specification no longer defines — LAB-4664 | ✅ |
+| No process-wide default-TTL override (rule 3) | ✅ `cachekit` 0.20.0+ — `CACHEKIT_DEFAULT_TTL` is gone | ✅ `cachekit-rs` 0.12.0+ ([cachekit-rs#172](https://github.com/cachekit-io/cachekit-rs/pull/172)) — `from_env()` no longer reads `CACHEKIT_DEFAULT_TTL`; pass a TTL per call or chain `.default_ttl()` on the builder. 0.11.x and earlier: `from_env()` read it | ✅ |
 | `minimal`: L1 on, SWR / invalidation off | ✅ `decorator.py:335-350` | ✅ `CacheKit::minimal` — L1 on, SWR off — `cachekit-rs` 0.8.0+ (`.no_l1()` on 0.7.0 and earlier) | ✅ `intents-core.ts:221-230` |
 | `secure`: L1 on, ciphertext only | ✅ `cachekit` 0.20.0+ — L1 holds the encrypted serializer's bytes; `@cache.secure(backend=None)` raises `ConfigurationError` at decoration | ✅ `cachekit-rs` 0.10.0+ — the preset's client encrypts every value read and write, so L1 holds only ciphertext (through 0.9.0, plain `set` on that client put plaintext in L1; only the `SecureCache` handle encrypted) | ✅ `cache-core.ts:654,831` |
 | Reliability stack on for `production` / `secure` / `io` | ✅ | ✅ `ReliabilityConfig::default()` | ✅ `PRODUCTION_RELIABILITY` |
