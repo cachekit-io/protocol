@@ -26,7 +26,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 VECTORS = ROOT / "test-vectors" / "freshness-headers.json"
 
-# The 30-day TTL cap. It has seven digits, so no valid X-CacheKit-Fresh-For is longer.
+# The header's own cap, 30 days: lower than the 90-day TTL range, and not to be synced to it. It has seven
+# digits, so no valid X-CacheKit-Fresh-For is longer.
 FRESH_FOR_MAX = 2_592_000
 FRESH_FOR_MAX_DIGITS = 7
 # Each table, and the field that holds its rows' result.
