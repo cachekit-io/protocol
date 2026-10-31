@@ -603,7 +603,7 @@ The server validates the latency headers as one set and the session headers as a
 
 Authentication proves who holds a key, not that its measurements are true: one set of sixteen grammatical, consistent values can claim more hits than every other client together. An aggregate of latency sets across tenants, or one shown publicly, MUST<sup id="api-92">API-92</sup> weight each tenant equally or cap each tenant's share, and never sums raw sets across tenants.
 
-The server MUST NOT<sup id="api-93">API-93</sup> let an optional metrics header change billing or rate limiting, or let `X-CacheKit-L1-Status` change billing: all of them are client-reported. Rate limiting means the admit-or-deny verdict on a request and the limit applied to it. `X-CacheKit-L1-Status` may change rate limiting, as [API-1](#api-1) describes; headers that carry an operation's own inputs, such as `X-CacheKit-TTL`, are outside this rule.
+The server MUST NOT<sup id="api-93">API-93</sup> let an optional metrics header change billing or rate limiting, or let the value of `X-CacheKit-L1-Status` change billing: all of them are client-reported. Rate limiting means the admit-or-deny verdict on a request and the limit applied to it. `X-CacheKit-L1-Status` may change rate limiting, as [API-1](#api-1) describes; headers that carry an operation's own inputs, such as `X-CacheKit-TTL`, are outside this rule.
 
 #### Telemetry switch
 
