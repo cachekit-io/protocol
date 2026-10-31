@@ -4,8 +4,10 @@
   (24 hours), Startup 2,592,000 s (30 days), Professional 7,776,000 s (90 days), Enterprise none.
   On a plan with a maximum, a stated TTL above it is stored with the maximum, not rejected, and a
   write without a TTL is stored with the maximum instead of with no expiry
-  ([API-77](spec/saas-api.md#api-77)). The maximum bounds `evict_at` from each write's stamp: the
-  fresh window is kept first and the stale window gets what is left. `PATCH /ttl` is clamped the
+  ([API-77](spec/saas-api.md#api-77)). A server that cannot determine the tenant's plan stores the
+  write as stated, and with no expiry when it carries no TTL, so the plan maximum is not a
+  retention guarantee; the `2xx` reports what was stored. The maximum bounds `evict_at` from each
+  write's stamp: the fresh window is kept first and the stale window gets what is left. `PATCH /ttl` is clamped the
   same way ([API-78](spec/saas-api.md#api-78)), and its response must not extend a local copy
   ([API-84](spec/saas-api.md#api-84)). Validation stays plan-independent, so a client can still
   pre-validate every write. On Enterprise nothing is clamped, and entries stored before the change
@@ -14,9 +16,10 @@
   2,592,000 to 7,776,000 (`stale_ttl` alone to 7,775,999). A larger value is still a `400`.
 - The plan maximum is the only default for a write without a TTL
   ([API-79](spec/saas-api.md#api-79), which merges and retires API-40 and API-41).
-- A `PUT` `2xx` now carries `X-CacheKit-Fresh-For`: the freshness bound the store applied
-  ([API-80](spec/saas-api.md#api-80)), and a server that clamps must send it
-  ([API-81](spec/saas-api.md#api-81)). An SDK bounds its copy of its own write by
+- A signal-capable server's `PUT` `2xx` now carries `X-CacheKit-Fresh-For` for a bounded entry: the
+  freshness bound the store applied ([API-80](spec/saas-api.md#api-80)); it is omitted for a
+  no-expiry entry, and a pre-signal server omits it for every write. A server that clamps must
+  send it ([API-81](spec/saas-api.md#api-81)). An SDK bounds its copy of its own write by
   `min(local_ttl, effective_ttl, fresh_for)` ([API-83](spec/saas-api.md#api-83), replacing API-35).
   A re-serving tier takes its copy of a forwarded write's bound from the same header
   ([API-20](spec/saas-api.md#api-20)) and relays it unraised ([API-82](spec/saas-api.md#api-82)).
