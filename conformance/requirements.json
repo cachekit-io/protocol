@@ -2104,12 +2104,12 @@
         "API-81": {
           "section": "Remaining Freshness",
           "binds": "server",
-          "gap": "As API-80, for a deployment that clamps writes before its store emits X-CacheKit-Fresh-For on PUT, or while a tier that forwards PUTs drops the header or bounds its copy by the stated TTL."
+          "gap": "As API-80, for a deployment that clamps writes before its store emits X-CacheKit-Fresh-For on PUT, or while a server-side hop that relays the PUT 2xx drops the header or a tier bounds its copy by the stated TTL."
         },
         "API-82": {
           "section": "Remaining Freshness",
           "binds": "server",
-          "gap": "As API-19, for a tier that drops the X-CacheKit-Fresh-For of the store's PUT 2xx, or relays a larger value."
+          "gap": "As API-19, for a tier or other server-side hop that drops the X-CacheKit-Fresh-For of the store's PUT 2xx, or relays a larger value."
         },
         "API-83": {
           "section": "Remaining Freshness",
@@ -2134,7 +2134,7 @@
         "API-87": {
           "section": "Remaining Freshness",
           "binds": "server",
-          "gap": "As API-19, for a tier that stamps a positive value on a stale, exhausted or unknown copy, or rewrites its freshness label; or emits 0 for a copy of an accepted write whose PUT 2xx reported a positive bound."
+          "gap": "As API-19, for a tier that stamps a positive value on a stale, exhausted or unknown copy, or rewrites its freshness label; or stamps a positive value on a copy of a forwarded write whose PUT 2xx carried 0 or a malformed value."
         }
       },
       "retired": {
