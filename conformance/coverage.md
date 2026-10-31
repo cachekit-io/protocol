@@ -13,7 +13,7 @@ How ids are assigned, and what each status means: [README.md](README.md#coverage
 | SDK | Read at | Vendored fixtures |
 | :--- | :--- | :--- |
 | cachekit-py | [`ff04061`](https://github.com/cachekit-io/cachekit-py/commit/ff040612445d9d14673b34108befb8415e21add6) | `cache-keys.json` 1.3.0, `decode-bounds.json` 1.2.0, `encryption.json` 1.5.0, `file-backend.json` 1.2.0, `freshness-headers.json` 1.0.0, `interop-mode.json` 1.3.0, `path-encoding.json` 1.2.0, `python-frame.json` unversioned (not the current revision), `wire-format.json` 1.4.0 |
-| cachekit-ts | [`37a543d`](https://github.com/cachekit-io/cachekit-ts/commit/37a543d068e4b17ccae8e4244a8385991c68f1a2) | `decode-bounds.json` 1.2.0, `encryption.json` 1.5.0, `file-backend.json` 1.2.0, `freshness-headers.json` 1.0.0, `interop-mode.json` 1.3.0, `path-encoding.json` 1.2.0, `python-frame.json` unversioned (not the current revision), `wire-format.json` 1.4.0 |
+| cachekit-ts | [`dc37caa`](https://github.com/cachekit-io/cachekit-ts/commit/dc37caa81579b15f1ea8e20c293de5b502f7583c) | `decode-bounds.json` 1.2.0, `encryption.json` 1.5.0, `file-backend.json` 1.2.0, `freshness-headers.json` 1.0.0, `interop-mode.json` 1.3.0, `path-encoding.json` 1.2.0, `python-frame.json` unversioned (not the current revision), `wire-format.json` 1.4.0 |
 | cachekit-rs | [`3a0d241`](https://github.com/cachekit-io/cachekit-rs/commit/3a0d241b99d1593fae28cf1195ec8bdb59a9fddf) | `decode-bounds.json` 1.2.0, `encryption.json` 1.5.0, `file-backend.json` 1.2.0, `freshness-headers.json` 1.0.0, `interop-mode.json` 1.3.0, `path-encoding.json` 1.2.0, `python-frame.json` unversioned (not the current revision) |
 
 ## Summary

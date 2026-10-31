@@ -16,7 +16,7 @@
   },
   "cachekit-ts": {
     "repository": "https://github.com/cachekit-io/cachekit-ts",
-    "commit": "37a543d068e4b17ccae8e4244a8385991c68f1a2",
+    "commit": "dc37caa81579b15f1ea8e20c293de5b502f7583c",
     "fixtures": {
       "decode-bounds.json": "c52c27f724fe138e63440dc0306936b48fe389e2bd823c058b86b30d854e2e2e",
       "encryption.json": "1a8a3735408675bf9660ce1372f77723a9ffda8084010fa52eb756a330961589",
