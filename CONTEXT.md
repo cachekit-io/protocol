@@ -129,8 +129,16 @@ The period after the freshness window during which CachekitIO still serves an en
 _Avoid_: grace period, stale TTL (that is the window's length)
 
 **No-expiry entry**:
-An entry written without a TTL, which never enters a stale window and stays until it is deleted, overwritten or evicted for capacity.
+An entry stored with no end to its freshness window, which never enters a stale window and stays until it is deleted, overwritten or evicted for capacity. Only a write without a TTL that no plan maximum TTL bounded stores one: on a plan without a maximum, when CachekitIO could not determine the plan, or before the plan gained a maximum.
 _Avoid_: permanent entry, infinite TTL
+
+**Plan maximum TTL**:
+The longest a write or TTL update under a tenant's plan can make an entry live in CachekitIO, its stale window included: 24 hours on Free, 30 days on Startup, 90 days on Professional, none on Enterprise. A longer TTL, or none, is shortened to it, never rejected.
+_Avoid_: TTL cap, max TTL (on their own)
+
+**TTL range**:
+The values a stated TTL may take, 1 to 7,776,000 seconds (90 days); a value outside it is rejected. It bounds what a client may ask for, not how long an entry lives.
+_Avoid_: maximum TTL
 
 **Revalidation**:
 The client recomputing a stale entry in the background and writing the result back, while callers are served the stale value.
