@@ -1521,7 +1521,7 @@
     },
     "spec/saas-api.md": {
       "prefix": "API",
-      "next": 86,
+      "next": 85,
       "requirements": {
         "API-1": {
           "section": "Authentication",
@@ -1763,6 +1763,11 @@
           "binds": "server",
           "gap": "No public vector exercises a re-serving tier, so nothing here catches a tier that passes a pre-signal store's missing X-CacheKit-Fresh-For through, or omits it for a copy it populated without a hint."
         },
+        "API-20": {
+          "section": "Remaining Freshness",
+          "binds": "server",
+          "gap": "As API-19, for a tier that stamps each hit with its copy's original bound instead of the decayed remainder, or bounds its copy of a forwarded write by the stated TTL when the store's PUT 2xx reported a shorter bound."
+        },
         "API-21": {
           "section": "Remaining Freshness",
           "binds": "server",
@@ -1792,6 +1797,11 @@
           "section": "Remaining Freshness",
           "binds": "server",
           "gap": "As API-19, for a tier that cannot tell an unbounded copy from an unhinted one and omits the header for both."
+        },
+        "API-27": {
+          "section": "Remaining Freshness",
+          "binds": "server",
+          "gap": "As API-19, for a tier that stamps a positive value on a stale, exhausted or unknown copy, or rewrites its freshness label."
         },
         "API-28": {
           "section": "Remaining Freshness",
@@ -1868,12 +1878,12 @@
         "API-36": {
           "section": "Remaining Freshness",
           "binds": "sdk",
-          "gap": "As API-85, for an SDK that keeps a copy after a timeout or a transport error and starts its clock only at a later read, or never."
+          "gap": "As API-83, for an SDK that keeps a copy after a timeout or a transport error and starts its clock only at a later read, or never."
         },
         "API-37": {
           "section": "Remaining Freshness",
           "binds": "sdk",
-          "gap": "As API-85, for an SDK that serves such a copy past its bound through a local stale-grace policy."
+          "gap": "As API-83, for an SDK that serves such a copy past its bound through a local stale-grace policy."
         },
         "API-38": {
           "section": "Remaining Freshness",
@@ -2114,28 +2124,21 @@
         "API-82": {
           "section": "Remaining Freshness",
           "binds": "server",
-          "gap": "As API-19, for a tier that stamps each hit with its copy's original bound instead of the decayed remainder, or bounds its copy of a forwarded write by the stated TTL when the store's PUT 2xx reported a shorter bound."
+          "gap": "As API-19, for a tier that drops the X-CacheKit-Fresh-For of the store's PUT 2xx, or relays a larger value."
         },
         "API-83": {
           "section": "Remaining Freshness",
-          "binds": "server",
-          "gap": "As API-19, for a tier that drops the X-CacheKit-Fresh-For of the store's PUT 2xx, or relays a larger value."
-        },
-        "API-84": {
-          "section": "Remaining Freshness",
-          "binds": "server",
-          "gap": "As API-19, for a tier that stamps a positive value on a stale, exhausted or unknown copy, or rewrites its freshness label."
-        },
-        "API-85": {
-          "section": "Remaining Freshness",
           "binds": "sdk",
           "gap": "No vector reaches an SDK's write path or its local cache, so nothing here catches one that bounds its copy of an accepted write by the local TTL alone, keeps the stated TTL when the PUT 2xx reported a shorter bound, or lengthens the copy by X-CacheKit-Stale-TTL."
+        },
+        "API-84": {
+          "section": "PATCH /v1/cache/{key}/ttl",
+          "binds": "sdk",
+          "gap": "No vector reaches an SDK's local cache, so nothing here catches one that re-anchors its local copy to the requested ttl when a PATCH /ttl succeeds, though the store may have clamped it."
         }
       },
       "retired": {
-        "API-20": "Replaced by API-82: a tier's copy of a forwarded write takes its bound from the X-CacheKit-Fresh-For on the store's PUT 2xx when that carries one.",
-        "API-27": "Replaced by API-84: an accepted write qualifies for a positive value by its bound, which the store's PUT 2xx can shorten, not by its stated TTL.",
-        "API-35": "Replaced by API-85: the writer's copy is also bounded by the X-CacheKit-Fresh-For on the PUT 2xx.",
+        "API-35": "Replaced by API-83: the writer's copy is also bounded by the X-CacheKit-Fresh-For on the PUT 2xx.",
         "API-40": "Merged with API-41 into API-79: a write without a TTL is stored with the plan maximum TTL on a plan that has one.",
         "API-41": "Merged with API-40 into API-79: a write without a TTL is stored with the plan maximum TTL on a plan that has one."
       }
