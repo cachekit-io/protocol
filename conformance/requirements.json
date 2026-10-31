@@ -1521,7 +1521,7 @@
     },
     "spec/saas-api.md": {
       "prefix": "API",
-      "next": 96,
+      "next": 97,
       "requirements": {
         "API-1": {
           "section": "Authentication",
@@ -2124,7 +2124,7 @@
         "API-79": {
           "section": "L1 hit latency",
           "binds": "sdk",
-          "gap": "No vector reaches an SDK's timing, so nothing here catches a client that adds L2 hits, misses or failed calls to the latency report, or starts or stops the clock outside the call; only the SDK's own tests do."
+          "gap": "No vector reaches an SDK's timing, so nothing here catches a client that adds L2 hits, misses or failed calls to the latency report; only the SDK's own tests do."
         },
         "API-80": {
           "section": "L1 hit latency",
@@ -2134,7 +2134,7 @@
         "API-81": {
           "section": "L1 hit latency",
           "binds": "sdk",
-          "gap": "As API-79, for a client that decides to time a call after it knows the outcome, samples by a counter, or lets the key, arguments, position, outcome or duration sway the draw."
+          "gap": "As API-79, for a client that decides to time a call after it knows the outcome, samples by a counter, lets the key, arguments, position, outcome or duration sway the draw, or draws with a probability other than the 1/N it sends."
         },
         "API-82": {
           "section": "L1 hit latency",
@@ -2164,47 +2164,52 @@
         "API-87": {
           "section": "L1 hit latency",
           "binds": "sdk",
-          "gap": "No vector covers request headers, so nothing here catches a client that sends a latency value outside the integer grammar, other than sixteen buckets, all-zero buckets, a sum of 0, a one-in value outside 1 to 1,000,000, or a duration in the wrong bucket."
+          "gap": "No vector covers request headers, so nothing here catches a client that sends a latency value outside the integer grammar, other than sixteen buckets, all-zero buckets, a sum of 0, a one-in value outside 1 to 1,000,000, a duration in the wrong bucket, or a duration above 60 s."
         },
         "API-88": {
           "section": "Server handling",
           "binds": "server",
           "gap": "No public vector exercises the server, so nothing here catches one that drops the session headers because a latency header is malformed, or the latency headers because the session headers are missing, malformed or rejected."
         },
-        "API-89": {
+        "API-90": {
           "section": "Server handling",
           "binds": "server",
           "gap": "As API-88, for a server that answers a request with an error because an optional metrics header is missing or malformed."
         },
-        "API-90": {
-          "section": "Server handling",
-          "binds": "server",
-          "gap": "No public vector exercises the server, so nothing here catches one that drops latency sets by a daily budget or other non-random cap, or keeps them without recording the probability it kept each one."
-        },
         "API-91": {
           "section": "Server handling",
           "binds": "server",
-          "gap": "How a server's cross-tenant or public latency aggregate weights tenants is server code no public vector or SDK test can observe."
+          "gap": "No public vector exercises the server, so nothing here catches one that drops latency sets deterministically, such as once a write budget is spent, or keeps them without recording the probability it kept each one."
         },
         "API-92": {
           "section": "Server handling",
           "binds": "server",
-          "gap": "Which inputs a server's billing and rate-limit verdicts read is server code no public vector or SDK test can observe."
+          "gap": "How a server's cross-tenant or public latency aggregate weights tenants is server code no public vector or SDK test can observe."
         },
         "API-93": {
-          "section": "Telemetry switch",
-          "binds": "sdk",
-          "gap": "No vector reaches an SDK's configuration, so nothing here catches a client that lacks the telemetry setting or ignores CACHEKIT_TELEMETRY."
+          "section": "Server handling",
+          "binds": "server",
+          "gap": "Which inputs a server's billing and rate-limit verdicts read is server code no public vector or SDK test can observe."
         },
         "API-94": {
           "section": "Telemetry switch",
           "binds": "sdk",
-          "gap": "As API-93, for a client that defaults the setting to true or false, lets a configuration loader fill it from the environment, lets on win over off, reads an unrecognised value as on, or re-reads the controls after construction."
+          "gap": "No vector reaches an SDK's configuration, so nothing here catches a client that lacks the telemetry setting, defaults it to true or false, or ignores CACHEKIT_TELEMETRY."
         },
         "API-95": {
           "section": "Telemetry switch",
           "binds": "sdk",
-          "gap": "No vector covers request headers, so nothing here catches a client that, with telemetry off, still sends a session or latency header, or drops X-CacheKit-L1-Status with it."
+          "gap": "As API-94, for a client that lets a configuration loader fill the setting from the environment, lets on win over off, reads an unrecognised value as on, or re-reads the controls after construction."
+        },
+        "API-96": {
+          "section": "Telemetry switch",
+          "binds": "sdk",
+          "gap": "No vector covers request headers, so nothing here catches a client that, with telemetry off, still sends a session or latency header."
+        },
+        "API-89": {
+          "section": "Server handling",
+          "binds": "server",
+          "gap": "No public vector exercises the server, so nothing here catches one that records a latency set with a missing or malformed header, a sum of 0, a One-In outside 1 to 1,000,000, or a sum its buckets cannot produce."
         }
       },
       "retired": {}
