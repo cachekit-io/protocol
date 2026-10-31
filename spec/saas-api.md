@@ -517,7 +517,7 @@ Authorization: Bearer ck_live_xxx
 
 ### Optional Metrics Headers
 
-The optional metrics headers are client-reported telemetry, for observability only. An SDK sends them only while telemetry is on ([Telemetry switch](#telemetry-switch)), and only from its CachekitIO backend: an SDK MUST NOT<sup id="api-77">API-77</sup> send them, or the measurements they carry, through any other backend or to any other destination. A Redis, Memcached or File backend, or an L1-only configuration, sends no telemetry anywhere. While telemetry is on, SDKs SHOULD send the session headers on every request, and the latency headers whenever they have a report to send ([L1 hit latency](#l1-hit-latency)).
+The optional metrics headers are client-reported telemetry, for observability only. An SDK sends them only while telemetry is on ([Telemetry switch](#telemetry-switch)), and only from its CachekitIO backend: an SDK MUST NOT<sup id="api-77">API-77</sup> send them, or a report built for them, to any host but the CachekitIO API that backend is configured with. A Redis, Memcached or File backend, or an L1-only configuration, sends no telemetry anywhere. Metrics an SDK exposes inside the user's own process, such as Prometheus counters or a `stats()` call, are outside these rules. While telemetry is on, SDKs SHOULD send the session headers on every request, and the latency headers whenever they have a report to send ([L1 hit latency](#l1-hit-latency)).
 
 **Session headers.** The counters are cumulative for the session ([Counting outcomes](#counting-outcomes)).
 
@@ -534,9 +534,8 @@ The optional metrics headers are client-reported telemetry, for observability on
 
 | Header | Type | Description |
 | :--- | :--- | :--- |
-| `X-CacheKit-L1-Latency-Count` | integer | Number of L1 hits timed in this report |
-| `X-CacheKit-L1-Latency-Sum-Ns` | integer | Sum of their durations, in nanoseconds |
-| `X-CacheKit-L1-Latency-Buckets` | 10 integers | Their durations, counted into ten fixed buckets |
+| `X-CacheKit-L1-Latency-Buckets` | 16 integers | The report's timed L1 hits, counted into sixteen fixed duration buckets. Their sum is the number of hits timed |
+| `X-CacheKit-L1-Latency-Sum-Ns` | integer | The sum of those hits' durations, in nanoseconds |
 
 `X-CacheKit-L1-Status` is not one of these headers: it is required on every `ck_sdk_` request, whatever the telemetry setting. See [Required Headers](#required-headers).
 
@@ -551,48 +550,76 @@ A stale serve counts one hit by the layer that served it (a backend stale-window
 
 #### L1 hit rate
 
-An SDK MUST<sup id="api-78">API-78</sup> compute `X-CacheKit-L1-Hit-Rate` as `L1-Hits / (L1-Hits + L2-Hits + Misses)` from the counter values on the same request, rounded to three decimal places (either way on an exact tie), and send `0.000` while all three counters are 0. The value is written as `0.` or `1.` followed by exactly three digits, and never exceeds `1.000`. It is the share of counted operations that L1 served, the figure the documentation reports. The share of hits alone, `L1-Hits / (L1-Hits + L2-Hits)`, is not this header. A reader that aggregates rows computes the rate from the three counters, not from this header.
+An SDK MUST<sup id="api-78">API-78</sup> compute `X-CacheKit-L1-Hit-Rate` as `L1-Hits / (L1-Hits + L2-Hits + Misses)` from the counter values on the same request, rounded to three decimal places (either way on an exact tie), and send `0.000` while all three counters are 0. The value is written as `0.` or `1.` followed by exactly three digits, and never exceeds `1.000`. It is the share of counted operations that L1 served, the figure the documentation reports. The share of hits alone, `L1-Hits / (L1-Hits + L2-Hits)`, is not this header. A server or reader that aggregates requests SHOULD compute the rate from the three counters rather than read this header.
 
 #### L1 hit latency
 
-**What is timed.** A duration is one cache call counted as an L1 hit ([API-75](#api-75), [API-76](#api-76)), as its caller sees it: from the call's entry into the SDK's public API (the wrapped call, or the read method) to the point where the SDK hands the value back (its return, or the resolution of its promise). It includes deriving the cache key, the L1 lookup, and any decryption and deserialization the SDK does on an L1 hit. It excludes whatever happens after the hand-back, such as an event loop scheduling the caller's continuation. An SDK MUST<sup id="api-79">API-79</sup> time only calls it counts as an L1 hit. It MUST NOT<sup id="api-80">API-80</sup> time a wrapped call that joined another in-process call for the same key, whose duration is the other call's work, or an existence check. An L1 stale serve is timed like any L1 hit; the background revalidation it starts is not part of the call.
+**What is timed.** A duration is one cache call counted as an L1 hit ([API-75](#api-75), [API-76](#api-76)), as its caller sees it. The clock starts at the first SDK instruction the call runs: for a coroutine or an async function, its first step, not its creation. It stops in the same synchronous step that produces the value the SDK hands back, never in a continuation or callback that runs after it. The interval includes deriving the cache key, the L1 lookup, any decryption and deserialization the SDK does on an L1 hit, and starting any background revalidation an L1 stale serve triggers; the revalidation's own work is outside it. An SDK MUST<sup id="api-79">API-79</sup> time only calls it counts as an L1 hit and that return a value. It MUST NOT<sup id="api-80">API-80</sup> time any of these:
+
+- a wrapped call that joined another in-process call for the same key, because its duration is the other call's work;
+- an existence check;
+- a read made inside a wrapped call, such as the `get` a wrapper makes on the SDK's own public API, which [API-76](#api-76) does not count either.
 
 The whole call is timed, rather than the L1 lookup alone, for three reasons. It is what a user pays for a hit, and what the SDKs' performance targets measure. It is comparable across SDKs whose L1 layers store different representations: an SDK that decodes or decrypts on every L1 hit would look faster than it is if only the lookup were timed. And it needs no instrumentation inside the L1 store.
 
-**Sampling.** An SDK MAY time a sample of calls rather than every call, so that two clock reads do not add measurably to a sub-microsecond hit. It MUST<sup id="api-81">API-81</sup> decide whether to time a call before it knows the call's outcome, and that decision MUST NOT<sup id="api-82">API-82</sup> depend on the key, the arguments, the outcome or the duration. A per-client counter (every Nth call) or a random draw qualifies. A call chosen for timing that is not an L1 hit is discarded. The sample rate is the SDK's choice and is not sent: `X-CacheKit-L1-Latency-Count` says how many hits a report covers, so a reader divides by it, never by `X-CacheKit-L1-Hits`.
+**Sampling.** An SDK MAY time a sample of calls rather than every call, so that two clock reads do not add measurably to a sub-microsecond hit. It MUST<sup id="api-81">API-81</sup> decide whether to time a call before it knows the call's outcome, by an independent pseudo-random draw for each call with a fixed probability (a probability of 1 times every call). That decision MUST NOT<sup id="api-82">API-82</sup> depend on the key, the arguments, the call's position in a sequence, the outcome or the duration. A counter that times every Nth call does not qualify: a caller that reads key A and then key B on every request would have only A's hits timed. A thread-local generator keeps the draw off any shared cache line. A call chosen for timing that is not an L1 hit is discarded. The probability is the SDK's choice and is not sent: the bucket counts say how many hits a report covers, so a reader divides by their sum, never by `X-CacheKit-L1-Hits`.
 
-**Clock.** An SDK MUST NOT<sup id="api-83">API-83</sup> send the latency headers unless it timed with a monotonic clock that advances during synchronous execution and resolves 100 ns or finer. Where it cannot tell whether its runtime's clock qualifies, the clock does not qualify. Cloudflare Workers does not qualify: its clock advances only on I/O, so an in-memory hit would read as 0 ns. Neither does a browser that coarsens its timers. On such a runtime the SDK sends no latency headers at all, never zeros. A 0 ns reading on a qualifying clock is a measurement, and is sent.
+**Clock.** An SDK MUST NOT<sup id="api-83">API-83</sup> send the latency headers unless it timed with a monotonic clock that advances during synchronous execution and resolves 100 ns or finer. These clocks qualify:
 
-**Reports.** The latency values are counted per report, not per session: each report covers the hits timed since the SDK's previous report. When an SDK attaches a report to a request, it MUST<sup id="api-84">API-84</sup> take the values and reset its accumulators in one atomic step, so that two concurrent requests never carry the same timed hit. It sends the three latency headers together, and only when the count is at least 1. A report is sent once. A retry of the request carries only what has been timed since, and a report whose request fails is lost: the SDK MUST NOT<sup id="api-85">API-85</sup> add its values back. Hits timed after the client's last request are never reported; there is no background reporter.
+| SDK | Clock |
+| :--- | :--- |
+| Python | `time.perf_counter_ns()`, where `time.get_clock_info("perf_counter").resolution` is 1e-7 or less |
+| Rust | `std::time::Instant`, on any target but `wasm32` |
+| TypeScript on Node.js | `process.hrtime.bigint()` |
+| Go | the monotonic reading of `time.Now()`, through `time.Since` |
 
-Per-report values were chosen over the session counters' cumulative form for three reasons. An analytics store sums them across rows, sessions and clients as they stand, while cumulative values need each session's previous row to difference. They need no per-session state on the server, so they stay correct whatever a Session-ID covers: the server drops a session-headers row whose counters went backwards, which happens whenever two clients that share one Session-ID interleave their requests, and per-report values have nothing to go backwards. And a lost report loses only its samples; a loss does not depend on the latencies it held, so the distribution stays unbiased. A failed report is not re-sent because the server may have recorded it before the request failed, and nothing deduplicates a report sent twice.
+Any other clock qualifies only where the SDK's documentation names it and its resolution. Cloudflare Workers has no qualifying clock: its clock advances only on I/O, so an in-memory hit would read as 0 ns. Neither has a browser that coarsens its timers. An SDK that cannot tell which runtime it is on treats its clock as not qualifying, and sends no latency headers at all, never zeros. An SDK MUST NOT<sup id="api-84">API-84</sup> send a report whose duration sum is 0: on a qualifying clock that is a frozen clock, not a measurement.
 
-**Encoding.** Every latency value is a count or a sum, so a reader adds values across rows; no mean or percentile goes on the wire, because neither can be summed. Each integer is `0`, or a digit `1`–`9` followed by at most 15 further ASCII digits, and is at most 9,007,199,254,740,991 (2^53 − 1, the largest integer a JavaScript number or an IEEE 754 double holds exactly). An SDK MUST<sup id="api-86">API-86</sup> send values that meet this grammar and the rules below:
+**Reports.** The latency values are counted per report, not per session: each report covers the hits timed since the previous report. An SDK keeps one report accumulator per CachekitIO backend instance. It times a call into the accumulator of the backend that call's cache is configured with, and attaches the report only to that backend's requests, so one backend's hits never ride another's requests. A process that forks starts the child with an empty accumulator.
 
-- `X-CacheKit-L1-Latency-Count`: the number of timed hits in the report, at least 1.
-- `X-CacheKit-L1-Latency-Sum-Ns`: the sum of their durations, each in whole nanoseconds, rounded down.
-- `X-CacheKit-L1-Latency-Buckets`: exactly ten integers separated by `,`, with no white space. The i-th counts the timed hits whose duration *d*, in whole nanoseconds, falls in bucket i of the table. The ten integers sum to the count.
+When an SDK attaches a report to a request, it MUST<sup id="api-85">API-85</sup> take every value and reset the accumulator in one atomic step, so that no two attempts carry the same timed hit and the buckets and the sum always describe the same hits. Separate atomic swaps of each field do not satisfy this; one structure taken under a lock, or swapped as a unit, does. It sends the two latency headers together, and only when at least one hit was timed. A report rides exactly one attempt and is consumed once that attempt is sent, whatever its outcome. A report whose attempt fails is lost: the SDK MUST NOT<sup id="api-86">API-86</sup> add its values back, or let a retry carry them. That includes a retry an HTTP library makes on its own: an SDK whose HTTP layer can resend a request without re-running the code that attaches the report must not use that layer's retries for a request that carries one. Hits timed after the client's last request are never reported; there is no background reporter. If adding a duration would push the sum or a bucket count past the bound in Encoding, the SDK discards that duration.
 
-| Bucket | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 |
-| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
-| *d* (ns) | ≤ 128 | ≤ 256 | ≤ 512 | ≤ 1,024 | ≤ 2,048 | ≤ 4,096 | ≤ 8,192 | ≤ 16,384 | ≤ 32,768 | > 32,768 |
+Per-report values were chosen over the session counters' cumulative form for two reasons. A reader adds them across requests, sessions and clients as they stand, while cumulative values need each session's previous value to difference. And they need no per-session state: a server may discard a session-headers sample whose counters are lower than an earlier sample for the same Session-ID, which happens whenever two clients that share one Session-ID interleave their requests, and per-report values have nothing to go backwards. A failed report is not re-sent because the server may have recorded it before the request failed, and nothing deduplicates a report sent twice. Reports are lost when their request fails or their process exits first, and those losses are not independent of load, so the latency data is a sample of the hits, not a census.
 
-Each bucket holds the durations above the previous bucket's bound, up to and including its own. Example: hits of 90, 300, 300 and 40,000 ns are sent as count `4`, sum `40690` and buckets `1,0,2,0,0,0,0,0,0,1`.
+**Encoding.** Every latency value is a count or a sum, so a reader adds values across requests; no mean or percentile goes on the wire, because neither can be added. Each integer is `0`, or a digit `1`–`9` followed by at most 15 further ASCII digits, and is at most 9,007,199,254,740,991 (2^53 − 1, the largest integer a JavaScript number or an IEEE 754 double holds exactly). An SDK MUST<sup id="api-87">API-87</sup> send values that meet this grammar and these rules:
 
-A mean alone would hide the tail that a garbage-collection pause or a contended lock adds, and a percentile computed by a client cannot be combined with another client's. Buckets that double from 128 ns to 32.768 µs cover the sub-microsecond hits the SDKs target and the slower hits of an interpreted runtime or an encrypted L1; the open last bucket holds the pauses. A reader estimates a percentile by interpolating within the bucket that holds it. A change to the bounds needs a new header name.
+- `X-CacheKit-L1-Latency-Buckets`: exactly sixteen integers separated by `,`, with no white space, at least one of them not 0. The i-th counts the timed hits whose duration *d*, in whole nanoseconds rounded down, falls in bucket i of the table.
+- `X-CacheKit-L1-Latency-Sum-Ns`: the sum of the same hits' durations, each in whole nanoseconds rounded down; at least 1.
 
-**Server handling.** The server validates the latency headers as one set and the session headers as another. It MUST NOT<sup id="api-87">API-87</sup> drop either set because the other is missing, malformed or rejected: a latency set is recorded when the session headers fail validation, including the server's per-session counter check, and the reverse. Within the latency set, a missing or malformed header, or buckets that do not sum to the count, drops all three latency values. The server MUST NOT<sup id="api-88">API-88</sup> answer a request with an error because an optional metrics header is missing or malformed. It MUST NOT<sup id="api-89">API-89</sup> use the optional metrics headers as input to billing or to rate limiting: they are client-reported, and only `X-CacheKit-L1-Status`, which [API-1](#api-1) requires, takes part in classifying a request.
+| Bucket | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 |
+| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
+| *d* (ns) at most | 128 | 256 | 512 | 1,024 | 2,048 | 4,096 | 8,192 | 16,384 |
+
+| Bucket | 9 | 10 | 11 | 12 | 13 | 14 | 15 | 16 |
+| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
+| *d* (ns) at most | 32,768 | 65,536 | 131,072 | 262,144 | 524,288 | 1,048,576 | 2,097,152 | no bound |
+
+Each bucket holds the durations above the previous bucket's bound, up to and including its own; bucket 1 holds everything up to 128 ns, 0 included. Example: hits of 90, 300, 300 and 40,000 ns are sent as buckets `1,0,2,0,0,0,0,0,0,1,0,0,0,0,0,0` and sum `40690`.
+
+A mean alone would hide the tail that a garbage-collection pause or a contended lock adds, and a percentile computed by a client cannot be combined with another client's. Buckets that double from 128 ns to about 2.1 ms cover the sub-microsecond hits the SDKs target, the tens of microseconds an encrypted L1 hit on a large value can take, and the pauses above them; a reader estimates a percentile by interpolating within the bucket that holds it. A percentile that falls in bucket 16 has no upper bound, so a reader reports it only as above 2,097,152 ns. A change to the bounds needs a new header name.
+
+**Server handling.** The server validates the latency headers as one set and the session headers as another. It MUST NOT<sup id="api-88">API-88</sup> drop either set because the other is missing, malformed or rejected: a latency set is recorded when the session headers fail any of its checks, and the reverse. Within the latency set, a missing or malformed header, or a sum of 0, drops both latency values. The server MUST NOT<sup id="api-89">API-89</sup> answer a request with an error because an optional metrics header is missing or malformed, and SHOULD record a valid latency set on any authenticated request, whatever its response status. It MUST NOT<sup id="api-90">API-90</sup> read the optional metrics headers for billing or for rate limiting: they are client-reported. Only `X-CacheKit-L1-Status`, which [API-1](#api-1) requires, may be read by rate limiting.
 
 #### Telemetry switch
 
-Every SDK MUST<sup id="api-90">API-90</sup> let its user turn telemetry off through both of these controls, which mean the same in every SDK:
+Every SDK MUST<sup id="api-91">API-91</sup> let its user turn telemetry off through both of these controls, which mean the same in every SDK:
 
-- a boolean setting named `telemetry` (in the SDK's own case convention) on the configuration of its CachekitIO backend;
-- the environment variable `CACHEKIT_TELEMETRY` ([Environment Variables](#environment-variables)).
+- a setting named `telemetry` (in the SDK's own case convention) on the configuration of its CachekitIO backend. It is an optional boolean that is unset unless the user sets it (Python `None`, TypeScript `undefined`, Rust `None`, a nil Go `*bool`): an SDK does not give it a default of true or false;
+- the environment variable `CACHEKIT_TELEMETRY` ([Environment Variables](#environment-variables)). Where the runtime has no process environment, as on Cloudflare Workers, the SDK reads it from the environment bindings it is constructed with; an SDK that has neither documents that only the setting applies there.
 
-With telemetry off, an SDK MUST NOT<sup id="api-91">API-91</sup> send any optional metrics header: `X-CacheKit-Session-ID`, `X-CacheKit-Session-Start`, `X-CacheKit-L1-Hits`, `X-CacheKit-L2-Hits`, `X-CacheKit-Misses`, `X-CacheKit-L1-Hit-Rate`, `X-CacheKit-L1-Latency-Count`, `X-CacheKit-L1-Latency-Sum-Ns` or `X-CacheKit-L1-Latency-Buckets`. It still sends `X-CacheKit-L1-Status`, which [API-1](#api-1) requires on every `ck_sdk_` request and which describes that one request, not the session. With telemetry off, an SDK SHOULD NOT time L1 hits at all. The switch governs only what an SDK sends to CachekitIO; local metrics such as Prometheus counters or a `stats()` call are unaffected.
+The SDK reads both controls once, when it constructs the backend; they hold for that backend instance's lifetime. It parses `CACHEKIT_TELEMETRY` only by the rule below, never through a configuration loader's own boolean parsing or precedence, so that off wins even where that loader would let a code argument override the environment.
 
-Each control is on, off or unset. Telemetry is on when neither control is off, and either one is on or both are unset. The default, with both unset, is **on**. When the controls disagree, off wins, so an operator's environment turns off telemetry that code turned on, and code turns off telemetry the environment turned on. `CACHEKIT_TELEMETRY` is read case-insensitively, after trimming surrounding white space: `false`, `0`, `off` and `no` are off; `true`, `1`, `on` and `yes` are on; unset or empty is unset. Any other value is off, and the SDK SHOULD warn once: a user who set the variable meant to change something, and off is the safe reading.
+With telemetry off, an SDK MUST NOT<sup id="api-92">API-92</sup> send any optional metrics header on that backend's requests: `X-CacheKit-Session-ID`, `X-CacheKit-Session-Start`, `X-CacheKit-L1-Hits`, `X-CacheKit-L2-Hits`, `X-CacheKit-Misses`, `X-CacheKit-L1-Hit-Rate`, `X-CacheKit-L1-Latency-Buckets` or `X-CacheKit-L1-Latency-Sum-Ns`. Its counts and timings reach no other backend's requests either. It still sends `X-CacheKit-L1-Status`, which [API-1](#api-1) requires on every `ck_sdk_` request and which describes that one request, not the session. With telemetry off, an SDK SHOULD NOT accumulate a latency report.
+
+`CACHEKIT_TELEMETRY` is read case-insensitively, after trimming surrounding white space: `false`, `0`, `off` and `no` are off; `true`, `1`, `on` and `yes` are on; unset or empty is unset. Any other value is off, and the SDK SHOULD warn once: a user who set the variable meant to change something, and off is the safe reading. Each control is then on, off or unset, and they combine like this:
+
+| Setting \ Environment | unset | on | off |
+| :--- | :--- | :--- | :--- |
+| **unset** | the default: on | on | off |
+| **on** | on | on | off |
+| **off** | off | off | off |
+
+Off wins: either control turns telemetry off, whatever the other says, so an operator's environment can turn off telemetry that code turned on, and the reverse.
 
 ---
 
@@ -641,7 +668,7 @@ SDKs should classify errors for circuit breaker integration:
 | `CACHEKIT_MAX_RETRIES` | No | `3` | Max retry attempts |
 | `CACHEKIT_CONNECTION_POOL_SIZE` | No | `10` | HTTP connection pool size |
 | `CACHEKIT_ALLOW_CUSTOM_HOST` | No | `false` | Allow non-standard API hostnames |
-| `CACHEKIT_TELEMETRY` | No | unset (on) | `false` turns off the optional metrics headers ([Telemetry switch](#telemetry-switch)) |
+| `CACHEKIT_TELEMETRY` | No | unset (on) | `false`, `0`, `off`, `no` or any unrecognised value turns off the optional metrics headers; `true`, `1`, `on`, `yes` leave them on, unless the `telemetry` setting is off ([Telemetry switch](#telemetry-switch)) |
 
 ### SSRF Protection
 
