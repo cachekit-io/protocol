@@ -2189,7 +2189,7 @@
         "API-93": {
           "section": "Server handling",
           "binds": "server",
-          "gap": "Which inputs a server's billing and rate-limit verdicts read is server code no public vector or SDK test can observe."
+          "gap": "Which inputs a server's billing and rate-limit verdicts read, including whether billing reads X-CacheKit-L1-Status, is server code no public vector or SDK test can observe."
         },
         "API-94": {
           "section": "Telemetry switch",
