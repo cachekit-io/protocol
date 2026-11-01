@@ -1521,7 +1521,7 @@
     },
     "spec/saas-api.md": {
       "prefix": "API",
-      "next": 97,
+      "next": 108,
       "requirements": {
         "API-1": {
           "section": "Authentication",
@@ -1763,16 +1763,6 @@
           "binds": "server",
           "gap": "No public vector exercises a re-serving tier, so nothing here catches a tier that passes a pre-signal store's missing X-CacheKit-Fresh-For through, or omits it for a copy it populated without a hint."
         },
-        "API-20": {
-          "section": "Remaining Freshness",
-          "binds": "server",
-          "gap": "As API-19, for a tier that stamps each hit with its copy's original bound instead of the decayed remainder."
-        },
-        "API-21": {
-          "section": "Remaining Freshness",
-          "binds": "server",
-          "gap": "As API-19, for a tier that emits its own copy TTL when that is larger than the decayed remainder."
-        },
         "API-22": {
           "section": "Remaining Freshness",
           "binds": "server",
@@ -1797,11 +1787,6 @@
           "section": "Remaining Freshness",
           "binds": "server",
           "gap": "As API-19, for a tier that cannot tell an unbounded copy from an unhinted one and omits the header for both."
-        },
-        "API-27": {
-          "section": "Remaining Freshness",
-          "binds": "server",
-          "gap": "As API-19, for a tier that stamps a positive value on a stale, exhausted or unknown copy, or rewrites its freshness label."
         },
         "API-28": {
           "section": "Remaining Freshness",
@@ -1875,20 +1860,15 @@
           ],
           "gap": "A parser that converts first, with arithmetic that neither wraps nor fails on a long value, and checks the length after returns the same values, so the order shows only through the conversions the rows break (32- and 64-bit integers, CPython's 4,300-digit limit); and the rows reach the parser, not the read path (API-33)."
         },
-        "API-35": {
-          "section": "Remaining Freshness",
-          "binds": "sdk",
-          "gap": "No vector reaches an SDK's write path or its local cache, so nothing here catches one that bounds its copy of an accepted write by the local TTL alone, or lengthens it by X-CacheKit-Stale-TTL."
-        },
         "API-36": {
           "section": "Remaining Freshness",
           "binds": "sdk",
-          "gap": "As API-35, for an SDK that keeps a copy after a timeout or a transport error and starts its clock only at a later read, or never."
+          "gap": "As API-103, for an SDK that keeps a copy after a timeout or a transport error and starts its clock only at a later read, or never."
         },
         "API-37": {
           "section": "Remaining Freshness",
           "binds": "sdk",
-          "gap": "As API-35, for an SDK that serves such a copy past its bound through a local stale-grace policy."
+          "gap": "As API-103, for an SDK that serves such a copy past its bound through a local stale-grace policy."
         },
         "API-38": {
           "section": "Remaining Freshness",
@@ -1899,16 +1879,6 @@
           "section": "Remaining Freshness",
           "binds": "caller",
           "gap": "As API-38: whether a key whose TTL is a revocation boundary is written with an explicit TTL is the application's configuration."
-        },
-        "API-40": {
-          "section": "PUT /v1/cache/{key}",
-          "binds": "server",
-          "gap": "No public vector exercises the server, so nothing here catches one that stores a write without TTL headers under a tenant default TTL."
-        },
-        "API-41": {
-          "section": "PUT /v1/cache/{key}",
-          "binds": "server",
-          "gap": "As API-40, and for a server whose validation consults a default the client cannot see."
         },
         "API-42": {
           "section": "PUT /v1/cache/{key}",
@@ -2210,9 +2180,71 @@
           "section": "Server handling",
           "binds": "server",
           "gap": "No public vector exercises the server, so nothing here catches one that records a latency set with a missing or malformed header, a sum of 0, a One-In outside 1 to 1,000,000, or a sum its buckets cannot produce."
+        },
+        "API-97": {
+          "section": "Plan maximum TTL",
+          "binds": "server",
+          "gap": "No public vector exercises the server, so nothing here catches one that rejects a TTL over the tenant's plan maximum, stores it unclamped, or keeps a stale window that carries the entry past the maximum."
+        },
+        "API-98": {
+          "section": "Plan maximum TTL",
+          "binds": "server",
+          "gap": "As API-97, for a PATCH /ttl handler that stores the requested ttl past the plan maximum, or shortens the fresh window to make room for the stored stale window."
+        },
+        "API-99": {
+          "section": "PUT /v1/cache/{key}",
+          "binds": "server",
+          "gap": "No public vector exercises the server, so nothing here catches one that stores a write without TTL headers under any default other than the tenant's plan maximum TTL."
+        },
+        "API-100": {
+          "section": "Remaining Freshness",
+          "binds": "server",
+          "gap": "No public vector exercises the server's responses, so nothing here catches a clamping store that answers a bounded PUT without X-CacheKit-Fresh-For, or reports the stated TTL instead of the remainder it stamped."
+        },
+        "API-101": {
+          "section": "Remaining Freshness",
+          "binds": "server",
+          "gap": "As API-100, for a deployment that clamps writes before its store emits X-CacheKit-Fresh-For on PUT, or while a server-side hop that relays the PUT 2xx drops the header or a tier bounds its copy by the stated TTL."
+        },
+        "API-102": {
+          "section": "Remaining Freshness",
+          "binds": "server",
+          "gap": "As API-19, for a tier or other server-side hop that drops the X-CacheKit-Fresh-For of the store's PUT 2xx, or relays a larger value."
+        },
+        "API-103": {
+          "section": "Remaining Freshness",
+          "binds": "sdk",
+          "gap": "No vector reaches an SDK's write path or its local cache, so nothing here catches one that bounds its copy of an accepted write by the local TTL alone, keeps the stated TTL when the PUT 2xx reported a shorter bound, or lengthens the copy by X-CacheKit-Stale-TTL."
+        },
+        "API-104": {
+          "section": "PATCH /v1/cache/{key}/ttl",
+          "binds": "sdk",
+          "gap": "No vector reaches an SDK's local cache, so nothing here catches one that re-anchors its local copy to the requested ttl when a PATCH /ttl succeeds, though the store may have clamped it."
+        },
+        "API-105": {
+          "section": "Remaining Freshness",
+          "binds": "server",
+          "gap": "As API-19, for a tier that stamps each hit with its copy's original bound instead of the decayed remainder, or bounds its copy of a forwarded write by the stated TTL when the store's PUT 2xx reported a shorter bound."
+        },
+        "API-106": {
+          "section": "Remaining Freshness",
+          "binds": "server",
+          "gap": "As API-19, for a tier that emits its own copy TTL when that is larger than the decayed remainder, or a remainder above 2,592,000."
+        },
+        "API-107": {
+          "section": "Remaining Freshness",
+          "binds": "server",
+          "gap": "As API-19, for a tier that stamps a positive value on a stale, exhausted or unknown copy, or rewrites its freshness label; or stamps a positive value on a copy of a forwarded write whose PUT 2xx carried 0 or a malformed value."
         }
       },
-      "retired": {}
+      "retired": {
+        "API-20": "Replaced by API-105: a tier's copy of a forwarded write takes its bound from the X-CacheKit-Fresh-For on the store's PUT 2xx when that carries one, and a malformed value is 0.",
+        "API-21": "Replaced by API-106: the decayed remainder it bounds now comes from API-105's bound source, capped at 2,592,000.",
+        "API-27": "Replaced by API-107: an accepted write qualifies for a positive value by its bound, which the store's PUT 2xx can set, not by its stated TTL.",
+        "API-35": "Replaced by API-103: the writer's copy is also bounded by the X-CacheKit-Fresh-For on the PUT 2xx.",
+        "API-40": "Merged with API-41 into API-99: the plan maximum TTL is the only default.",
+        "API-41": "Merged with API-40 into API-99: the plan maximum TTL is the only default."
+      }
     },
     "spec/wire-format.md": {
       "prefix": "WIRE",
