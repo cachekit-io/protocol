@@ -2081,6 +2081,106 @@
           "binds": "sdk",
           "gap": "No vector covers request headers, so nothing here catches a client that counts a wrapped call that runs the function as anything but one miss, a joined in-process caller as anything but one L1 hit, or a miss on each single-flight re-poll or lock re-check; only the SDK's own counter tests do."
         },
+        "API-77": {
+          "section": "Optional Metrics Headers",
+          "binds": "sdk",
+          "gap": "No vector covers request headers, so nothing here catches a client that sends the optional metrics headers, or a report built for them, through a Redis, Memcached or File backend or to any host but its configured CachekitIO API."
+        },
+        "API-78": {
+          "section": "L1 hit rate",
+          "binds": "sdk",
+          "gap": "No vector covers request headers, so nothing here catches a client that computes X-CacheKit-L1-Hit-Rate as L1-Hits / (L1-Hits + L2-Hits), sends it with other than three decimal places, or sends other than 0.000 for all-zero counters."
+        },
+        "API-79": {
+          "section": "L1 hit latency",
+          "binds": "sdk",
+          "gap": "No vector reaches an SDK's timing, so nothing here catches a client that adds L2 hits, misses or failed calls to the latency report; only the SDK's own tests do."
+        },
+        "API-80": {
+          "section": "L1 hit latency",
+          "binds": "sdk",
+          "gap": "As API-79, for a client that adds a joined in-process call, an existence check or a read made inside a wrapped call."
+        },
+        "API-81": {
+          "section": "L1 hit latency",
+          "binds": "sdk",
+          "gap": "As API-79, for a client that decides to time a call after it knows the outcome, samples by a counter, lets the key, arguments, position, outcome or duration sway the draw, or draws with a probability other than the 1/N it sends."
+        },
+        "API-82": {
+          "section": "L1 hit latency",
+          "binds": "sdk",
+          "gap": "No vector covers request headers, so nothing here catches a client that sends latency headers timed with a clock that does not advance during synchronous execution or resolves coarser than 100 ns, such as on Cloudflare Workers."
+        },
+        "API-83": {
+          "section": "L1 hit latency",
+          "binds": "sdk",
+          "gap": "No vector reaches a forked process, so nothing here catches a child that inherits and re-sends its parent's accumulated report."
+        },
+        "API-84": {
+          "section": "L1 hit latency",
+          "binds": "sdk",
+          "gap": "No vector covers request headers, so nothing here catches a client that attaches a latency report to a health request."
+        },
+        "API-85": {
+          "section": "L1 hit latency",
+          "binds": "sdk",
+          "gap": "No vector covers concurrent requests, so nothing here catches a client whose concurrent attempts carry the same timed hit, whose buckets and sum describe different hits, or that sends cumulative rather than per-report values."
+        },
+        "API-86": {
+          "section": "L1 hit latency",
+          "binds": "sdk",
+          "gap": "No vector covers request headers, so nothing here catches a client that adds a consumed report back to its accumulator, or whose own or its HTTP library's retries resend it after an attempt that may have been delivered."
+        },
+        "API-87": {
+          "section": "L1 hit latency",
+          "binds": "sdk",
+          "gap": "No vector covers request headers, so nothing here catches a client that sends a latency value outside the integer grammar, other than sixteen buckets, all-zero buckets, a sum of 0, a one-in value outside 1 to 1,000,000, a duration in the wrong bucket, or a duration above 60 s."
+        },
+        "API-88": {
+          "section": "Server handling",
+          "binds": "server",
+          "gap": "No public vector exercises the server, so nothing here catches one that drops the session headers because a latency header is malformed, or the latency headers because the session headers are missing, malformed or rejected."
+        },
+        "API-90": {
+          "section": "Server handling",
+          "binds": "server",
+          "gap": "As API-88, for a server that answers a request with an error because an optional metrics header is missing or malformed."
+        },
+        "API-91": {
+          "section": "Server handling",
+          "binds": "server",
+          "gap": "No public vector exercises the server, so nothing here catches one that drops latency sets deterministically, such as once a write budget is spent, or keeps them without recording the probability it kept each one."
+        },
+        "API-92": {
+          "section": "Server handling",
+          "binds": "server",
+          "gap": "How a server's cross-tenant or public latency aggregate weights tenants is server code no public vector or SDK test can observe."
+        },
+        "API-93": {
+          "section": "Server handling",
+          "binds": "server",
+          "gap": "Which inputs a server's billing and rate-limit verdicts read, including whether billing reads X-CacheKit-L1-Status, is server code no public vector or SDK test can observe."
+        },
+        "API-94": {
+          "section": "Telemetry switch",
+          "binds": "sdk",
+          "gap": "No vector reaches an SDK's configuration, so nothing here catches a client that lacks the telemetry setting, defaults it to true or false, or ignores CACHEKIT_TELEMETRY."
+        },
+        "API-95": {
+          "section": "Telemetry switch",
+          "binds": "sdk",
+          "gap": "As API-94, for a client that lets a configuration loader fill the setting from the environment, lets on win over off, reads an unrecognised value as on, or re-reads the controls after construction."
+        },
+        "API-96": {
+          "section": "Telemetry switch",
+          "binds": "sdk",
+          "gap": "No vector covers request headers, so nothing here catches a client that, with telemetry off, still sends a session or latency header."
+        },
+        "API-89": {
+          "section": "Server handling",
+          "binds": "server",
+          "gap": "No public vector exercises the server, so nothing here catches one that records a latency set with a missing or malformed header, a sum of 0, a One-In outside 1 to 1,000,000, or a sum its buckets cannot produce."
+        },
         "API-97": {
           "section": "Plan maximum TTL",
           "binds": "server",
