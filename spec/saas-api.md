@@ -210,7 +210,7 @@ X-CacheKit-L1-Status: miss
 
 | Header | Required | Description |
 | :--- | :---: | :--- |
-| `X-CacheKit-TTL` | No | Time-to-live in seconds. Positive integer, minimum 1, maximum 7,776,000 (90 days, the **TTL range**). The store applies at most the tenant's [plan maximum TTL](#plan-maximum-ttl). Omit — together with legacy `X-TTL` — to store the entry with the plan maximum TTL, or with **no expiry** on a plan without one (see the **No-expiry contract** under TTL Validation Rules). |
+| `X-CacheKit-TTL` | No | Time-to-live in seconds. Positive integer, minimum 1, maximum 7,776,000 (90 days, the **TTL range**). The store applies at most the tenant's [plan maximum TTL](#plan-maximum-ttl). Omit — together with legacy `X-TTL` — to store the entry as [Plan maximum TTL](#plan-maximum-ttl) says: with the plan maximum TTL, or with **no expiry** where none applies (see the **No-expiry contract** under TTL Validation Rules). |
 | `X-CacheKit-Stale-TTL` | No | Stale-grace window in seconds after freshness expiry. Requires an explicit TTL (`X-CacheKit-TTL`, or legacy `X-TTL`) on the same request. Validation and semantics: [Stale-While-Revalidate](#stale-while-revalidate). Pre-SWR servers ignore this header. |
 
 > [!IMPORTANT]
@@ -218,11 +218,11 @@ X-CacheKit-L1-Status: miss
 >
 > | Condition | SDK Behavior | Server Behavior |
 > | :--- | :--- | :--- |
-> | TTL omitted | Use client default TTL. If no client default, omit `X-CacheKit-TTL` header. | When the request carries neither `X-CacheKit-TTL` nor `X-TTL`: store with the tenant's [plan maximum TTL](#plan-maximum-ttl), or with **no expiry** on a plan without one — see **No-expiry contract** below. The plan maximum is the only default: servers MUST NOT<sup id="api-79">API-79</sup> apply any other, because the only default a writer cannot see must be one this spec publishes and the `2xx` reports ([Remaining Freshness](#remaining-freshness)). |
+> | TTL omitted | Use client default TTL. If no client default, omit `X-CacheKit-TTL` header. | When the request carries neither `X-CacheKit-TTL` nor `X-TTL`: store as [Plan maximum TTL](#plan-maximum-ttl) says: with the tenant's plan maximum TTL, or with **no expiry** where none applies, its Fallback included — see **No-expiry contract** below. The plan maximum is the only default: servers MUST NOT<sup id="api-79">API-79</sup> apply any other, because the only default a writer cannot see must be one this spec publishes and the `2xx` reports ([Remaining Freshness](#remaining-freshness)). |
 > | TTL = 0 | **Reject** — return error to caller. Zero is not a valid TTL. | **Reject** — return `400 Bad Request`. |
 > | TTL < 1 second | **Round up to 1.** Sub-second durations MUST<sup id="api-42">API-42</sup> be ceiled, never truncated to 0. | N/A (header is integer seconds). |
 > | TTL > 7,776,000 | **Reject** — return error to caller. | **Reject** — return `400 Bad Request`. |
-> | TTL > the tenant's plan maximum TTL, and at most 7,776,000 | **Send it.** The SDK does not know the tenant's plan. | **Store with the plan maximum TTL** ([Plan maximum TTL](#plan-maximum-ttl)); never reject. |
+> | TTL > the tenant's plan maximum TTL, and at most 7,776,000 | **Send it.** The SDK does not know the tenant's plan. | **Store as [Plan maximum TTL](#plan-maximum-ttl) says:** with the plan maximum, or as stated under its Fallback; never reject. |
 > | TTL negative | **Reject** — return error to caller. | **Reject** — return `400 Bad Request`. |
 > | TTL non-integer | N/A (SDK converts duration to integer seconds). | **Reject** — return `400 Bad Request`. |
 >
@@ -270,7 +270,7 @@ applied_stale_ttl = min(stale_ttl, max_ttl − applied_ttl)
 
 so that `evict_at − floor(stored_at) ≤ max_ttl`. The fresh window is kept first: the stale window gets only what the maximum leaves, so a write whose TTL reaches the maximum stores no stale window. A [`PATCH /v1/cache/{key}/ttl`](#patch-v1cachekeyttl) on such a plan MUST<sup id="api-78">API-78</sup> be clamped the same way, with its `ttl` in place of `effective_ttl` and the entry's stored stale window in place of `stale_ttl`, so that `evict_at − floor(now) ≤ max_ttl`. On a plan without a maximum TTL, writes and `PATCH`es are stored as stated, and a write without a TTL stores a no-expiry entry.
 
-**Fallback.** A server that cannot determine the tenant's plan for a write or `PATCH`, or whose deployment does not yet meet [API-81](#api-81), stores it as stated, as on a plan without a maximum; API-77 and API-78 apply only once neither holds. Its `2xx` reports what it stored, so every copy stays bounded by the stored entry, but the plan maximum is then not a guaranteed ceiling on that entry's lifetime.
+**Fallback.** A server that cannot determine the tenant's plan for a write or `PATCH`, or whose deployment does not yet meet the conditions [API-81](#api-81) sets for clamping (the store emits the header on `PUT`, every hop that relays a `PUT` `2xx` passes it through, every tier bounds its copy of a forwarded write by it), stores it as stated, as on a plan without a maximum; API-77 and API-78 apply only once neither holds. A `PUT` `2xx` without `X-CacheKit-Fresh-For` then means the stated TTL was applied ([API-81](#api-81)), so a writer's copy is bounded as for any unclamped write. The plan maximum is then not a guaranteed ceiling on that entry's lifetime.
 
 The maximum applies when a write or `PATCH` is stamped. An entry keeps the timing it was stored with when the tenant's plan changes later, or once the fallback stops applying, a no-expiry entry included, until its next write or `PATCH`.
 
@@ -357,7 +357,7 @@ These rules are normative for both SDKs and the SaaS backend, mirroring the [TTL
 | `stale_ttl` negative, non-integer, or > 7,775,999 | `400 Bad Request`. The standalone bound is checked **before** any arithmetic (no integer wrap on `evict_at`). |
 | `X-CacheKit-Stale-TTL` present without an explicit TTL (`X-CacheKit-TTL`, or legacy `X-TTL`) | `400 Bad Request`. Validation must not depend on hidden tenant defaults — clients must be able to pre-validate. |
 | `ttl + stale_ttl > 7,776,000` | `400 Bad Request` (the stale window shares the [90-day TTL range](#put-v1cachekey)) |
-| `ttl + stale_ttl` > the tenant's [plan maximum TTL](#plan-maximum-ttl), and at most 7,776,000 | Accepted; the store clamps the windows, the fresh window first |
+| `ttl + stale_ttl` > the tenant's [plan maximum TTL](#plan-maximum-ttl), and at most 7,776,000 | Accepted; the store clamps the windows, the fresh window first, as [Plan maximum TTL](#plan-maximum-ttl) says (or stores them as stated under its Fallback) |
 | `stale_ttl = 0` | Accepted; equivalent to omitting the header |
 | `stale_ttl < 1` second (sub-second duration in SDK API) | SDKs MUST<sup id="api-54">API-54</sup> ceil to 1, never truncate to 0 (same rule as TTL) |
 
@@ -513,7 +513,7 @@ Content-Type: application/json
 {"ttl": 7200}
 ```
 
-The `ttl` field follows the same validation rules as `X-CacheKit-TTL`: positive integer, minimum 1, maximum 7,776,000. On a plan with a [maximum TTL](#plan-maximum-ttl) the store clamps it, and the stored stale window, to that maximum. The `200` does not report the applied value (`GET /v1/cache/{key}/ttl` reports the remaining time to `evict_at`, stale window included), so a `PATCH` response MUST NOT<sup id="api-84">API-84</sup> create, refresh or extend any local entry's service bound. For entries stored with a stale-grace window, see [SWR write semantics](#write-semantics): a PATCH within the fresh window renews it; a PATCH on a stale entry MUST<sup id="api-73">API-73</sup> return `409 Conflict`. A `PATCH` on a no-expiry entry is within the fresh window by definition and bounds it: `fresh_until = floor(now) + ttl` ([whole-second stamping](#entry-lifecycle)), no stale window.
+The `ttl` field follows the same validation rules as `X-CacheKit-TTL`: positive integer, minimum 1, maximum 7,776,000. On a plan with a maximum TTL the store clamps it, and the stored stale window, as [Plan maximum TTL](#plan-maximum-ttl) says ([API-78](#api-78), outside its Fallback). The `200` does not report the applied value (`GET /v1/cache/{key}/ttl` reports the remaining time to `evict_at`, stale window included), so a `PATCH` response MUST NOT<sup id="api-84">API-84</sup> create, refresh or extend any local entry's service bound. For entries stored with a stale-grace window, see [SWR write semantics](#write-semantics): a PATCH within the fresh window renews it; a PATCH on a stale entry MUST<sup id="api-73">API-73</sup> return `409 Conflict`. A `PATCH` on a no-expiry entry is within the fresh window by definition and bounds it: `fresh_until = floor(now) + ttl` ([whole-second stamping](#entry-lifecycle)), no stale window.
 
 | Status | Meaning |
 | :---: | :--- |
