@@ -25,8 +25,9 @@
   A re-serving tier bounds its copy of a forwarded write by the same header
   ([API-85](spec/saas-api.md#api-85), [API-86](spec/saas-api.md#api-86) and
   [API-87](spec/saas-api.md#api-87), replacing API-20, API-21 and API-27) and relays it unraised
-  ([API-82](spec/saas-api.md#api-82)). A tier may omit the header for a copy only on evidence
-  from a `GET` `200`; a `PUT` `2xx` without it never marks a copy as no-expiry.
+  ([API-82](spec/saas-api.md#api-82)). A tier may omit the header only on positive knowledge
+  of no expiry: a `GET` `200` from a signal-capable store that omitted it, or a forwarded write
+  with no TTL whose `PUT` `2xx` omitted it.
 - The `X-CacheKit-Fresh-For` grammar keeps its 2,592,000 maximum: no server or tier emits a larger
   value, even for an entry with more than 30 days of freshness left.
 - **Breaking for callers on a plan with a maximum TTL:** once the server applies this, a write
