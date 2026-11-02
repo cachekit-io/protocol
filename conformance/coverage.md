@@ -25,14 +25,14 @@ How ids are assigned, and what each status means: [README.md](README.md#coverage
 | [`spec/file-backend-format.md`](../spec/file-backend-format.md) | 6 | 1 | 3 | 0 | 2 |
 | [`spec/intent-presets.md`](../spec/intent-presets.md) | 55 | 0 | 19 | 0 | 36 |
 | [`spec/interop-mode.md`](../spec/interop-mode.md) | 36 | 5 | 23 | 4 | 4 |
-| [`spec/saas-api.md`](../spec/saas-api.md) | 101 | 0 | 15 | 0 | 86 |
+| [`spec/saas-api.md`](../spec/saas-api.md) | 102 | 0 | 15 | 0 | 87 |
 | [`spec/wire-format.md`](../spec/wire-format.md) | 24 | 3 | 18 | 3 | 0 |
 
 | SDK | Covered | Partial | Uncovered | Gap | n/a |
 | :--- | ---: | ---: | ---: | ---: | ---: |
-| cachekit-py | 12 | 86 | 5 | 84 | 57 |
-| cachekit-ts | 9 | 78 | 7 | 74 | 76 |
-| cachekit-rs | 4 | 69 | 3 | 70 | 98 |
+| cachekit-py | 12 | 86 | 5 | 85 | 57 |
+| cachekit-ts | 9 | 78 | 7 | 75 | 76 |
+| cachekit-rs | 4 | 69 | 3 | 71 | 98 |
 
 Not indexed yet: [`spec/interop-v2.md`](../spec/interop-v2.md).
 
@@ -299,6 +299,7 @@ Marked not-a-requirement in `spec/intent-presets.md`:
 | [API-105](../spec/saas-api.md#api-105) | *Remaining Freshness*: Decay, never re-stamp. A tier **MUST** emit its copy's remaining bound minus the seconds elapsed since that bound was obtained, flooring at `0`. A copy has … | Binds the server.<br>**Gap:** As API-19, for a tier that stamps each hit with its copy's original bound instead of the decayed remainder, or bounds its copy of a forwarded write by the stated TTL when the store's PUT 2xx reported a shorter bound. | n/a | n/a | n/a |
 | [API-106](../spec/saas-api.md#api-106) | *Remaining Freshness*: … no later than `fresh_until`, and one from the effective TTL ends less than one second after it. It **MUST NOT** emit a value larger than that decayed remainder or than `2592000` (API-32) — its own copy TTL included — under any … | Binds the server.<br>**Gap:** As API-19, for a tier that emits its own copy TTL when that is larger than the decayed remainder, or a remainder above 2,592,000. | n/a | n/a | n/a |
 | [API-107](../spec/saas-api.md#api-107) | *Remaining Freshness*: … token, or a missing `X-CacheKit-Fresh-For` on any entry not positively known to be no-expiry — **MUST** be emitted with `X-CacheKit-Fresh-For: 0` and its freshness label passed through unchanged (a `fresh` `0` stays … | Binds the server.<br>**Gap:** As API-19, for a tier that stamps a positive value on a stale, exhausted or unknown copy, or rewrites its freshness label; or stamps a positive value on a copy of a forwarded write whose PUT 2xx carried 0 or a malformed value. | n/a | n/a | n/a |
+| [API-108](../spec/saas-api.md#api-108) | *Remaining Freshness*: … by API-36 and API-37 from its local write. Once the local cache learns of the `2xx`, the SDK **MUST** bound the copy by API-103 at once, with the clock still started when the SDK received the `2xx`. The local cache can … | **Gap:** As API-103, for an SDK that serves its copy before its local cache learns of the PUT 2xx (write-behind) and, once it learns, keeps the copy's earlier bound, or restarts the clock at that moment instead of at receipt. | gap | gap | gap |
 
 Marked not-a-requirement in `spec/saas-api.md`:
 
