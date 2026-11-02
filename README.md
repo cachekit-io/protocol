@@ -46,7 +46,7 @@ Any SDK implementation **MUST** pass the canonical test vectors to be considered
 │                        │  (LZ4 block + xxHash3-64 + MsgPack)│
 │  Layer 2: Serialization│  MessagePack (binary, typed)       │
 │  Layer 1: Key Gen      │  Blake2b-256 (deterministic)       │
-│  Layer 0: Transport    │  SaaS REST API / Redis             │
+│  Layer 0: Transport    │  CacheKit Cloud API / Redis        │
 └────────────────────────┴────────────────────────────────────┘
 ```
 
@@ -67,7 +67,7 @@ layer's own store/retrieve flows are specified in
 | [spec/cache-key-format.md](spec/cache-key-format.md) | Cache key generation algorithm — Blake2b-256, argument normalization, cross-SDK key strategy |
 | [spec/wire-format.md](spec/wire-format.md) | ByteStorage envelope — LZ4 block compression, xxHash3-64 integrity, decompression bomb protection |
 | [spec/encryption.md](spec/encryption.md) | AES-256-GCM encryption, HKDF-SHA256 key derivation, AAD v0x03, counter-based nonces, key rotation |
-| [spec/saas-api.md](spec/saas-api.md) | REST API endpoints, cache-key path encoding, binary wire protocol, error codes, metrics headers |
+| [`spec/saas-api.md`](spec/saas-api.md) | CacheKit Cloud REST API endpoints, cache-key path encoding, binary wire protocol, error codes, metrics headers |
 | [spec/interop-mode.md](spec/interop-mode.md) | Cross-SDK cache sharing — language-neutral key format, canonical argument normalization *(normative; shipped opt-in in all three SDKs — see the [feature matrix](sdk-feature-matrix.md#compliance-status) for per-SDK version floors)* |
 | [spec/interop-v2.md](spec/interop-v2.md) | Interop v2 compressed-values profile — opt-in LZ4-block + AES-256-GCM cross-SDK values *(DRAFT; no SDK implements it yet)* |
 | [spec/file-backend-format.md](spec/file-backend-format.md) | Shared local File backend filename, header, expiry, and fail-closed flag negotiation |
@@ -96,7 +96,7 @@ Where your SDK uses the envelope for its own auto-mode storage, wrap serialized 
 
 Client-side AES-256-GCM with HKDF-SHA256 key derivation. The backend stores opaque ciphertext. AAD v0x03 binds ciphertext to its intended key (critical for security).
 
-**4. SaaS API** — [spec/saas-api.md](spec/saas-api.md)
+**4. CacheKit Cloud API** — [`spec/saas-api.md`](spec/saas-api.md)
 
 PUT/GET/DELETE binary blobs at `/v1/cache/{key}`. The API is format-agnostic — it stores whatever bytes you send.
 
@@ -129,7 +129,7 @@ An SDK is protocol-compliant when:
 1. [Interop-mode](spec/interop-mode.md) key generation produces identical keys for identical inputs across all languages (auto-mode keys embed language-specific function identity and are not cross-SDK by design)
 2. Interop-mode values encode and decode per the canonical vectors; where the SDK implements the ByteStorage envelope, it deserializes any spec-conformant envelope
 3. Encrypted interop-mode payloads can be decrypted by any SDK with the same master key and tenant ID
-4. SaaS API integration follows the documented endpoint contracts, including [cache-key path encoding](spec/saas-api.md#cache-key-path-encoding) (`test-vectors/path-encoding.json`)
+4. CacheKit Cloud API integration follows the documented endpoint contracts, including [cache-key path encoding](spec/saas-api.md#cache-key-path-encoding) (`test-vectors/path-encoding.json`)
 
 Test vectors are published in [`test-vectors/`](test-vectors/) as JSON files.
 
@@ -154,7 +154,7 @@ requirements each SDK's vendored vectors cover and which no vector reaches yet.
 
 <div align="center">
 
-[Protocol Repo](https://github.com/cachekit-io/protocol) · [SDK Feature Matrix](sdk-feature-matrix.md) · [Cache Key Format](spec/cache-key-format.md) · [Wire Format](spec/wire-format.md) · [Encryption](spec/encryption.md) · [SaaS API](spec/saas-api.md)
+[Protocol Repo](https://github.com/cachekit-io/protocol) · [SDK Feature Matrix](sdk-feature-matrix.md) · [Cache Key Format](spec/cache-key-format.md) · [Wire Format](spec/wire-format.md) · [Encryption](spec/encryption.md) · [CacheKit Cloud API](spec/saas-api.md)
 
 </div>
 
