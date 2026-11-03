@@ -2214,7 +2214,7 @@
         "API-103": {
           "section": "Remaining Freshness",
           "binds": "sdk",
-          "gap": "No vector reaches an SDK's write path or its local cache, so nothing here catches one that bounds its copy of an accepted write by the local TTL alone, keeps the stated TTL when the PUT 2xx reported a shorter bound, or lengthens the copy by X-CacheKit-Stale-TTL; nor one that serves its copy before its local cache learns of the PUT 2xx (write-behind) and, once it learns, keeps the copy's API-36 bound from its local write, or restarts the clock then instead of at receipt."
+          "gap": "No vector reaches an SDK's write path or its local cache, so nothing here catches one that bounds its copy of an accepted write by the local TTL alone, keeps the stated TTL when the PUT 2xx reported a shorter bound, or lengthens the copy by X-CacheKit-Stale-TTL; nor one that serves its copy before its local cache learns of the PUT 2xx (write-behind) and, once it learns, keeps the copy's API-36 bound from its local write, or restarts the clock then instead of at receipt, though it holds the receipt instant."
         },
         "API-104": {
           "section": "PATCH /v1/cache/{key}/ttl",
