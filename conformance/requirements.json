@@ -2455,7 +2455,7 @@
             "wire-format.json:payload_array32_max_claim_alone",
             "wire-format.json:payload_nested_array16_each_header_fits_sum_overclaims"
           ],
-          "gap": "A verdict cannot fail this: every overclaim vector is truncated, so any decoder rejects it whatever its guard does, at end of input or, for a typed envelope decoder, on a wrong type; only an SDK test that asserts the guard's own error (IOP-31) exercises it. reject_envelope_slots_overclaim overclaims in the envelope's bytes and the payload_reject_vectors in the payload after unwrapping, so such a test can assert each decode's guard. No released cachekit-core pre-scans the envelope (sdk-feature-matrix.md)."
+          "gap": "A verdict cannot fail this: every overclaim vector is truncated, so any decoder rejects it whatever its guard does, at end of input or, for a typed envelope decoder, on a wrong type; only an SDK test that asserts the guard's own error (IOP-31) exercises it. reject_envelope_slots_overclaim overclaims in the envelope's bytes and the payload_reject_vectors in the payload after unwrapping, so such a test can assert each decode's guard. Since crates.io 0.7.0, cachekit-core's envelope read refuses an envelope that breaks this bound with its pre-scan's own error (sdk-feature-matrix.md)."
         },
         "WIRE-9": {
           "section": "Security Limits",
@@ -2487,7 +2487,7 @@
             "wire-format.json:payload_array32_max_claim_alone",
             "wire-format.json:payload_nested_array16_each_header_fits_sum_overclaims"
           ],
-          "gap": "A verdict cannot fail this: every overclaim vector is truncated, so any decoder rejects it whatever its guard does, at end of input or, for a typed envelope decoder, on a wrong type; only an SDK test that asserts the guard's own error (IOP-31) exercises it. The accept vectors do pin a budget set too tight. reject_envelope_slots_overclaim, whose every header fits what follows it, and payload_nested_array16_each_header_fits_sum_overclaims carry the whole-document sum into the envelope's decode and the payload's, so such a test can assert each one; no released cachekit-core pre-scans the envelope (sdk-feature-matrix.md)."
+          "gap": "A verdict cannot fail this: every overclaim vector is truncated, so any decoder rejects it whatever its guard does, at end of input or, for a typed envelope decoder, on a wrong type; only an SDK test that asserts the guard's own error (IOP-31) exercises it. The accept vectors do pin a budget set too tight. reject_envelope_slots_overclaim, whose every header fits what follows it, and payload_nested_array16_each_header_fits_sum_overclaims carry the whole-document sum into the envelope's decode and the payload's, so such a test can assert each one; since crates.io 0.7.0, cachekit-core's envelope read refuses an envelope that breaks this bound with its pre-scan's own error (sdk-feature-matrix.md)."
         },
         "WIRE-10": {
           "section": "Decompression Bomb Detection",
